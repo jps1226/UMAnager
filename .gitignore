@@ -1,0 +1,17 @@
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore scraped data and caches
+race_cache.pkl
+horse_names.json
+
+# Ignore personal betting marks and tracked lists
+saved_marks.json
+tracked_horses.txt
+watchlist_horses.txt
+
+# Ignore environment variables or virtual environments (if you use them)
+.env
+venv/
+env/

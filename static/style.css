@@ -1,0 +1,444 @@
+        /* --- LAYOUT & DARK MODE --- */
+        body { font-family: sans-serif; background-color: #0e1117; color: #fafafa; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
+        .sidebar { width: 380px; background-color: #1a1c23; padding: 20px; overflow-y: auto; border-right: 1px solid #333; }
+        
+/* --- SIDEBAR GROUPS --- */
+.sidebar-group {
+    border: 1px solid #333;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    background: #1a1c23;
+}
+.sidebar-group summary {
+    padding: 12px 10px;
+    font-weight: bold;
+    cursor: pointer;
+    user-select: none;
+    outline: none;
+    font-size: 15px;
+    border-bottom: 1px solid transparent;
+}
+.sidebar-group[open] summary {
+    border-bottom: 1px solid #333;
+    margin-bottom: 10px;
+}
+.sidebar-group summary:hover { color: #ff4b4b; }
+.sidebar-group-content { padding: 0 10px 10px 10px; }
+
+/* --- MINI CONSOLE --- */
+.console-box {
+    background: #0c0c0c;
+    color: #1dd1a1; /* Cyberpunk Green */
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11px;
+    padding: 8px;
+    border-radius: 4px;
+    height: 120px;
+    overflow-y: auto;
+    margin-top: 10px;
+    border: 1px solid #333;
+    box-shadow: inset 0 0 5px rgba(0,0,0,0.8);
+    display: none; /* Stays invisible until scraping starts */
+    white-space: pre-wrap;
+    line-height: 1.4;
+}
+
+        /* NEW: Flex column to separate the sticky header from the scrolling body */
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; background-color: #0e1117; }
+        .top-sticky-bar { padding: 20px 40px 0 40px; flex-shrink: 0; position: relative; z-index: 100; }
+        .scrollable-races { flex: 1; overflow-y: auto; padding: 0 40px 20px 40px; }
+        
+        /* --- CLOCK --- */
+        .clock-container { display: flex; justify-content: center; gap: 40px; background-color: rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 10px; margin-bottom: 20px; }
+        .clock-box { text-align: center; }
+        .clock-label { font-size: 12px; color: #888; letter-spacing: 1px; }
+        .clock-time { font-size: 24px; font-weight: bold; }
+
+        /* --- BUTTONS & INPUTS --- */
+        button { background: #262730; color: white; border: 1px solid #444; padding: 8px 12px; border-radius: 4px; cursor: pointer; transition: 0.2s; font-size: 14px; }
+        button:hover { background: #333; }
+        .btn-full { width: 100%; margin-bottom: 10px; }
+        .btn-danger { background: #4a1919; border-color: #ff4b4b; }
+        .btn-danger:hover { background: #ff4b4b; }
+        input[type="text"], textarea { width: 100%; box-sizing: border-box; background: #262730; color: white; border: 1px solid #444; padding: 10px; border-radius: 4px; font-family: monospace; }
+        
+        /* --- TABS --- */
+        .tab-bar { display: flex; border-bottom: 2px solid #333; margin-bottom: 0; }
+        .tab-btn { background: transparent; border: none; font-size: 16px; padding: 10px 20px; color: #aaa; cursor: pointer; border-radius: 0; }
+        .tab-btn.active { color: white; border-bottom: 2px solid #ff4b4b; font-weight: bold; }
+        .tab-content { display: none; padding-top: 20px; }
+	.tab-content.active { display: block; }
+        
+        /* --- TABLES --- */
+        /* Removed overflow: hidden so tooltips can escape the table boundaries */
+	table { width: 100%; border-collapse: collapse; margin-bottom: 40px; font-size: 14px; background: #1a1c23; border-radius: 8px; }
+        th, td { padding: 10px; border: 1px solid #333; text-align: left; }
+        th { background: #262730; color: #aaa; text-transform: uppercase; font-size: 12px; }
+        .row-fav { background-color: rgba(255, 215, 0, 0.15); }
+        .row-watch { background-color: rgba(100, 149, 237, 0.15); }
+        
+        /* --- MARKS --- */
+        .mark-btn { background: #333; color: #aaa; border: none; padding: 4px 8px; margin: 0 2px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .mark-btn.active-◎ { background: #ff4b4b; color: white; font-weight: bold; }
+        .mark-btn.active-〇 { background: #ff9f43; color: white; font-weight: bold; }
+        .mark-btn.active-▲ { background: #1dd1a1; color: white; font-weight: bold; }
+        .mark-btn.active-△ { background: #0abde3; color: white; font-weight: bold; }
+        .mark-btn.active-△ { background: #0abde3; color: white; font-weight: bold; }
+        /* NEW: The X Button */
+        .mark-btn.active-X { background: #2b1111; color: #ff4b4b; font-weight: bold; border: 1px solid #ff4b4b; }
+        
+
+/* --- HORSE LIST CARDS --- */
+.horse-list-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 400px;
+    overflow-y: auto;
+    padding-right: 5px;
+    margin-top: 10px;
+}
+.horse-item {
+    background: #262730;
+    border: 1px solid #333;
+    padding: 6px 12px;
+    border-radius: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: border-color 0.2s;
+}
+.horse-item:hover {
+    border-color: #555;
+}
+.horse-item-name {
+    font-weight: 500;
+    color: #fafafa;
+    font-size: 14px;
+}
+.btn-delete {
+    background: transparent;
+    color: #666; /* Subdued color until hovered */
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+.btn-delete:hover {
+    color: #ff4b4b;
+    background: rgba(255, 75, 75, 0.15);
+}
+
+/* --- HOVER MENU (500ms DELAY) --- */
+.name-container {
+    position: relative;
+    display: inline-block;
+    cursor: default;
+}
+.name-text {
+    border-bottom: 1px dotted transparent;
+    transition: 0.2s;
+}
+.name-container:hover .name-text {
+    border-bottom: 1px dotted #888;
+}
+
+/* Update this existing rule to add a gap */
+.hover-menu {
+    position: absolute; bottom: 120%; left: 50%; transform: translateX(-50%);
+    background: #1a1c23; border: 1px solid #444; padding: 6px;
+    border-radius: 6px; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+    display: flex; white-space: nowrap; gap: 5px; /* NEW: Spaces the buttons out */
+    visibility: hidden; opacity: 0;
+    transition: visibility 0s linear 0s, opacity 0.1s linear 0s;
+}
+
+/* Add this brand new rule for the link button */
+.hover-link-btn {
+    background: #262730; border: 1px solid #444; color: #1dd1a1;
+    padding: 4px 10px; border-radius: 4px; font-size: 12px;
+    font-weight: bold; text-decoration: none; transition: 0.2s;
+    display: flex; align-items: center; justify-content: center;
+}
+.hover-link-btn:hover { background: #1dd1a1; color: black; border-color: #1dd1a1; }
+
+/* The little triangle pointing down at the text */
+.hover-menu::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border-width: 5px;
+    border-style: solid;
+    border-color: #444 transparent transparent transparent;
+}
+
+/* The magic 500ms delay before it appears */
+.name-container:hover .hover-menu,
+.hover-menu:hover {
+    visibility: visible;
+    opacity: 1;
+    transition: visibility 0s linear 0.5s, opacity 0.2s linear 0.5s; 
+}
+
+.hover-action-btn {
+    background: #262730;
+    border: 1px solid #444;
+    color: #fafafa;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: bold;
+    transition: 0.2s;
+}
+.hover-action-btn.add-btn:hover { background: #1dd1a1; color: black; border-color: #1dd1a1; }
+.hover-action-btn.remove-btn:hover { background: #ff4b4b; color: white; border-color: #ff4b4b; }
+}
+.quick-add:hover {
+    background: #1dd1a1;
+    color: #000;
+    border-color: #1dd1a1;
+}
+
+/* --- COLLAPSIBLE RACES --- */
+.race-header {
+    position: sticky;
+    top: 0; 
+    z-index: 90; 
+    background-color: #1a1c23; /* Solid base */
+    margin-top: 0; 
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.2s ease;
+    padding: 8px 10px;
+    margin-bottom: 5px;
+    border-bottom: 1px solid #333;
+    border-radius: 6px;
+}
+
+/* --- STICKY TABLE HEADERS --- */
+th {
+    position: sticky;
+    top: 36px; /* Adjust this slightly if it overlaps the race header */
+    z-index: 80; 
+    background-color: #262730; /* Solid background so rows hide behind it */
+    box-shadow: 0 2px 4px rgba(0,0,0,0.4); 
+}
+.race-header:hover {
+    color: #ff4b4b;
+    background-color: #2a2c36; /* Solid lighter grey (No RGBA!) */
+}
+/* When collapsed AND contains a tracked horse, light it up! */
+.race-header.collapsed.has-fav {
+    background-color: #332d00; 
+    border-left: 4px solid #ffd700;
+}
+.race-header.collapsed.has-watch {
+    background-color: #152036; 
+    border-left: 4px solid #6495ed;
+}
+
+.collapse-arrow { display: inline-block; width: 20px; font-size: 14px; }
+.race-content { display: block; }
+.race-content.collapsed { display: none; }
+
+/* --- COUNTDOWN TIMER --- */
+.countdown-wrapper {
+    background: rgba(255, 75, 75, 0.1);
+    border: 1px solid rgba(255, 75, 75, 0.3);
+    border-radius: 8px;
+    padding: 5px 20px;
+    text-align: center;
+    min-width: 180px;
+}
+.countdown-title {
+    font-size: 11px;
+    color: #ff7675;
+    font-weight: bold;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+.countdown-time {
+    font-size: 24px;
+    font-weight: bold;
+    color: #ff4b4b;
+    font-variant-numeric: tabular-nums; /* Stops text jittering as seconds change */
+}
+.countdown-race {
+    font-size: 12px;
+    color: #ccc;
+    font-weight: bold;
+}
+
+/* --- SORTABLE HEADERS --- */
+th.sortable {
+    cursor: pointer;
+    transition: background 0.2s;
+    user-select: none;
+}
+th.sortable:hover {
+    background: #333;
+    color: #fff;
+}
+.sort-icon {
+    font-size: 10px;
+    margin-left: 4px;
+    color: #888;
+}
+
+/* --- AUTO-PICK BUTTON --- */
+.btn-autopick {
+    background: transparent;
+    border: 1px solid #ff9f43;
+    color: #ff9f43;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 15px;
+    transition: 0.2s;
+    vertical-align: middle;
+}
+.btn-autopick:hover {
+    background: #ff9f43;
+    color: #000;
+}
+
+/* --- EXPORT MODAL --- */
+.modal-overlay {
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: rgba(0, 0, 0, 0.7); z-index: 2000;
+    display: flex; justify-content: center; align-items: center;
+}
+.modal-content {
+    background: #1a1c23; border: 1px solid #444; border-radius: 8px;
+    width: 450px; max-width: 90vw; padding: 20px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.8);
+}
+.modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 15px;
+}
+.close-btn { 
+    background: transparent; border: none; color: #aaa; 
+    font-size: 18px; cursor: pointer; padding: 0; 
+}
+.close-btn:hover { color: #ff4b4b; }
+/* --- OREPRO CHEAT SHEET --- */
+#export-display {
+    width: 100%; height: 500px; background: #0c0c0c; color: #fafafa;
+    border: 1px solid #333; padding: 15px; border-radius: 6px;
+    overflow-y: auto; box-sizing: border-box;
+}
+.export-track-header {
+    font-size: 18px; font-weight: bold; color: #1dd1a1;
+    border-bottom: 2px solid #333; padding-bottom: 5px; margin: 20px 0 10px 0;
+    text-transform: uppercase; letter-spacing: 1px;
+}
+.export-track-header:first-child { margin-top: 0; }
+.export-track-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px;
+}
+.export-race-card {
+    background: #1a1c23; border: 1px solid #333; border-radius: 6px; padding: 12px;
+}
+.export-race-title {
+    font-size: 14px; font-weight: bold; color: #888; margin-bottom: 10px; 
+    border-bottom: 1px dotted #444; padding-bottom: 4px;
+}
+.export-horse-line {
+    display: flex; align-items: center; margin-bottom: 6px; font-size: 14px;
+}
+.export-symbol {
+    font-weight: bold; margin-right: 10px; font-size: 16px; width: 20px; text-align: center;
+}
+
+/* --- DIMMED TAKEN VOTES --- */
+.mark-btn.dimmed-symbol {
+    opacity: 0.25;
+    filter: grayscale(100%);
+}
+.mark-btn.dimmed-symbol:hover {
+    opacity: 0.8;
+    filter: grayscale(0%);
+}
+
+/* --- REORDER BUTTON --- */
+.btn-reorder {
+    background: transparent;
+    border: 1px solid #0abde3;
+    color: #0abde3;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 15px;
+    transition: 0.2s;
+    vertical-align: middle;
+}
+.btn-reorder:hover {
+    background: #0abde3;
+    color: #000;
+}
+
+/* --- HIDE BUTTONS ON COLLAPSE --- */
+.race-header.collapsed .btn-autopick,
+.race-header.collapsed .btn-autopick-safe,
+.race-header.collapsed .btn-autopick-lucky,
+.race-header.collapsed .btn-reorder {
+    display: none !important;
+}
+
+/* --- STRATEGY SLIDER --- */
+input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+input[type=range]:focus { outline: none; }
+input[type=range]::-webkit-slider-thumb { 
+    -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%; 
+    background: currentColor; cursor: pointer; margin-top: -5px; box-shadow: 0 0 4px rgba(0,0,0,0.8);
+}
+input[type=range]::-webkit-slider-runnable-track { 
+    width: 100%; height: 4px; cursor: pointer; background: #444; border-radius: 2px; 
+}
+
+/* --- SAFE & LUCKY BUTTONS --- */
+.btn-autopick-safe {
+    background: transparent; border: 1px solid #0abde3; color: #0abde3;
+    border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer;
+    margin-left: 15px; transition: 0.2s; vertical-align: middle;
+}
+.btn-autopick-safe:hover { background: #0abde3; color: #000; }
+
+.btn-autopick-lucky {
+    background: transparent; border: 1px solid #ff4b4b; color: #ff4b4b;
+    border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer;
+    margin-left: 8px; transition: 0.2s; vertical-align: middle;
+}
+.btn-autopick-lucky:hover { background: #ff4b4b; color: #000; }
+
+/* --- SEARCH BAR --- */
+.search-container { position: relative; display: inline-block; }
+#horse-search { width: 220px; padding: 6px 10px; border-radius: 4px; border: 1px solid #555; background: #1a1c23; color: white; font-size: 14px; outline: none; transition: border-color 0.2s; }
+#horse-search:focus { border-color: #1dd1a1; }
+
+.suggestions-box {
+    position: absolute; top: calc(100% + 4px); left: 0; width: 100%; background: #262730; 
+    border: 1px solid #444; border-radius: 4px; max-height: 300px; overflow-y: auto; 
+    z-index: 2000; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.8);
+}
+.suggestion-item { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid #333; font-size: 13px; display: flex; flex-direction: column; }
+.suggestion-item:last-child { border-bottom: none; }
+.suggestion-item:hover, .suggestion-item.active { background: #333; color: #1dd1a1; }
+
+/* --- ROW HIGHLIGHT ANIMATION --- */
+.highlight-row td { animation: flash-row 2.5s ease-out forwards; }
+@keyframes flash-row {
+    0% { background-color: rgba(29, 209, 161, 0.6); }
+    100% { background-color: transparent; }
+}
