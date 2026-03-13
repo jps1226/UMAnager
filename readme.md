@@ -3,6 +3,7 @@
 A lightweight, local web dashboard for scraping, managing, and sorting weekend horse racing data from Netkeiba.
 
 ### ⚠️ Author's Note & Disclaimer
+
 Let's get one thing out of the way right now: **I barely know anything about horse racing, odds math, or deep betting strategy.** This project was entirely *vibe-coded* as a fun, personal tool to help me keep track of cool horse lineages, monitor my favorite runners, and generate some highly unscientific automated picks so I didn't have to guess blindly. 
 
 Please **do not** take the "Smart Sort" or "Auto-Pick" math too seriously, and absolutely do not use this to make actual financial decisions. It's built for fun, not profit! 
@@ -22,6 +23,7 @@ That being said, if you *do* know what you're doing when it comes to racing algo
 ---
 
 ## 🛠️ Tech Stack
+
 * **Backend:** Python, FastAPI, Uvicorn
 * **Data Processing:** Pandas, BeautifulSoup4, Pykakasi (for Romaji translation)
 * **Frontend:** Vanilla HTML, CSS, JavaScript (No heavy frameworks!)
@@ -32,17 +34,20 @@ That being said, if you *do* know what you're doing when it comes to racing algo
 ## 🚀 Installation & Setup
 
 1. **Clone the repository:**
+   
    ```bash
    git clone https://github.com/YOUR_USERNAME/umanager.git
    cd umanager
    ```
 
 2. **Install the required Python packages:**
+   
    ```bash
    pip install fastapi uvicorn pandas beautifulsoup4 requests pykakasi keibascraper
    ```
 
 3. **Run the local server:**
+   
    ```bash
    uvicorn server:app --reload
    ```
@@ -55,6 +60,7 @@ That being said, if you *do* know what you're doing when it comes to racing algo
 ## 🤝 Contributing
 
 Since I built this mostly on vibes, there is definitely room for improvement! 
+
 * Did I completely botch the odds-weighting math? 
 * Is there a more efficient way to hit the Netkeiba API without triggering rate limits? 
 * Do you have an idea for a cool new feature?

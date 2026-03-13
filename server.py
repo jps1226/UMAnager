@@ -1,13 +1,16 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-import asyncio # NEW: Needed to unblock the server during scraping
+import asyncio
 import pickle
 import json
 import os
 import re
 import pandas as pd
 import data_manager
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")

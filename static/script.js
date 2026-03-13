@@ -7,6 +7,13 @@ let raceSorts = {}; // NEW: Remembers which column is sorted for each race
 let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 
+// --- SECURITY: HTML Escaping ---
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // --- CLOCK & COUNTDOWN ---
 function updateClock() {
     const jstOpts = {hour: '2-digit', minute:'2-digit', second:'2-digit', hour12: false, timeZone: 'Asia/Tokyo'};
@@ -104,10 +111,12 @@ function buildListHTML(rawText, listType) {
             const id = parts[0].trim();
             const name = parts[1].trim();
             if (id && name) {
+                const escapedName = escapeHtml(name);
+                const escapedId = escapeHtml(id);
                 html += `
                 <div class="horse-item">
-                    <span class="horse-item-name">${name}</span>
-                    <button class="btn-delete" title="Remove ${name}" onclick="removeHorse('${listType}', '${id}')">✖</button>
+                    <span class="horse-item-name">${escapedName}</span>
+                    <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapedId}', '${escapeHtml(listType)}')">✖</button>
                 </div>`;
             }
         }
@@ -169,26 +178,30 @@ async function snipeHorse() {
 
 // Creates a wrapper with a 500ms delay hover menu
 function buildNameWithHover(id, name, listType) {
-    if (!id || id === 'nan' || id === '---' || !name) return name || "";
+    if (!id || id === 'nan' || id === '---' || !name) return escapeHtml(name || "");
     const cleanId = String(id).split('.')[0].trim();
-    if (!cleanId) return name;
+    if (!cleanId) return escapeHtml(name);
     
     // Safety check just in case listsData isn't fully loaded yet
     const isTracked = listsData[listType] && listsData[listType].includes(cleanId);
     
+    const escapedId = escapeHtml(cleanId);
+    const escapedListType = escapeHtml(listType);
+    const escapedName = escapeHtml(name);
+    
     let btnHtml = "";
     if (isTracked) {
-        btnHtml = `<button class="hover-action-btn remove-btn" onclick="removeHorse('${listType}', '${cleanId}')">➖ Remove</button>`;
+        btnHtml = `<button class="hover-action-btn remove-btn" onclick="removeHorse('${escapedListType}', '${escapedId}')">➖ Remove</button>`;
     } else {
-        btnHtml = `<button class="hover-action-btn add-btn" onclick="quickAdd('${cleanId}', '${listType}')">➕ Add</button>`;
+        btnHtml = `<button class="hover-action-btn add-btn" onclick="quickAdd('${escapedId}', '${escapedListType}')">➕ Add</button>`;
     }
     
-    // NEW: Generate the link to the English Netkeiba Database!
-    const linkHtml = `<a href="https://en.netkeiba.com/db/horse/${cleanId}/" target="_blank" class="hover-link-btn" title="View on Netkeiba DB">🔗 DB</a>`;
+    // Generate the link to the English Netkeiba Database!
+    const linkHtml = `<a href="https://en.netkeiba.com/db/horse/${escapedId}/" target="_blank" class="hover-link-btn" title="View on Netkeiba DB">🔗 DB</a>`;
     
     return `
     <div class="name-container">
-        <span class="name-text">${name}</span>
+        <span class="name-text">${escapedName}</span>
         <div class="hover-menu">
             ${btnHtml}
             ${linkHtml}

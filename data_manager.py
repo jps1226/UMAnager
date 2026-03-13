@@ -10,6 +10,9 @@ import pickle
 import pykakasi
 import json
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 1. Setup Offline Translators & Caches
 kks = pykakasi.kakasi()
@@ -28,6 +31,25 @@ if os.path.exists(HORSE_DICT_FILE):
         HORSE_CACHE = json.load(f)
 else:
     HORSE_CACHE = {}
+
+def safe_request(url, timeout=5, retries=2):
+    """Make HTTP request with automatic retry and error handling."""
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            response.raise_for_status()
+            return response
+        except requests.Timeout:
+            logger.warning(f"Timeout on attempt {attempt + 1}/{retries} for {url}")
+            if attempt == retries - 1:
+                raise
+            time.sleep(2 ** attempt)
+        except requests.RequestException as e:
+            logger.error(f"Request failed on attempt {attempt + 1}/{retries} for {url}: {e}")
+            if attempt == retries - 1:
+                return None
+            time.sleep(2 ** attempt)
+    return None
 
 def save_horse_dict():
     with open(HORSE_DICT_FILE, "w", encoding="utf-8") as f:
@@ -60,16 +82,16 @@ def fetch_official_name_by_id(horse_id, jp_fallback):
     if str_id in HORSE_CACHE and isinstance(HORSE_CACHE[str_id], dict) and HORSE_CACHE[str_id].get("name"):
         return HORSE_CACHE[str_id]["name"]
         
-    print(f"         >> Sniping parent profile: {jp_fallback}...")
+    logger.info(f"Sniping parent profile: {jp_fallback}...")
     time.sleep(0.3) 
     official_name = romanize(jp_fallback)
     url = f"https://db.netkeiba.com/horse/ped/{str_id}/"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
     try:
-        response = requests.get(url, headers=headers, timeout=5)
-        response.encoding = 'euc-jp'
-        soup = BeautifulSoup(response.text, 'html.parser')
+        response = safe_request(url)
+        if response:
+            response.encoding = 'euc-jp'
+            soup = BeautifulSoup(response.text, 'html.parser')
         
         eng_link = soup.find('a', href=re.compile(r'en\.netkeiba\.com/db/horse/'))
         if eng_link and eng_link.text.strip(): official_name = eng_link.text.strip()
@@ -113,53 +135,55 @@ def get_horse_data(horse_id, jp_name):
     
     if not str_id or str_id == 'nan' or str_id == '---': return data
         
-    print(f"      > Deep Scraping {jp_name} (ID: {str_id})...")
+    logger.info(f"Deep Scraping {jp_name} (ID: {str_id})...")
     time.sleep(0.3) 
-    headers = {"User-Agent": "Mozilla/5.0"}
     
     try:
-        res_main = requests.get(f"https://db.netkeiba.com/horse/{str_id}/", headers=headers, timeout=5)
-        res_main.encoding = 'euc-jp'
-        m = re.search(r'(\d+)戦(\d+)勝', res_main.text)
-        if m: data["record"] = f"{m.group(2)}/{m.group(1)}"
-    except: pass
+        res_main = safe_request(f"https://db.netkeiba.com/horse/{str_id}/")
+        if res_main:
+            res_main.encoding = 'euc-jp'
+            m = re.search(r'(\d+)戦(\d+)勝', res_main.text)
+            if m: data["record"] = f"{m.group(2)}/{m.group(1)}"
+    except Exception as e:
+        logger.warning(f"Failed to fetch main horse data: {e}")
 
     try:
-        res_ped = requests.get(f"https://db.netkeiba.com/horse/ped/{str_id}/", headers=headers, timeout=5)
-        res_ped.encoding = 'euc-jp' 
-        soup_ped = BeautifulSoup(res_ped.text, 'html.parser')
-        
-        eng_link = soup_ped.find('a', href=re.compile(r'en\.netkeiba\.com/db/horse/'))
-        if eng_link and eng_link.text.strip(): data["name"] = eng_link.text.strip()
-        else:
-            eng_p = soup_ped.find('p', class_='eng_name')
-            if eng_p and eng_p.text.strip(): data["name"] = eng_p.text.strip()
-            else:
-                h1_tag = soup_ped.find('div', class_='horse_title')
-                if h1_tag and h1_tag.find('h1'): data["name"] = romanize(h1_tag.find('h1').text.strip())
+        res_ped = safe_request(f"https://db.netkeiba.com/horse/ped/{str_id}/")
+        if res_ped:
+            res_ped.encoding = 'euc-jp' 
+            soup_ped = BeautifulSoup(res_ped.text, 'html.parser')
             
-        blood_table = soup_ped.find('table', class_='blood_table')
-        if blood_table:
-            td_16s = blood_table.find_all('td', rowspan="16")
-            if len(td_16s) >= 2:
-                sire_a = td_16s[0].find('a')
-                dam_a = td_16s[1].find('a')
-                bms_td = td_16s[1].find_next_sibling('td', rowspan="8")
-                bms_a = bms_td.find('a') if bms_td else None
+            eng_link = soup_ped.find('a', href=re.compile(r'en\.netkeiba\.com/db/horse/'))
+            if eng_link and eng_link.text.strip(): data["name"] = eng_link.text.strip()
+            else:
+                eng_p = soup_ped.find('p', class_='eng_name')
+                if eng_p and eng_p.text.strip(): data["name"] = eng_p.text.strip()
+                else:
+                    h1_tag = soup_ped.find('div', class_='horse_title')
+                    if h1_tag and h1_tag.find('h1'): data["name"] = romanize(h1_tag.find('h1').text.strip())
+                
+            blood_table = soup_ped.find('table', class_='blood_table')
+            if blood_table:
+                td_16s = blood_table.find_all('td', rowspan="16")
+                if len(td_16s) >= 2:
+                    sire_a = td_16s[0].find('a')
+                    dam_a = td_16s[1].find('a')
+                    bms_td = td_16s[1].find_next_sibling('td', rowspan="8")
+                    bms_a = bms_td.find('a') if bms_td else None
 
-                def get_id(a_tag):
-                    if not a_tag: return ""
-                    match = re.search(r'/([a-zA-Z0-9]{10})/?', a_tag.get('href', ''))
-                    return match.group(1) if match else ""
-                
-                data["sire_id"] = get_id(sire_a)
-                data["dam_id"] = get_id(dam_a)
-                data["bms_id"] = get_id(bms_a)
-                
-                data["sire"] = fetch_official_name_by_id(data["sire_id"], sire_a.text.strip() if sire_a else "")
-                data["dam"] = fetch_official_name_by_id(data["dam_id"], dam_a.text.strip() if dam_a else "")
-                data["bms"] = fetch_official_name_by_id(data["bms_id"], bms_a.text.strip() if bms_a else "")
-    except Exception as e: print(f"      [!] Error fetching pedigree: {e}")
+                    def get_id(a_tag):
+                        if not a_tag: return ""
+                        match = re.search(r'/([a-zA-Z0-9]{10})/?', a_tag.get('href', ''))
+                        return match.group(1) if match else ""
+                    
+                    data["sire_id"] = get_id(sire_a)
+                    data["dam_id"] = get_id(dam_a)
+                    data["bms_id"] = get_id(bms_a)
+                    
+                    data["sire"] = fetch_official_name_by_id(data["sire_id"], sire_a.text.strip() if sire_a else "")
+                    data["dam"] = fetch_official_name_by_id(data["dam_id"], dam_a.text.strip() if dam_a else "")
+                    data["bms"] = fetch_official_name_by_id(data["bms_id"], bms_a.text.strip() if bms_a else "")
+    except Exception as e: logger.error(f"Error fetching pedigree: {e}")
 
     HORSE_CACHE[str_id] = data
     return data
@@ -175,13 +199,15 @@ def get_next_weekend_dates():
 def fetch_real_post_time(race_id):
     url = f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
     try:
-        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        data_div = soup.find('div', class_='RaceData01')
-        if data_div:
-            match = re.search(r'(\d{2}:\d{2})', data_div.text)
-            if match: return match.group(1)
-    except: pass
+        response = safe_request(url)
+        if response:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            data_div = soup.find('div', class_='RaceData01')
+            if data_div:
+                match = re.search(r'(\d{2}:\d{2})', data_div.text)
+                if match: return match.group(1)
+    except Exception as e:
+        logger.warning(f"Failed to fetch post time for {race_id}: {e}")
     return None
 
 # --- NEW: HTML Sniper for Predicted Odds/Fav ---
@@ -191,14 +217,18 @@ def fetch_predictions(race_id):
     predictions = {}
     
     try:
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
+        res = safe_request(url)
+        if not res:
+            logger.warning(f"Failed to fetch HTML for race {race_id}")
+            return predictions
+            
         res.encoding = 'euc-jp'
         soup = BeautifulSoup(res.text, 'html.parser')
         
         horse_indexes = {} 
         umaban_to_horse = {} 
         
-        print(f"\n      --- DEBUGGING RACE {race_id} ---")
+        logger.debug(f"Debugging race {race_id}")
         
         for tr in soup.find_all('tr', class_=re.compile(r'HorseList')):
             row_html = str(tr)
@@ -217,40 +247,39 @@ def fetch_predictions(race_id):
                 if u_text:
                     umaban_to_horse[str(int(u_text))] = h_id
 
-        print(f"      [HTML] Found {len(horse_indexes)} Internal IDs and {len(umaban_to_horse)} Umaban IDs.")
-        print(f"      [HTML] Sample Umaban Map: {dict(list(umaban_to_horse.items())[:3])}")
+        logger.debug(f"Found {len(horse_indexes)} Internal IDs and {len(umaban_to_horse)} Umaban IDs")
                     
         headers = {"User-Agent": "Mozilla/5.0", "Referer": url, "X-Requested-With": "XMLHttpRequest"}
-        api_res = requests.get(api_url, headers=headers, timeout=5)
+        api_res = safe_request(api_url, retries=1)
         
-        print(f"      [API] Raw Status Code: {api_res.status_code}")
+        if not api_res:
+            logger.warning(f"Failed to fetch API for race {race_id}")
+            return predictions
+        
+        logger.debug(f"API Status Code: {api_res.status_code}")
         
         try:
             data = api_res.json()
             status = data.get("status")
-            print(f"      [API] JSON Status: '{status}'")
+            logger.debug(f"API JSON Status: '{status}'")
             
-            # 1. ADDED "middle" HERE:
             if status in ["success", "middle", "yoso"]: 
-                # Safely dig through the JSON structure to see what's actually there
                 odds_root = data.get("data", {})
-                print(f"      [API] Keys in 'data': {list(odds_root.keys())[:5]}")
                 
                 odds_level_1 = odds_root.get("odds", {})
-                print(f"      [API] Keys in 'data.odds': {list(odds_level_1.keys())[:5]}")
+                logger.debug(f"Keys in 'data.odds': {list(odds_level_1.keys())[:5]}")
                 
                 odds_data = odds_level_1.get("1", {})
-                print(f"      [API] Keys in 'data.odds.1': {list(odds_data.keys())[:5]}")
+                logger.debug(f"Keys in 'data.odds.1': {list(odds_data.keys())[:5]}")
                 
                 if not odds_data:
-                    print("      [!] ERROR: 'odds_data' is empty! The API structure is different today.")
+                    logger.error("'odds_data' is empty! The API structure may have changed.")
                 
                 match_count = 0
                 for key_str, values in odds_data.items():
                     clean_key = str(int(key_str)) if key_str.isdigit() else key_str
                     
                     h_id = None
-                    # 2. ADDED "middle" HERE:
                     if status in ["success", "middle"]: 
                         h_id = umaban_to_horse.get(clean_key)
                     elif status == "yoso":
@@ -263,18 +292,16 @@ def fetch_predictions(race_id):
                             predictions[h_id] = {"odds": o_val, "fav": f_val}
                             match_count += 1
                 
-                print(f"      [API] Successfully mapped {match_count} horses.")
+                logger.debug(f"Successfully mapped {match_count} horses.")
             else:
-                print(f"      [!] API returned unexpected data: {str(data)[:200]}")
+                logger.warning(f"API returned unexpected status: {str(data)[:200]}")
                 
         except Exception as json_err:
-            print(f"      [!] Failed to parse API JSON: {json_err}")
-            print(f"      [!] Raw text snippet: {api_res.text[:200]}")
+            logger.error(f"Failed to parse API JSON: {json_err}")
+            logger.error(f"Raw text snippet: {api_res.text[:200]}")
                         
     except Exception as e:
-        import traceback
-        print(f"      [!] Fatal Prediction fetch error:")
-        traceback.print_exc()
+        logger.error(f"Fatal Prediction fetch error: {e}", exc_info=True)
         
     return predictions
 
