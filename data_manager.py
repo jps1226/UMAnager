@@ -423,7 +423,7 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
                     
                     if race_date in [next_sat, next_sun]:
                         place = race_info.get('place', race_info.get('course', ''))
-                        race_info['place'] = TRACK_TRANSLATIONS.get(place, place)
+                        race_info['place'] = config.TRACK_TRANSLATIONS.get(place, place)
                         race_info['race_name'] = romanize(race_info.get('race_name', ''))
                         race_info['race_id'] = str_id
                         
