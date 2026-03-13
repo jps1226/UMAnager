@@ -11,20 +11,15 @@ import pykakasi
 import json
 import time
 import logging
+import config
 
 logger = logging.getLogger(__name__)
 
 # 1. Setup Offline Translators & Caches
 kks = pykakasi.kakasi()
 
-TRACK_TRANSLATIONS = {
-    "札幌": "Sapporo", "函館": "Hakodate", "福島": "Fukushima",
-    "新潟": "Niigata", "東京": "Tokyo", "中山": "Nakayama",
-    "中京": "Chukyo", "京都": "Kyoto", "阪神": "Hanshin", "小倉": "Kokura"
-}
-
-CACHE_FILE = "race_cache.pkl"
-HORSE_DICT_FILE = "horse_names.json"
+CACHE_FILE = config.CACHE_FILE
+HORSE_DICT_FILE = config.HORSE_DICT_FILE
 
 if os.path.exists(HORSE_DICT_FILE):
     with open(HORSE_DICT_FILE, "r", encoding="utf-8") as f:
@@ -32,8 +27,13 @@ if os.path.exists(HORSE_DICT_FILE):
 else:
     HORSE_CACHE = {}
 
-def safe_request(url, timeout=5, retries=2):
+def safe_request(url, timeout=None, retries=None):
     """Make HTTP request with automatic retry and error handling."""
+    if timeout is None:
+        timeout = config.REQUEST_TIMEOUT
+    if retries is None:
+        retries = config.REQUEST_RETRIES
+        
     for attempt in range(retries):
         try:
             response = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
@@ -71,7 +71,7 @@ def romanize(text):
                     if repeats >= 3 or len(seq.split()) > 1:
                         clean_eng = seq
                         break
-        if len(clean_eng) > 2: return clean_eng.title()
+        if len(clean_eng) > config.MIN_NAME_LENGTH: return clean_eng.title()
             
     result = kks.convert(text)
     return " ".join([item['hepburn'].title() for item in result]).replace("  ", " ").strip()
@@ -83,9 +83,9 @@ def fetch_official_name_by_id(horse_id, jp_fallback):
         return HORSE_CACHE[str_id]["name"]
         
     logger.info(f"Sniping parent profile: {jp_fallback}...")
-    time.sleep(0.3) 
+    time.sleep(config.SCRAPE_DELAY) 
     official_name = romanize(jp_fallback)
-    url = f"https://db.netkeiba.com/horse/ped/{str_id}/"
+    url = f"{config.NETKEIBA_PEDIGREE_URL}/{str_id}/"
     
     try:
         response = safe_request(url)
@@ -136,10 +136,10 @@ def get_horse_data(horse_id, jp_name):
     if not str_id or str_id == 'nan' or str_id == '---': return data
         
     logger.info(f"Deep Scraping {jp_name} (ID: {str_id})...")
-    time.sleep(0.3) 
+    time.sleep(config.SCRAPE_DELAY) 
     
     try:
-        res_main = safe_request(f"https://db.netkeiba.com/horse/{str_id}/")
+        res_main = safe_request(f"{config.NETKEIBA_HORSE_URL}/{str_id}/")
         if res_main:
             res_main.encoding = 'euc-jp'
             m = re.search(r'(\d+)戦(\d+)勝', res_main.text)
@@ -148,7 +148,7 @@ def get_horse_data(horse_id, jp_name):
         logger.warning(f"Failed to fetch main horse data: {e}")
 
     try:
-        res_ped = safe_request(f"https://db.netkeiba.com/horse/ped/{str_id}/")
+        res_ped = safe_request(f"{config.NETKEIBA_PEDIGREE_URL}/{str_id}/")
         if res_ped:
             res_ped.encoding = 'euc-jp' 
             soup_ped = BeautifulSoup(res_ped.text, 'html.parser')

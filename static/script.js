@@ -1090,7 +1090,22 @@ function localizeRaceName(name) {
 // --- HORSE SEARCH ENGINE ---
 // ==========================================
 
+let searchDebounceTimer = null;
+const SEARCH_DEBOUNCE_MS = 150;  // Wait 150ms after user stops typing
+
 function handleSearchInput() {
+    // Clear the previous debounce timer
+    if (searchDebounceTimer) {
+        clearTimeout(searchDebounceTimer);
+    }
+    
+    // Wait 150ms before filtering (debounce rapid keystrokes)
+    searchDebounceTimer = setTimeout(() => {
+        performSearch();
+    }, SEARCH_DEBOUNCE_MS);
+}
+
+function performSearch() {
     const val = document.getElementById('horse-search').value.toLowerCase();
     const box = document.getElementById('search-suggestions');
     currentSearchSelection = -1;
