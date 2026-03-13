@@ -61,6 +61,7 @@
         .btn-danger { background: #4a1919; border-color: #ff4b4b; }
         .btn-danger:hover { background: #ff4b4b; }
         input[type="text"], textarea { width: 100%; box-sizing: border-box; background: #262730; color: white; border: 1px solid #444; padding: 10px; border-radius: 4px; font-family: monospace; }
+        select { background: #262730; color: white; border: 1px solid #444; padding: 8px 10px; border-radius: 4px; font-size: 14px; cursor: pointer; }
         
         /* --- TABS --- */
         .tab-bar { display: flex; border-bottom: 2px solid #333; margin-bottom: 0; }
@@ -91,22 +92,26 @@
 /* --- HORSE LIST CARDS --- */
 .horse-list-container {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 400px;
-    overflow-y: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-height: none;
+    overflow: visible;
     padding-right: 5px;
     margin-top: 10px;
 }
 .horse-item {
     background: #262730;
     border: 1px solid #333;
-    padding: 6px 12px;
+    padding: 4px 8px;
     border-radius: 6px;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 6px;
     transition: border-color 0.2s;
+    flex: 0 1 auto;
+    white-space: nowrap;
 }
 .horse-item:hover {
     border-color: #555;
@@ -114,15 +119,15 @@
 .horse-item-name {
     font-weight: 500;
     color: #fafafa;
-    font-size: 14px;
+    font-size: 12px;
 }
 .btn-delete {
     background: transparent;
     color: #666; /* Subdued color until hovered */
     border: none;
     cursor: pointer;
-    font-size: 14px;
-    padding: 4px 8px;
+    font-size: 12px;
+    padding: 2px 4px;
     border-radius: 4px;
     display: flex;
     align-items: center;
@@ -200,7 +205,77 @@
 }
 .hover-action-btn.add-btn:hover { background: #1dd1a1; color: black; border-color: #1dd1a1; }
 .hover-action-btn.remove-btn:hover { background: #ff4b4b; color: white; border-color: #ff4b4b; }
+
+/* --- TRACKED HORSE FORMATTING --- */
+/* Text formatting for tracked horses - bold and underlined with color */
+span.name-text.tracked-fav {
+    color: #ffd700 !important;
+    font-weight: 700 !important;
+    text-decoration: underline !important;
 }
+span.name-text.tracked-watch {
+    color: #6495ed !important;
+    font-weight: 700 !important;
+    text-decoration: underline !important;
+}
+span.name-text.tracked-mixed {
+    color: #da70d6 !important;
+    font-weight: 700 !important;
+    text-decoration: underline !important;
+}
+
+/* Row highlighting with intensity levels */
+/* Favorites - base and intensity tiers */
+tr.row-fav {
+    background-color: rgba(255, 215, 0, 0.05) !important;
+}
+tr.row-fav.intensity-light {
+    background-color: rgba(255, 215, 0, 0.12) !important;
+}
+tr.row-fav.intensity-medium {
+    background-color: rgba(255, 215, 0, 0.20) !important;
+}
+tr.row-fav.intensity-strong {
+    background-color: rgba(255, 215, 0, 0.30) !important;
+}
+tr.row-fav.intensity-very-strong {
+    background-color: rgba(255, 215, 0, 0.40) !important;
+}
+
+/* Watchlist - base and intensity tiers */
+tr.row-watch {
+    background-color: rgba(100, 149, 237, 0.05) !important;
+}
+tr.row-watch.intensity-light {
+    background-color: rgba(100, 149, 237, 0.12) !important;
+}
+tr.row-watch.intensity-medium {
+    background-color: rgba(100, 149, 237, 0.20) !important;
+}
+tr.row-watch.intensity-strong {
+    background-color: rgba(100, 149, 237, 0.30) !important;
+}
+tr.row-watch.intensity-very-strong {
+    background-color: rgba(100, 149, 237, 0.40) !important;
+}
+
+/* Mixed (Watched horse with favorite relatives) - green blend of blue + yellow */
+tr.row-mixed {
+    background-color: rgba(150, 180, 100, 0.05) !important;
+}
+tr.row-mixed.intensity-light {
+    background-color: rgba(150, 180, 100, 0.12) !important;
+}
+tr.row-mixed.intensity-medium {
+    background-color: rgba(150, 180, 100, 0.20) !important;
+}
+tr.row-mixed.intensity-strong {
+    background-color: rgba(150, 180, 100, 0.30) !important;
+}
+tr.row-mixed.intensity-very-strong {
+    background-color: rgba(150, 180, 100, 0.40) !important;
+}
+
 .quick-add:hover {
     background: #1dd1a1;
     color: #000;
@@ -243,6 +318,47 @@ th {
 .race-header.collapsed.has-watch {
     background-color: #152036; 
     border-left: 4px solid #6495ed;
+}
+
+/* Race header intensity levels for collapsed state */
+.race-header.has-fav.intensity-light {
+    background-color: rgba(255, 215, 0, 0.12) !important;
+}
+.race-header.has-fav.intensity-medium {
+    background-color: rgba(255, 215, 0, 0.20) !important;
+}
+.race-header.has-fav.intensity-strong {
+    background-color: rgba(255, 215, 0, 0.30) !important;
+}
+.race-header.has-fav.intensity-very-strong {
+    background-color: rgba(255, 215, 0, 0.40) !important;
+}
+
+.race-header.has-watch.intensity-light {
+    background-color: rgba(100, 149, 237, 0.12) !important;
+}
+.race-header.has-watch.intensity-medium {
+    background-color: rgba(100, 149, 237, 0.20) !important;
+}
+.race-header.has-watch.intensity-strong {
+    background-color: rgba(100, 149, 237, 0.30) !important;
+}
+.race-header.has-watch.intensity-very-strong {
+    background-color: rgba(100, 149, 237, 0.40) !important;
+}
+
+/* Mixed header intensities (watched + favorite relatives = green) */
+.race-header.row-mixed.intensity-light {
+    background-color: rgba(150, 180, 100, 0.12) !important;
+}
+.race-header.row-mixed.intensity-medium {
+    background-color: rgba(150, 180, 100, 0.20) !important;
+}
+.race-header.row-mixed.intensity-strong {
+    background-color: rgba(150, 180, 100, 0.30) !important;
+}
+.race-header.row-mixed.intensity-very-strong {
+    background-color: rgba(150, 180, 100, 0.40) !important;
 }
 
 .collapse-arrow { display: inline-block; width: 20px; font-size: 14px; }

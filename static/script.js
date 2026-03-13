@@ -3,6 +3,7 @@ let listsData = { favorites: "", watchlist: "" };
 let upcomingRaces = []; // NEW: Stores our parsed race times
 let globalRaceEntries = {}; // NEW: Stores local row data for instant sorting
 let globalRaceInfo = {}; // NEW: Stores the Racetrack names and numbers
+let globalRacesByDate = {}; // NEW: Stores races organized by date for jump dropdowns
 let raceSorts = {}; // NEW: Remembers which column is sorted for each race
 let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
@@ -77,6 +78,216 @@ async function refreshDataAndUI() {
     window.scrollTo(0, scrollY);
 }
 
+async function refreshListsOnly() {
+    // Lightweight refresh that just updates sidebar lists without reloading races
+    const listRes = await fetch('/api/lists');
+    listsData = await listRes.json();
+    renderLists();
+    
+    // Recalculate highlighting and scores based on new listsData
+    updateRaceHighlighting();
+    
+    // Sync all hover buttons across the page to reflect current list membership
+    updateAllHoverButtons();
+}
+
+function parseListIds(text) {
+    /**Extract all horse IDs from a list string (format: "ID # Name")*/
+    if (!text || typeof text !== 'string') return new Set();
+    const ids = new Set();
+    text.split('\n').forEach(line => {
+        const clean = line.split('#')[0].trim();
+        if (clean && clean.length === 10) ids.add(clean);
+    });
+    return ids;
+}
+
+function getTrackedStatus(horseId) {
+    /**Check if a horse is tracked and on which lists. Returns {fav: bool, watch: bool}*/
+    if (!listsData || !listsData.favorites || !listsData.watchlist) {
+        return { fav: false, watch: false };
+    }
+    const tracked_ids = parseListIds(listsData.favorites);
+    const watchlist_ids = parseListIds(listsData.watchlist);
+    const cleanId = String(horseId).split('.')[0].trim();
+    return {
+        fav: tracked_ids.has(cleanId),
+        watch: watchlist_ids.has(cleanId)
+    };
+}
+
+function calculateWeightedIntensity(horse, sire, dam, bms) {
+    /**Calculate weighted intensity based on family importance. Sire > Dam > BMS > Horse weight system*/
+    // Weights: Sire is most important (0.5), Dam second (0.35), BMS least (0.15)
+    let fav_weight = 0;
+    let watch_weight = 0;
+    
+    // Sire: 0.5 (highest parent weight)
+    if (sire.fav) fav_weight += 0.5;
+    if (sire.watch) watch_weight += 0.5;
+    
+    // Dam/Mare: 0.35 (second parent)
+    if (dam.fav) fav_weight += 0.35;
+    if (dam.watch) watch_weight += 0.35;
+    
+    // BMS: 0.15 (least important)
+    if (bms.fav) fav_weight += 0.15;
+    if (bms.watch) watch_weight += 0.15;
+    
+    // The horse itself is worth less than just having a quality parent
+    // (favoring pedigree over the horse being directly tracked)
+    if (horse.fav) fav_weight += 0.2;
+    if (horse.watch) watch_weight += 0.2;
+    
+    return { fav_weight, watch_weight, max: Math.max(fav_weight, watch_weight) };
+}
+
+function calculateFamilyTracking(horse_id, sire_id, dam_id, bms_id) {
+    /**Calculate which family members are tracked and weighted intensity level. Returns {horse, sire, dam, bms, intensity, isMixed, weights}*/
+    const horse = getTrackedStatus(horse_id);
+    const sire = getTrackedStatus(sire_id);
+    const dam = getTrackedStatus(dam_id);
+    const bms = getTrackedStatus(bms_id);
+    
+    const weights = calculateWeightedIntensity(horse, sire, dam, bms);
+    
+    // Determine intensity level from weighted value (0-1.2 range -> 4 intensity levels)
+    let intensity = 0;
+    const maxWeight = weights.max;
+    if (maxWeight > 0) {
+        if (maxWeight <= 0.2) intensity = 0.25;      // Light: just the horse itself
+        else if (maxWeight <= 0.35) intensity = 0.33; // Light: just the BMS
+        else if (maxWeight <= 0.50) intensity = 0.50; // Medium: just the Dam or Sire+BMS
+        else if (maxWeight <= 0.70) intensity = 0.66; // Strong: Dam+BMS, or Sire alone
+        else intensity = 0.80;                        // Very Strong: Sire+Dam or higher
+    }
+    
+    // Check if mixed (both fav and watch)
+    const isMixed = (weights.fav_weight > 0 && weights.watch_weight > 0);
+    
+    return {horse, sire, dam, bms, intensity, isMixed, weights};
+}
+
+function updateRaceHighlighting() {
+    /**Recalculate race scores and icons based on current listsData*/
+    const tracked_ids = parseListIds(listsData.favorites);
+    const watchlist_ids = parseListIds(listsData.watchlist);
+    
+    // Update each race's highlighting and icons
+    Object.keys(globalRaceEntries).forEach(r_id => {
+        const entries = globalRaceEntries[r_id];
+        let hasTracked = false;
+        let hasWatchlist = false;
+        let hasMixed = false;
+        let maxIntensity = 0;
+        let maxIntensityStatus = "";
+        
+        // Recalculate scores for all entries in this race
+        entries.forEach(row => {
+            // Calculate family tracking with weighted importance (always recalculate)
+            row.familyTracking = calculateFamilyTracking(row.Horse_ID, row.Sire_ID, row.Dam_ID, row.BMS_ID);
+            const tracking = row.familyTracking;
+            const weights = tracking.weights;
+            
+            // Use the weighted values to determine icon and status
+            const f_weight = weights.fav_weight;
+            const w_weight = weights.watch_weight;
+            
+            // Update row data
+            let icon = "";
+            let score = 0;
+            let status = "";
+            
+            if (f_weight > 0) {
+                score = Math.min(f_weight, 1.0);
+                status = "FAV";
+                icon = f_weight >= 0.5 ? "⭐⭐⭐" : (f_weight >= 0.35 ? "⭐⭐" : "⭐");
+                hasTracked = true;
+            } else if (w_weight > 0) {
+                score = Math.min(w_weight, 1.0);
+                status = "WATCH";
+                icon = w_weight >= 0.5 ? "👁️👁️" : "👁️";
+                hasWatchlist = true;
+            }
+            
+            row.Match = icon;
+            row.Score = score;
+            row.Status = status;
+            
+            // Check if this row is mixed
+            if (tracking.isMixed) {
+                hasMixed = true;
+            }
+            
+            // Track the max intensity in this race for header highlighting
+            if (tracking.intensity > maxIntensity) {
+                maxIntensity = tracking.intensity;
+                maxIntensityStatus = tracking.isMixed ? "MIXED" : status;
+            }
+        });
+        
+        // Rebuild the table body with updated scores
+        const tbody = document.getElementById(`tbody-${r_id}`);
+        if (tbody) {
+            tbody.innerHTML = buildTableBody(r_id, entries);
+        }
+        
+        // Update race header highlighting with max intensity found in the race
+        const header = document.getElementById(`header-${r_id}`);
+        if (header) {
+            // Remove all intensity and status classes first
+            header.classList.remove('has-fav', 'has-watch', 'row-mixed', 'intensity-light', 'intensity-medium', 'intensity-strong', 'intensity-very-strong');
+            
+            // Apply appropriate status class - WATCHLIST COLOR TAKES PRIORITY OVER FAVORITES
+            if (hasWatchlist) {
+                header.classList.add('has-watch');
+            } else if (hasMixed) {
+                header.classList.add('row-mixed');
+            } else if (hasTracked) {
+                header.classList.add('has-fav');
+            }
+            
+            // Apply max intensity class to header
+            if (maxIntensity > 0) {
+                if (maxIntensity <= 0.25) header.classList.add('intensity-light');
+                else if (maxIntensity <= 0.33) header.classList.add('intensity-light');
+                else if (maxIntensity <= 0.50) header.classList.add('intensity-medium');
+                else if (maxIntensity <= 0.66) header.classList.add('intensity-strong');
+                else header.classList.add('intensity-very-strong');
+            }
+        }
+    });
+    
+    // Update all hover buttons to reflect current list status
+    updateAllHoverButtons();
+}
+
+function updateAllHoverButtons() {
+    /**Update all hover buttons to show Add or Remove based on current lists*/
+    const tracked_ids = parseListIds(listsData.favorites);
+    const watchlist_ids = parseListIds(listsData.watchlist);
+    
+    document.querySelectorAll('.hover-action-btn').forEach(btn => {
+        const horseId = btn.getAttribute('data-horse-id');
+        const listType = btn.getAttribute('data-list-type');
+        
+        if (!horseId || !listType) return;
+        
+        const isTracked = (listType === 'favorites' && tracked_ids.has(horseId)) ||
+                         (listType === 'watchlist' && watchlist_ids.has(horseId));
+        
+        if (isTracked) {
+            btn.className = "hover-action-btn remove-btn";
+            btn.textContent = "➖ Remove";
+            btn.onclick = () => removeHorseFromHover(horseId, listType);
+        } else {
+            btn.className = "hover-action-btn add-btn";
+            btn.textContent = "➕ Add";
+            btn.onclick = () => quickAddFromHover(horseId, listType);
+        }
+    });
+}
+
 // --- INITIALIZATION ---
 async function init() {
     const marksRes = await fetch('/api/marks');
@@ -116,7 +327,7 @@ function buildListHTML(rawText, listType) {
                 html += `
                 <div class="horse-item">
                     <span class="horse-item-name">${escapedName}</span>
-                    <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapedId}', '${escapeHtml(listType)}')">✖</button>
+                    <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapeHtml(listType)}', '${escapedId}')">✖</button>
                 </div>`;
             }
         }
@@ -133,9 +344,46 @@ async function quickAdd(id, listType) {
     });
     const data = await res.json();
     
-    // If successful, trigger the master UI refresh!
-    if(data.status === "success") await refreshDataAndUI();
+    // If successful, refresh only the sidebar lists (keep scroll position)
+    if(data.status === "success") await refreshListsOnly();
     else alert(data.message);
+}
+
+async function quickAddFromHover(id, listType) {
+    const res = await fetch('/api/snipe', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: id, list_type: listType})
+    });
+    const data = await res.json();
+    
+    if(data.status === "success") {
+        // Refresh lists and update highlighting/buttons
+        await refreshListsOnly();
+    } else {
+        alert(data.message);
+    }
+}
+
+async function removeHorseFromHover(id, listType) {
+    const lines = listsData[listType].split('\n');
+    const newLines = lines.filter(line => {
+        const cleanLine = line.trim();
+        return cleanLine !== "" && !cleanLine.startsWith(id);
+    });
+    
+    listsData[listType] = newLines.join('\n') + (newLines.length > 0 ? '\n' : '');
+    
+    // Save to Python
+    await fetch('/api/lists', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            favorites: listsData.favorites,
+            watchlist: listsData.watchlist
+        })
+    });
+    
+    // Refresh lists and update highlighting/buttons
+    await refreshListsOnly();
 }
 
 async function removeHorse(listType, idToRemove) {
@@ -156,8 +404,8 @@ async function removeHorse(listType, idToRemove) {
         })
     });
     
-    // Trigger the master UI refresh!
-    await refreshDataAndUI();
+    // Refresh only the sidebar lists (keep scroll position)
+    await refreshListsOnly();
 }
 
 async function snipeHorse() {
@@ -177,7 +425,7 @@ async function snipeHorse() {
 }
 
 // Creates a wrapper with a 500ms delay hover menu
-function buildNameWithHover(id, name, listType) {
+function buildNameWithHover(id, name, listType, trackedStatus, intensity, isMixed) {
     if (!id || id === 'nan' || id === '---' || !name) return escapeHtml(name || "");
     const cleanId = String(id).split('.')[0].trim();
     if (!cleanId) return escapeHtml(name);
@@ -191,17 +439,33 @@ function buildNameWithHover(id, name, listType) {
     
     let btnHtml = "";
     if (isTracked) {
-        btnHtml = `<button class="hover-action-btn remove-btn" onclick="removeHorse('${escapedListType}', '${escapedId}')">➖ Remove</button>`;
+        btnHtml = `<button class="hover-action-btn remove-btn" data-horse-id="${cleanId}" data-list-type="${listType}" onclick="removeHorseFromHover('${cleanId}', '${listType}')">➖ Remove</button>`;
     } else {
-        btnHtml = `<button class="hover-action-btn add-btn" onclick="quickAdd('${escapedId}', '${escapedListType}')">➕ Add</button>`;
+        btnHtml = `<button class="hover-action-btn add-btn" data-horse-id="${cleanId}" data-list-type="${listType}" onclick="quickAddFromHover('${cleanId}', '${listType}')">➕ Add</button>`;
     }
     
     // Generate the link to the English Netkeiba Database!
     const linkHtml = `<a href="https://en.netkeiba.com/db/horse/${escapedId}/" target="_blank" class="hover-link-btn" title="View on Netkeiba DB">🔗 DB</a>`;
     
+    // Apply tracking formatting if this horse is tracked
+    let nameClass = "name-text";
+    if (trackedStatus && (trackedStatus.fav || trackedStatus.watch)) {
+        // Determine color based on which list(s) the family member is on
+        let colorClass = "";
+        if (trackedStatus.fav && trackedStatus.watch) {
+            colorClass = "tracked-mixed";
+        } else if (trackedStatus.fav) {
+            colorClass = "tracked-fav";
+        } else { // watch
+            colorClass = "tracked-watch";
+        }
+        
+        nameClass = `name-text ${colorClass}`;
+    }
+    
     return `
     <div class="name-container">
-        <span class="name-text">${escapedName}</span>
+        <span class="${nameClass}">${escapedName}</span>
         <div class="hover-menu">
             ${btnHtml}
             ${linkHtml}
@@ -343,16 +607,46 @@ function buildTableBody(r_id, entries) {
     entries.forEach(row => {
         const h_id = String(row.Horse_ID).split('.')[0];
         const key = `${r_id}_${h_id}`;
-        const rowClass = row.Status === "FAV" ? "row-fav" : (row.Status === "WATCH" ? "row-watch" : "");
+        const rowStatus = row.Status || "";
         
-        const horseStr = buildNameWithHover(row.Horse_ID, row.Horse, 'watchlist');
-        const sireStr = buildNameWithHover(row.Sire_ID, row.Sire, 'favorites');
-        const damStr = buildNameWithHover(row.Dam_ID, row.Dam, 'favorites');
-        const bmsStr = buildNameWithHover(row.BMS_ID, row.BMS, 'favorites');
+        // Ensure tracking data exists; calculate if missing
+        if (!row.familyTracking) {
+            row.familyTracking = calculateFamilyTracking(row.Horse_ID, row.Sire_ID, row.Dam_ID, row.BMS_ID);
+        }
+        const tracking = row.familyTracking;
+        
+        // Determine base status class: mixed takes priority, then FAV/WATCH
+        let rowStatusClass = "";
+        if (tracking.isMixed) {
+            rowStatusClass = "row-mixed";
+        } else if (rowStatus === "FAV") {
+            rowStatusClass = "row-fav";
+        } else if (rowStatus === "WATCH") {
+            rowStatusClass = "row-watch";
+        }
+        
+        // Determine intensity class for the row
+        let intensityClass = "";
+        if (tracking && tracking.intensity > 0) {
+            if (tracking.intensity <= 0.33) intensityClass = "intensity-light";
+            else if (tracking.intensity <= 0.50) intensityClass = "intensity-medium";
+            else if (tracking.intensity <= 0.66) intensityClass = "intensity-strong";
+            else intensityClass = "intensity-very-strong";
+        }
+        
+        // Build final class string
+        let finalClasses = [];
+        if (rowStatusClass) finalClasses.push(rowStatusClass);
+        if (intensityClass) finalClasses.push(intensityClass);
+        const trClass = finalClasses.join(" ");
+        
+        const horseStr = buildNameWithHover(row.Horse_ID, row.Horse, 'watchlist', tracking.horse, tracking.intensity, tracking.isMixed);
+        const sireStr = buildNameWithHover(row.Sire_ID, row.Sire, 'favorites', tracking.sire, tracking.intensity, tracking.isMixed);
+        const damStr = buildNameWithHover(row.Dam_ID, row.Dam, 'favorites', tracking.dam, tracking.intensity, tracking.isMixed);
+        const bmsStr = buildNameWithHover(row.BMS_ID, row.BMS, 'favorites', tracking.bms, tracking.intensity, tracking.isMixed);
         
         // NEW: Added id="row-${r_id}-${h_id}" to the <tr>
-        rowsHtml += `<tr id="row-${r_id}-${h_id}" class="${rowClass}">
-            <td>${row.Match || ""}</td>
+        rowsHtml += `<tr id="row-${r_id}-${h_id}" class="${trClass}">
             <td style="min-width: 170px;">
                 ${createMarkBtn(r_id, h_id, '◎', key)}
                 ${createMarkBtn(r_id, h_id, '〇', key)}
@@ -580,6 +874,12 @@ async function loadRaces() {
             const r_id = race.info.race_id;
             globalRaceInfo[r_id] = race.info; // NEW: Save info for the export tool
             
+            // NEW: Organize by date for jump dropdowns
+            if (!globalRacesByDate[date]) {
+                globalRacesByDate[date] = [];
+            }
+            globalRacesByDate[date].push(race.info);
+            
             if (race.info.time !== "TBA" && race.info.sort_time) {
                 upcomingRaces.push({
                     time: new Date(race.info.sort_time.replace(' ', 'T')),
@@ -589,6 +889,9 @@ async function loadRaces() {
         });
     });
     upcomingRaces.sort((a, b) => a.time - b.time);
+    
+    // Update jump to race dropdowns
+    updateJumpDay();
 
     // Render Top Picks (Now in the Sidebar!)
     const tpContainer = document.getElementById('sidebar-top-picks');
@@ -690,7 +993,6 @@ async function loadRaces() {
                     <table>
                         <thead>
                             <tr>
-                                <th>Match</th>
                                 <th class="sortable" id="th-${r_id}-Shirushi" onclick="setSort('${r_id}', 'Shirushi')">Prediction ${getSortIcon(r_id, 'Shirushi')}</th>
                                 <th>BK</th><th>PP</th><th>Horse</th>
                                 <th class="sortable" id="th-${r_id}-Record" onclick="setSort('${r_id}', 'Record')">W/S ${getSortIcon(r_id, 'Record')}</th>
@@ -1189,6 +1491,102 @@ function jumpToHorse(date, r_id, h_id) {
             rowEl.classList.add('highlight-row');
         }
     }, 100); // 100ms delay ensures the DOM expands the collapsed race first
+}
+
+// ==========================================
+// --- JUMP TO RACE FEATURE ---
+// ==========================================
+
+function updateJumpDay() {
+    const daySelect = document.getElementById('jump-day');
+    const days = Object.keys(globalRacesByDate).sort();
+    
+    daySelect.innerHTML = '<option value="">Day</option>';
+    days.forEach(day => {
+        const option = document.createElement('option');
+        option.value = day;
+        option.textContent = day;
+        daySelect.appendChild(option);
+    });
+    
+    // Reset other dropdowns
+    document.getElementById('jump-course').innerHTML = '<option value="">Course</option>';
+    document.getElementById('jump-race').innerHTML = '<option value="">Race</option>';
+}
+
+function updateJumpCourse() {
+    const daySelect = document.getElementById('jump-day');
+    const courseSelect = document.getElementById('jump-course');
+    const selectedDay = daySelect.value;
+    
+    if (!selectedDay || !globalRacesByDate[selectedDay]) {
+        courseSelect.innerHTML = '<option value="">Course</option>';
+        document.getElementById('jump-race').innerHTML = '<option value="">Race</option>';
+        return;
+    }
+    
+    const races = globalRacesByDate[selectedDay];
+    const courses = [...new Set(races.map(r => r.place))].sort();
+    
+    courseSelect.innerHTML = '<option value="">Course</option>';
+    courses.forEach(course => {
+        const option = document.createElement('option');
+        option.value = course;
+        option.textContent = course;
+        courseSelect.appendChild(option);
+    });
+    
+    // Reset race dropdown
+    document.getElementById('jump-race').innerHTML = '<option value="">Race</option>';
+}
+
+function updateJumpRace() {
+    const daySelect = document.getElementById('jump-day');
+    const courseSelect = document.getElementById('jump-course');
+    const raceSelect = document.getElementById('jump-race');
+    const selectedDay = daySelect.value;
+    const selectedCourse = courseSelect.value;
+    
+    if (!selectedDay || !selectedCourse || !globalRacesByDate[selectedDay]) {
+        raceSelect.innerHTML = '<option value="">Race</option>';
+        return;
+    }
+    
+    const races = globalRacesByDate[selectedDay].filter(r => r.place === selectedCourse).sort((a, b) => a.race_number - b.race_number);
+    
+    raceSelect.innerHTML = '<option value="">Race</option>';
+    races.forEach(race => {
+        const option = document.createElement('option');
+        option.value = race.race_id;
+        option.textContent = `R${race.race_number} ${race.time || 'TBA'}`;
+        raceSelect.appendChild(option);
+    });
+}
+
+function checkAndJump() {
+    const daySelect = document.getElementById('jump-day');
+    const courseSelect = document.getElementById('jump-course');
+    const raceSelect = document.getElementById('jump-race');
+    const selectedDay = daySelect.value;
+    const selectedRaceId = raceSelect.value;
+    
+    // Only jump if all 3 are selected
+    if (!selectedDay || !selectedRaceId) {
+        return;
+    }
+    
+    // Find the first horse in this race to highlight
+    const races = globalRaceEntries[selectedRaceId];
+    if (!races || races.length === 0) {
+        return;
+    }
+    
+    const firstHorseId = races[0].Horse_ID;
+    jumpToHorse(selectedDay, selectedRaceId, firstHorseId);
+}
+
+function performJump() {
+    checkAndJump();
 }
 
 // Hide search dropdown if the user clicks anywhere else on the screen
