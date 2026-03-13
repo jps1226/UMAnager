@@ -2,27 +2,33 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Netkeiba Command Center</title>
+    <title>UMAnager</title>
     <link rel="stylesheet" href="/static/style.css"> 
 </head>
 <body>
 
 <div class="sidebar">
-    <h2 style="margin-top: 0;">🐎 Control Panel</h2>
+    <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 15px;">
+        <h2 style="margin: 0; color: #1dd1a1;">🐎 UMAnager</h2>
+        <span style="font-size: 10px; color: #666; font-weight: bold; letter-spacing: 1px;">V1.0</span>
+    </div>
     
-    <details class="sidebar-group">
-        <summary>⚙️ Data Management</summary>
+    <details class="sidebar-group" open>
+        <summary>🔄 Race Database</summary>
         <div class="sidebar-group-content">
-            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                <button class="btn-full" onclick="triggerScrape('new')" id="btn-new-race">🔍 New Races</button>
-                <button class="btn-full" onclick="triggerScrape('all')" id="btn-all-race">🔄 Force Update</button>
-            </div>
             
-            <button class="btn-full" style="background: #0abde3; color: black; font-weight: bold; margin-bottom: 10px;" onclick="triggerScrape('test')" id="btn-test-race">🧪 Test Scrape (3 Races)</button>
-            <button class="btn-full" onclick="triggerPost('/api/cache/clear')">🗑️ Clear Cache (.pkl)</button>
-            <button class="btn-full btn-danger" onclick="triggerPost('/api/dict/wipe')">🚨 Wipe Dictionary (.json)</button>
+            <button class="btn-full" onclick="triggerScrape('new')" id="btn-new-race" style="background: #1dd1a1; color: black; font-weight: bold; border-color: #1dd1a1; font-size: 15px; padding: 10px;">🔍 Fetch Upcoming Races</button>
             
-            <div id="scrape-console" class="console-box"></div>
+            <details style="margin-top: 10px; margin-bottom: 5px;">
+                <summary style="font-size: 12px; color: #888; cursor: pointer; user-select: none;">⚙️ Advanced Tools</summary>
+                <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dotted #444;">
+                    <button class="btn-full" style="font-size: 12px; padding: 6px;" onclick="triggerScrape('all')" id="btn-all-race">🔄 Force Full Re-Scrape</button>
+                    <button class="btn-full" style="font-size: 12px; padding: 6px;" onclick="triggerPost('/api/cache/clear')">🗑️ Clear Cached Races</button>
+                    <button class="btn-full btn-danger" style="font-size: 12px; padding: 6px;" onclick="triggerPost('/api/dict/wipe')">🚨 Reset Translation Memory</button>
+                </div>
+            </details>
+            
+            <div id="scrape-console" class="console-box" style="border-radius: 6px;"></div>
         </div>
     </details>
 
