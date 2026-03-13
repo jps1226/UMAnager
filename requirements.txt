@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pandas
+beautifulsoup4
+requests
+pykakasi
+keibascraper
