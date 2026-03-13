@@ -66,13 +66,13 @@ async function refreshDataAndUI() {
     // 1. Save scroll position so the screen doesn't jump
     const scrollY = window.scrollY;
     
-    // 2. Refresh the Sidebar Lists
+    // 2. Refresh the Grid & Weekend Watchlist (must load races FIRST to populate searchableHorses)
+    await loadRaces();
+    
+    // 3. Refresh the Sidebar Lists (needs searchableHorses populated)
     const listRes = await fetch('/api/lists');
     listsData = await listRes.json();
     renderLists();
-    
-    // 3. Refresh the Grid & Top Picks
-    await loadRaces();
     
     // 4. Restore scroll position seamlessly
     window.scrollTo(0, scrollY);
@@ -324,15 +324,80 @@ function buildListHTML(rawText, listType) {
             if (id && name) {
                 const escapedName = escapeHtml(name);
                 const escapedId = escapeHtml(id);
-                html += `
+                
+                // Find this horse in searchableHorses to get date and race_id
+                const horseData = searchableHorses.find(h => h.h_id === id);
+                if (horseData) {
+                    html += `
                 <div class="horse-item">
-                    <span class="horse-item-name">${escapedName}</span>
+                    <span class="horse-item-name" style="cursor: pointer;" onclick="jumpToHorse('${horseData.date}', '${horseData.r_id}', '${horseData.h_id}')" title="Click to view in race">${escapedName}</span>
                     <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapeHtml(listType)}', '${escapedId}')">✖</button>
                 </div>`;
+                } else {
+                    // Fallback if not found in searchableHorses
+                    html += `
+                <div class="horse-item">
+                    <span class="horse-item-name" style="color: #888;">${escapedName}</span>
+                    <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapeHtml(listType)}', '${escapedId}')">✖</button>
+                </div>`;
+                }
             }
         }
     });
     return html;
+}
+
+function navigateToHorse(horseId) {
+    /**Find which race contains this horse and navigate to it*/
+    let foundRaceId = null;
+    
+    // Search through all races to find this horse
+    for (const [r_id, entries] of Object.entries(globalRaceEntries)) {
+        for (const row of entries) {
+            if (String(row.Horse_ID).split('.')[0] === horseId) {
+                foundRaceId = r_id;
+                break;
+            }
+        }
+        if (foundRaceId) break;
+    }
+    
+    if (!foundRaceId) {
+        alert('Horse not found in any race');
+        return;
+    }
+    
+    // Get the date from globalRaceInfo for tab switching
+    const raceInfo = globalRaceInfo[foundRaceId];
+    const foundDate = raceInfo ? raceInfo.clean_date : null;
+    
+    if (!foundDate) {
+        alert('Race information not found');
+        return;
+    }
+    
+    // Switch to the correct date tab
+    switchMainTab(foundDate);
+    
+    // Expand the specific race if it is collapsed then scroll to it
+    setTimeout(() => {
+        const content = document.getElementById(`content-${foundRaceId}`);
+        const header = document.getElementById(`header-${foundRaceId}`);
+        const arrow = document.getElementById(`arrow-${foundRaceId}`);
+        
+        if (content && content.classList.contains('collapsed')) {
+            content.classList.remove('collapsed');
+            if (header) header.classList.remove('collapsed');
+            if (arrow) arrow.innerText = '▼';
+        }
+        
+        // Use anchor link to scroll and ensure visibility
+        window.location.hash = `race-${foundRaceId}`;
+        const raceHeader = document.getElementById(`header-${foundRaceId}`);
+        if (raceHeader) {
+            raceHeader.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }, 100);
 }
 
 // --- ADD / REMOVE / SNIPE ACTIONS ---
@@ -509,6 +574,7 @@ function toggleAllRaces() {
 function collapseVotedRaces() {
     const mainSymbols = ["◎", "〇", "▲", "△"];
     const allRaceIds = Object.keys(globalRaceEntries);
+    let firstUnvotedRaceId = null;
     
     allRaceIds.forEach(r_id => {
         let usedCount = 0;
@@ -531,8 +597,21 @@ function collapseVotedRaces() {
                 if (header) header.classList.add('collapsed');
                 if (arrow) arrow.innerText = '▶';
             }
+        } else if (!firstUnvotedRaceId && usedCount < 4) {
+            // Track the first unvoted race
+            firstUnvotedRaceId = r_id;
         }
     });
+    
+    // Scroll to the first unvoted race
+    if (firstUnvotedRaceId) {
+        setTimeout(() => {
+            const header = document.getElementById(`header-${firstUnvotedRaceId}`);
+            if (header) {
+                header.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }, 100);
+    }
 }
 
 // --- SORTING LOGIC ---
@@ -893,18 +972,33 @@ async function loadRaces() {
     // Update jump to race dropdowns
     updateJumpDay();
 
-    // Render Top Picks (Now in the Sidebar!)
-    const tpContainer = document.getElementById('sidebar-top-picks');
+    // Render Weekend Watchlist (Now in the Sidebar!)
+    const tpContainer = document.getElementById('sidebar-weekend-watchlist');
     if (tpContainer) {
         if (data.top_picks && data.top_picks.length > 0) {
             let tpHTML = `<div class="horse-list-container" style="max-height: none;">`;
             data.top_picks.forEach(p => {
                 // p array: [0: Match, 1: Record, 2: Odds, 3: Horse, 4: Symbol, 5: Race_ID]
-                tpHTML += `
-                <div class="horse-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
-                    <a href="#race-${p[5]}" style="color: #fafafa; text-decoration: none; font-weight: bold; font-size: 14px;">${p[4]} ${p[3]}</a>
-                    <span style="font-size: 11px; color: #888;">${p[0]} | W/S: ${p[1]} | Odds: ${p[2]}</span>
-                </div>`;
+                const r_id = p[5];
+                const horseName = p[3];
+                
+                // Find this horse in searchableHorses to get date and h_id
+                const raceData = searchableHorses.find(h => h.r_id === r_id && h.name === horseName);
+                
+                if (raceData) {
+                    tpHTML += `
+                    <div class="horse-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+                        <span style="color: #fafafa; font-weight: bold; font-size: 14px; cursor: pointer;" onclick="jumpToHorse('${raceData.date}', '${raceData.r_id}', '${raceData.h_id}')" title="Click to view in race">${p[4]} ${horseName}</span>
+                        <span style="font-size: 11px; color: #888;">${p[0]} | W/S: ${p[1]} | Odds: ${p[2]}</span>
+                    </div>`;
+                } else {
+                    // Fallback if not found
+                    tpHTML += `
+                    <div class="horse-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+                        <span style="color: #888; font-weight: bold; font-size: 14px;">${p[4]} ${horseName}</span>
+                        <span style="font-size: 11px; color: #888;">${p[0]} | W/S: ${p[1]} | Odds: ${p[2]}</span>
+                    </div>`;
+                }
             });
             tpHTML += `</div>`;
             tpContainer.innerHTML = tpHTML;
