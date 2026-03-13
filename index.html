@@ -10,7 +10,10 @@
 <div class="sidebar">
     <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 15px;">
         <h2 style="margin: 0; color: #1dd1a1;">🐎 UMAnager</h2>
-        <span style="font-size: 10px; color: #666; font-weight: bold; letter-spacing: 1px;">V1.0</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 10px; color: #666; font-weight: bold; letter-spacing: 1px;">V1.0</span>
+            <button onclick="showSettingsModal()" title="Settings" style="background: #262730; border: 1px solid #444; color: #1dd1a1; cursor: pointer; font-size: 16px; width: 28px; height: 28px; padding: 0; border-radius: 4px;">⚙️</button>
+        </div>
     </div>
     
     <details class="sidebar-group" open>
@@ -141,6 +144,37 @@
         </div>
         <div id="export-display"></div>
         <button onclick="closeExportModal()" class="btn-full" style="background: #333; color: white; margin-top: 15px;">Close</button>
+    </div>
+</div>
+
+<div id="settings-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content" style="width: 400px; max-width: 95vw;">
+        <div class="modal-header">
+            <h3 style="margin: 0;">⚙️ Settings</h3>
+            <button onclick="closeSettingsModal()" class="close-btn">✖</button>
+        </div>
+        <div style="padding: 20px;">
+            <h4 style="color: #1dd1a1; margin-top: 0; margin-bottom: 12px;">Default Sidebar Sections</h4>
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                    <input type="checkbox" id="setting-raceDatabase" onchange="updateSidebarSettings()">
+                    <span>🔄 Race Database</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                    <input type="checkbox" id="setting-pedigreeLists" onchange="updateSidebarSettings()">
+                    <span>🎯 Pedigree Lists</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                    <input type="checkbox" id="setting-autoPickStrategy" onchange="updateSidebarSettings()">
+                    <span>⚙️ Auto-Pick Strategy</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                    <input type="checkbox" id="setting-weekendWatchlist" onchange="updateSidebarSettings()">
+                    <span>🏆 Weekend Watchlist</span>
+                </label>
+            </div>
+        </div>
+        <button onclick="closeSettingsModal()" class="btn-full" style="background: #333; color: white;">Close</button>
     </div>
 </div>
 </div>

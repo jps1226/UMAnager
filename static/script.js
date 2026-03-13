@@ -7,6 +7,7 @@ let globalRacesByDate = {}; // NEW: Stores races organized by date for jump drop
 let raceSorts = {}; // NEW: Remembers which column is sorted for each race
 let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
+let appConfig = {}; // NEW: Stores app configuration
 
 // --- SECURITY: HTML Escaping ---
 function escapeHtml(text) {
@@ -293,14 +294,20 @@ async function init() {
     const marksRes = await fetch('/api/marks');
     globalMarks = await marksRes.json();
     
-    // NEW: Load saved slider state
-    const savedRisk = localStorage.getItem('orepro_risk_val');
-    if (savedRisk) {
-        document.getElementById('risk-slider').value = savedRisk;
-        updateRiskLabel(savedRisk);
-    } else {
-        updateRiskLabel(50); // Initialize colors if no save exists
-    }
+    // NEW: Load config file
+    const configRes = await fetch('/api/config');
+    appConfig = await configRes.json();
+    
+    // NEW: Save slider state to config periodically
+    document.getElementById('risk-slider').addEventListener('change', saveConfigToServer);
+    
+    // NEW: Load saved slider state from config
+    const savedRisk = appConfig.ui?.riskSlider || 50;
+    document.getElementById('risk-slider').value = savedRisk;
+    updateRiskLabel(savedRisk);
+    
+    // NEW: Apply sidebar settings
+    applySidebarSettings();
     
     await refreshDataAndUI();
 }
@@ -761,7 +768,18 @@ function updateRiskLabel(val) {
     label.innerText = `${text} (${val})`;
     label.style.color = color;
     slider.style.color = color; // Changes the thumb color dynamically!
-    localStorage.setItem('orepro_risk_val', val); // Memorize the setting
+}
+
+// NEW: Save config to server when slider changes
+async function saveConfigToServer() {
+    const riskVal = document.getElementById('risk-slider').value;
+    appConfig.ui.riskSlider = parseInt(riskVal);
+    
+    await fetch('/api/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(appConfig)
+    });
 }
 
 // --- DYNAMIC MATH ENGINE ---
@@ -1457,6 +1475,54 @@ async function showExportModal() {
 
 function closeExportModal() {
     document.getElementById('export-modal').style.display = "none";
+}
+
+// --- SETTINGS MODAL ---
+function showSettingsModal() {
+    // Populate checkboxes from current config
+    document.getElementById('setting-raceDatabase').checked = appConfig.sidebarTabs?.raceDatabase ?? true;
+    document.getElementById('setting-pedigreeLists').checked = appConfig.sidebarTabs?.pedigreeLists ?? true;
+    document.getElementById('setting-autoPickStrategy').checked = appConfig.sidebarTabs?.autoPickStrategy ?? true;
+    document.getElementById('setting-weekendWatchlist').checked = appConfig.sidebarTabs?.weekendWatchlist ?? true;
+    
+    document.getElementById('settings-modal').style.display = 'flex';
+}
+
+function closeSettingsModal() {
+    document.getElementById('settings-modal').style.display = 'none';
+}
+
+async function updateSidebarSettings() {
+    // Update config from checkbox values
+    appConfig.sidebarTabs = {
+        raceDatabase: document.getElementById('setting-raceDatabase').checked,
+        pedigreeLists: document.getElementById('setting-pedigreeLists').checked,
+        autoPickStrategy: document.getElementById('setting-autoPickStrategy').checked,
+        weekendWatchlist: document.getElementById('setting-weekendWatchlist').checked
+    };
+    
+    // Save to server
+    await fetch('/api/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(appConfig)
+    });
+    
+    // Apply settings immediately to sidebar
+    applySidebarSettings();
+}
+
+function applySidebarSettings() {
+    // Get all details elements in the sidebar (they have class "sidebar-group")
+    const sidebarGroups = document.querySelectorAll('.sidebar .sidebar-group');
+    
+    if (sidebarGroups.length >= 4) {
+        // Order: Race Database, Pedigree Lists, Auto-Pick Strategy, Weekend Watchlist
+        sidebarGroups[0].open = appConfig.sidebarTabs?.raceDatabase ?? true;
+        sidebarGroups[1].open = appConfig.sidebarTabs?.pedigreeLists ?? true;
+        sidebarGroups[2].open = appConfig.sidebarTabs?.autoPickStrategy ?? true;
+        sidebarGroups[3].open = appConfig.sidebarTabs?.weekendWatchlist ?? true;
+    }
 }
 
 // --- RACE NAME LOCALIZER ---

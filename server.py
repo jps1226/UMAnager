@@ -179,6 +179,34 @@ async def snipe_horse(request: Request):
         logger.error(f"Error adding horse: {e}")
         return {"status": "error", "message": "Failed to add horse"}
 
+# --- CONFIG ENDPOINTS ---
+CONFIG_FILE = "config.json"
+
+def load_config():
+    """Load config from file, return defaults if missing."""
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {
+        "sidebarTabs": {"favorites": True, "watchlist": True, "weekendWatchlist": True},
+        "ui": {"riskSlider": 50}
+    }
+
+def save_config(config_data):
+    """Save config to file."""
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config_data, f, ensure_ascii=False, indent=4)
+
+@app.get("/api/config")
+def get_config():
+    return load_config()
+
+@app.post("/api/config")
+async def update_config(request: Request):
+    config_data = await request.json()
+    save_config(config_data)
+    return {"status": "success"}
+
 # --- MARKS & SCHEDULE ENDPOINTS ---
 @app.get("/api/marks")
 def get_marks():

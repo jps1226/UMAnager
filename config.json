@@ -1,0 +1,11 @@
+{
+    "sidebarTabs": {
+        "raceDatabase": true,
+        "pedigreeLists": false,
+        "autoPickStrategy": true,
+        "weekendWatchlist": true
+    },
+    "ui": {
+        "riskSlider": 50
+    }
+}
