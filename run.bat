@@ -1,13 +1,15 @@
 @echo off
-title Netkeiba Command Center Server
+title UMAnager Server
 echo =========================================
-echo Starting Netkeiba Command Center...
+echo Starting UMAnager...
 echo =========================================
 
-:: Navigate to your project directory
-cd /d C:\Users\ITSAdm\Documents\projects\UMAnager
+:: Get the directory where this batch file is located
+set "PROJECT_DIR=%~dp0"
+cd /d "%PROJECT_DIR%"
 
 :: Open the default web browser to the local server address
+:: Using a slight delay to ensure the server is ready
 start http://127.0.0.1:8000
 
 :: Start the FastAPI server with live-reloading
