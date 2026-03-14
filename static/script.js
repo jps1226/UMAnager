@@ -1331,14 +1331,7 @@ async function postJson(url, payload) {
 async function createDataBackup() {
     try {
         const data = await postJson('/api/data/backup', {});
-        if (data.download_url) {
-            const a = document.createElement('a');
-            a.href = data.download_url;
-            a.download = data.filename || '';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        }
+        alert(`Backup created automatically: backups/${data.filename || 'backup.zip'}`);
     } catch (err) {
         alert(`Backup failed: ${err.message}`);
     }
