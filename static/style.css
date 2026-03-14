@@ -341,43 +341,43 @@ th {
 
 /* Race header intensity levels for collapsed state */
 .race-header.has-fav.intensity-light {
-    background-color: rgba(255, 215, 0, 0.12) !important;
+    background-color: rgb(55, 49, 22) !important;
 }
 .race-header.has-fav.intensity-medium {
-    background-color: rgba(255, 215, 0, 0.20) !important;
+    background-color: rgb(77, 68, 24) !important;
 }
 .race-header.has-fav.intensity-strong {
-    background-color: rgba(255, 215, 0, 0.30) !important;
+    background-color: rgb(108, 95, 25) !important;
 }
 .race-header.has-fav.intensity-very-strong {
-    background-color: rgba(255, 215, 0, 0.40) !important;
+    background-color: rgb(141, 123, 28) !important;
 }
 
 .race-header.has-watch.intensity-light {
-    background-color: rgba(100, 149, 237, 0.12) !important;
+    background-color: rgb(27, 40, 61) !important;
 }
 .race-header.has-watch.intensity-medium {
-    background-color: rgba(100, 149, 237, 0.20) !important;
+    background-color: rgb(34, 52, 82) !important;
 }
 .race-header.has-watch.intensity-strong {
-    background-color: rgba(100, 149, 237, 0.30) !important;
+    background-color: rgb(43, 66, 105) !important;
 }
 .race-header.has-watch.intensity-very-strong {
-    background-color: rgba(100, 149, 237, 0.40) !important;
+    background-color: rgb(50, 78, 125) !important;
 }
 
 /* Mixed header intensities (watched + favorite relatives = green) */
 .race-header.row-mixed.intensity-light {
-    background-color: rgba(150, 180, 100, 0.12) !important;
+    background-color: rgb(39, 48, 31) !important;
 }
 .race-header.row-mixed.intensity-medium {
-    background-color: rgba(150, 180, 100, 0.20) !important;
+    background-color: rgb(52, 64, 38) !important;
 }
 .race-header.row-mixed.intensity-strong {
-    background-color: rgba(150, 180, 100, 0.30) !important;
+    background-color: rgb(67, 82, 45) !important;
 }
 .race-header.row-mixed.intensity-very-strong {
-    background-color: rgba(150, 180, 100, 0.40) !important;
+    background-color: rgb(82, 101, 52) !important;
 }
 
 .collapse-arrow { display: inline-block; width: 20px; font-size: 14px; }
@@ -522,6 +522,12 @@ th.sortable:hover {
     filter: grayscale(0%);
 }
 
+.mark-btn.locked,
+.mark-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 /* --- REORDER BUTTON --- */
 .btn-reorder {
     background: transparent;
@@ -540,11 +546,59 @@ th.sortable:hover {
     color: #000;
 }
 
+.btn-clear-bets {
+    background: transparent;
+    border: 1px solid #ff9f43;
+    color: #ff9f43;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 8px;
+    transition: 0.2s;
+    vertical-align: middle;
+}
+.btn-clear-bets:hover {
+    background: #ff9f43;
+    color: #000;
+}
+.btn-clear-bets:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.btn-lock-bets {
+    background: transparent;
+    border: 1px solid #9aa0a6;
+    color: #d7d9dc;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 8px;
+    transition: 0.2s;
+    vertical-align: middle;
+}
+.btn-lock-bets:hover {
+    background: #9aa0a6;
+    color: #000;
+}
+.btn-lock-bets.is-locked {
+    border-color: #1dd1a1;
+    color: #1dd1a1;
+}
+.btn-lock-bets.is-locked:hover {
+    background: #1dd1a1;
+    color: #000;
+}
+
 /* --- HIDE BUTTONS ON COLLAPSE --- */
 .race-header.collapsed .btn-autopick,
 .race-header.collapsed .btn-autopick-safe,
 .race-header.collapsed .btn-autopick-lucky,
 .race-header.collapsed .btn-history-refresh,
+.race-header.collapsed .btn-clear-bets,
+.race-header.collapsed .btn-lock-bets,
 .race-header.collapsed .btn-reorder,
 .race-header.collapsed .risk-badge {
     display: none !important;

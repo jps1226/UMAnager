@@ -11,6 +11,8 @@ import datetime
 import subprocess
 import signal
 import zipfile
+import tempfile
+import threading
 from pathlib import Path
 import pandas as pd
 import logging
@@ -36,13 +38,49 @@ BACKUP_DIR = Path(__file__).parent / "backups"
 
 # --- NEW: CONSOLE LOGGING MEMORY ---
 scrape_logs = []
+scrape_logs_lock = threading.Lock()
+scrape_job_lock = asyncio.Lock()
+
+
+def atomic_write_json(path, payload):
+    """Write JSON atomically to avoid partial/corrupt files on interruption."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", dir=target.parent) as tmp:
+        json.dump(payload, tmp, ensure_ascii=False, indent=4)
+        tmp_path = tmp.name
+    os.replace(tmp_path, target)
+
+
+def atomic_write_pickle(path, payload):
+    """Write pickle atomically to avoid partial/corrupt files on interruption."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("wb", delete=False, dir=target.parent) as tmp:
+        pickle.dump(payload, tmp)
+        tmp_path = tmp.name
+    os.replace(tmp_path, target)
+
+
+def safe_read_json(path, default):
+    """Load JSON with fallback to defaults when file is missing/corrupt."""
+    target = Path(path)
+    if not target.exists():
+        return default
+    try:
+        with open(target, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Failed to read JSON from {target}: {e}")
+        return default
 
 def log_progress(msg):
     """Pushes new messages to the frontend console."""
-    scrape_logs.append(msg)
-    # Keep the console from using too much memory on massive scrapes
-    if len(scrape_logs) > config.MAX_CONSOLE_LOGS:
-        scrape_logs.pop(0)
+    with scrape_logs_lock:
+        scrape_logs.append(msg)
+        # Keep the console from using too much memory on massive scrapes
+        if len(scrape_logs) > config.MAX_CONSOLE_LOGS:
+            scrape_logs.pop(0)
 
 def validate_horse_id(horse_id):
     """Validate that horse_id matches Netkeiba ID format (10 alphanumeric)."""
@@ -87,28 +125,19 @@ def load_cached_races():
         return pickle.load(f)
 
 def save_cached_races(races):
-    with open(CACHE_FILE, "wb") as f:
-        pickle.dump(races, f)
+    atomic_write_pickle(CACHE_FILE, races)
 
 def load_marks_data():
-    if not os.path.exists(MARKS_FILE):
-        return {}
-    with open(MARKS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return safe_read_json(MARKS_FILE, {})
 
 def save_marks_data(marks):
-    with open(MARKS_FILE, "w", encoding="utf-8") as f:
-        json.dump(marks, f, ensure_ascii=False, indent=4)
+    atomic_write_json(MARKS_FILE, marks)
 
 def load_horse_dict_data():
-    if not os.path.exists(HORSE_DICT_FILE):
-        return {}
-    with open(HORSE_DICT_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    return safe_read_json(HORSE_DICT_FILE, {})
 
 def save_horse_dict_data(horse_dict):
-    with open(HORSE_DICT_FILE, "w", encoding="utf-8") as f:
-        json.dump(horse_dict, f, ensure_ascii=False, indent=4)
+    atomic_write_json(HORSE_DICT_FILE, horse_dict)
 
 def parse_sort_time(sort_time_str):
     """Parse a race sort_time string (YYYY-MM-DD HH:MM) safely."""
@@ -197,20 +226,28 @@ def read_root():
 @app.post("/api/scrape")
 async def run_scrape(request: Request):
     global scrape_logs
-    scrape_logs = ["Initializing Netkeiba Scraper..."]
-    
+
+    if scrape_job_lock.locked():
+        return {"status": "busy", "message": "A scrape job is already running."}
+
+    with scrape_logs_lock:
+        scrape_logs = ["Initializing Netkeiba Scraper..."]
+
     data = await request.json()
     mode = data.get("mode", "new")
-    
-    # NEW: Run the scraper in a background thread so the server can still serve logs!
-    await asyncio.to_thread(data_manager.fetch_weekend_timeline, mode=mode, progress_callback=log_progress)
-    
-    scrape_logs.append("Done! Refreshing schedule...")
+
+    async with scrape_job_lock:
+        # Run scraper in a worker thread so the server can keep serving logs.
+        await asyncio.to_thread(data_manager.fetch_weekend_timeline, mode=mode, progress_callback=log_progress)
+
+    with scrape_logs_lock:
+        scrape_logs.append("Done! Refreshing schedule...")
     return {"status": "success"}
 
 @app.get("/api/scrape/log")
 def get_scrape_log():
-    return {"logs": scrape_logs}
+    with scrape_logs_lock:
+        return {"logs": list(scrape_logs)}
 
 @app.post("/api/cache/clear")
 def clear_cache():
@@ -334,18 +371,15 @@ CONFIG_FILE = "data/config.json"
 
 def load_config():
     """Load config from file, return defaults if missing."""
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {
+    defaults = {
         "sidebarTabs": {"favorites": True, "watchlist": True, "weekendWatchlist": True},
         "ui": {"riskSlider": 50}
     }
+    return safe_read_json(CONFIG_FILE, defaults)
 
 def save_config(config_data):
     """Save config to file."""
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config_data, f, ensure_ascii=False, indent=4)
+    atomic_write_json(CONFIG_FILE, config_data)
 
 @app.get("/api/config")
 def get_config():
@@ -360,14 +394,12 @@ async def update_config(request: Request):
 # --- MARKS & SCHEDULE ENDPOINTS ---
 @app.get("/api/marks")
 def get_marks():
-    if os.path.exists(MARKS_FILE):
-        with open(MARKS_FILE, "r", encoding="utf-8") as f: return json.load(f)
-    return {}
+    return safe_read_json(MARKS_FILE, {})
 
 @app.post("/api/marks")
 async def save_marks(request: Request):
     marks = await request.json()
-    with open(MARKS_FILE, "w", encoding="utf-8") as f: json.dump(marks, f, ensure_ascii=False, indent=4)
+    atomic_write_json(MARKS_FILE, marks)
     return {"status": "success"}
 
 @app.get("/api/races")

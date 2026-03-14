@@ -11,6 +11,7 @@ import pykakasi
 import json
 import time
 import logging
+import tempfile
 import config
 
 logger = logging.getLogger(__name__)
@@ -52,8 +53,12 @@ def safe_request(url, timeout=None, retries=None):
     return None
 
 def save_horse_dict():
-    with open(HORSE_DICT_FILE, "w", encoding="utf-8") as f:
-        json.dump(HORSE_CACHE, f, indent=4, ensure_ascii=False)
+    target = HORSE_DICT_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", dir=target.parent) as tmp:
+        json.dump(HORSE_CACHE, tmp, indent=4, ensure_ascii=False)
+        tmp_path = tmp.name
+    os.replace(tmp_path, target)
 
 def romanize(text):
     if not text or pd.isna(text): return ""
@@ -89,9 +94,11 @@ def fetch_official_name_by_id(horse_id, jp_fallback):
     
     try:
         response = safe_request(url)
-        if response:
-            response.encoding = 'euc-jp'
-            soup = BeautifulSoup(response.text, 'html.parser')
+        if not response:
+            raise RuntimeError("No response for pedigree profile request")
+
+        response.encoding = 'euc-jp'
+        soup = BeautifulSoup(response.text, 'html.parser')
         
         eng_link = soup.find('a', href=re.compile(r'en\.netkeiba\.com/db/horse/'))
         if eng_link and eng_link.text.strip(): official_name = eng_link.text.strip()
@@ -101,7 +108,8 @@ def fetch_official_name_by_id(horse_id, jp_fallback):
             else:
                 h1_tag = soup.find('div', class_='horse_title')
                 if h1_tag and h1_tag.find('h1'): official_name = romanize(h1_tag.find('h1').text.strip())
-    except Exception: pass
+    except Exception as e:
+        logger.debug(f"Failed to fetch official name for {str_id}: {e}")
         
     HORSE_CACHE[str_id] = {
         "name": official_name,
@@ -121,7 +129,8 @@ def get_horse_data(horse_id, jp_name):
                     res.encoding = 'euc-jp'
                     m = re.search(r'(\d+)戦(\d+)勝', res.text)
                     if m: cached["record"] = f"{m.group(2)}/{m.group(1)}"
-                except: pass
+                except Exception as e:
+                    logger.debug(f"Failed to refresh cached record for {str_id}: {e}")
                 if "record" not in cached: cached["record"] = "0/0"
                 HORSE_CACHE[str_id] = cached
             return cached

@@ -1,5 +1,6 @@
 let globalMarks = {};
 let listsData = { favorites: "", watchlist: "" };
+let raceLocks = {}; // Per-race lock state for mark interactions
 let upcomingRaces = []; // NEW: Stores our parsed race times
 let globalRaceEntries = {}; // NEW: Stores local row data for instant sorting
 let globalRaceInfo = {}; // NEW: Stores the Racetrack names and numbers
@@ -122,6 +123,7 @@ async function refreshDataAndUI() {
     const listRes = await fetch('/api/lists');
     listsData = await listRes.json();
     renderLists();
+    updateRaceHighlighting();
     
     // 4. Restore scroll position seamlessly
     window.scrollTo(0, scrollY);
@@ -774,21 +776,21 @@ function buildTableBody(r_id, entries) {
     entries.forEach(row => {
         const h_id = String(row.Horse_ID).split('.')[0];
         const key = `${r_id}_${h_id}`;
-        const rowStatus = row.Status || "";
         
         // Ensure tracking data exists; calculate if missing
         if (!row.familyTracking) {
             row.familyTracking = calculateFamilyTracking(row.Horse_ID, row.Sire_ID, row.Dam_ID, row.BMS_ID);
         }
         const tracking = row.familyTracking;
+        const weights = tracking?.weights || { fav_weight: 0, watch_weight: 0 };
         
         // Determine base status class: mixed takes priority, then FAV/WATCH
         let rowStatusClass = "";
         if (tracking.isMixed) {
             rowStatusClass = "row-mixed";
-        } else if (rowStatus === "FAV") {
+        } else if (weights.fav_weight > 0) {
             rowStatusClass = "row-fav";
-        } else if (rowStatus === "WATCH") {
+        } else if (weights.watch_weight > 0) {
             rowStatusClass = "row-watch";
         }
         
@@ -937,6 +939,7 @@ function calculatePowerScore(row, riskVal) {
 // --- AUTO-PICK ALGORITHM ---
 async function autoPick(event, r_id, riskOverride = null) {
     event.stopPropagation();
+    if (isRaceLocked(r_id)) return;
 
     const entries = globalRaceEntries[r_id];
     if (!entries || entries.length === 0) return;
@@ -954,7 +957,7 @@ async function autoPick(event, r_id, riskOverride = null) {
 
     const availableSymbols = allSymbols.filter(s => !usedSymbols.includes(s));
     if (availableSymbols.length === 0) {
-        document.getElementById(`btn-auto-${r_id}`).style.display = "none";
+        updateRaceActionButtons(r_id);
         return;
     }
 
@@ -989,16 +992,14 @@ async function autoPick(event, r_id, riskOverride = null) {
     document.getElementById(`tbody-${r_id}`).innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
     refreshRaceHeaderSortLabels(r_id);
 
-    // 5. Hide the Auto-Pick buttons and reveal the Smart Sort button!
-    document.querySelectorAll(`.auto-group-${r_id}`).forEach(btn => btn.style.display = "none");
-    const reorderBtn = document.getElementById(`btn-reorder-${r_id}`);
-    if (reorderBtn) reorderBtn.style.display = "inline-block";
+    updateRaceActionButtons(r_id);
     updateRiskBadge(r_id);
 }
 
 // --- REORDER EXISTING PICKS ---
 async function reorderPicks(event, r_id) {
     event.stopPropagation();
+    if (isRaceLocked(r_id)) return;
 
     const entries = globalRaceEntries[r_id];
     if (!entries || entries.length === 0) return;
@@ -1045,6 +1046,7 @@ async function reorderPicks(event, r_id) {
     applySortLogic(r_id, 'Default', true);
     document.getElementById(`tbody-${r_id}`).innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
     refreshRaceHeaderSortLabels(r_id);
+    updateRaceActionButtons(r_id);
     updateRiskBadge(r_id);
 }
 
@@ -1237,16 +1239,35 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 
             let hasFav = false;
             let hasWatch = false;
+            let hasMixed = false;
+            let maxIntensity = 0;
             globalRaceEntries[r_id].forEach(row => {
-                if (row.Status === "FAV") hasFav = true;
-                if (row.Status === "WATCH") hasWatch = true;
+                if (!row.familyTracking) {
+                    row.familyTracking = calculateFamilyTracking(row.Horse_ID, row.Sire_ID, row.Dam_ID, row.BMS_ID);
+                }
+
+                const tracking = row.familyTracking;
+                const weights = tracking?.weights || { fav_weight: 0, watch_weight: 0 };
+
+                if (tracking.isMixed) hasMixed = true;
+                if (weights.fav_weight > 0) hasFav = true;
+                if (weights.watch_weight > 0) hasWatch = true;
+                if (tracking.intensity > maxIntensity) maxIntensity = tracking.intensity;
             });
 
             const rowsHtml = buildTableBody(r_id, globalRaceEntries[r_id]);
 
             let headerClass = "race-header";
-            if (hasFav) headerClass += " has-fav";
-            else if (hasWatch) headerClass += " has-watch";
+            if (hasWatch) headerClass += " has-watch";
+            else if (hasMixed) headerClass += " row-mixed";
+            else if (hasFav) headerClass += " has-fav";
+
+            if (maxIntensity > 0) {
+                if (maxIntensity <= 0.33) headerClass += " intensity-light";
+                else if (maxIntensity <= 0.50) headerClass += " intensity-medium";
+                else if (maxIntensity <= 0.66) headerClass += " intensity-strong";
+                else headerClass += " intensity-very-strong";
+            }
 
             let usedCount = 0;
             const mainSymbols = ["◎", "〇", "▲", "△"];
@@ -1256,6 +1277,10 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 
             const autoStyle = (usedCount >= 4) ? "display: none;" : "display: inline-block;";
             const reorderStyle = (usedCount >= 4) ? "display: inline-block;" : "display: none;";
+            const isLocked = isRaceLocked(r_id);
+            const lockLabel = isLocked ? "🔓 Unlock Bets" : "🔒 Lock Bets";
+            const lockClass = isLocked ? " is-locked" : "";
+            const clearStyle = countRaceMarks(r_id) > 0 ? "display: inline-block;" : "display: none;";
 
             const localName = localizeRaceName(race.info.race_name);
             const historyBtnHtml = currentTimelineTab === 'past'
@@ -1268,11 +1293,13 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 
                     ${historyBtnHtml}
 
-                    <button class="btn-autopick-safe auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20">🛡️ Safe Bet</button>
-                    <button class="btn-autopick auto-group-${r_id}" style="${autoStyle}; margin-left: 8px;" onclick="autoPick(event, '${r_id}', null)" title="Use Sidebar Slider">🎲 Auto</button>
-                    <button class="btn-autopick-lucky auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 75)" title="Force Risk to 75">🍀 Lucky</button>
+                    <button class="btn-autopick-safe auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20" ${isLocked ? 'disabled' : ''}>🛡️ Safe Bet</button>
+                    <button class="btn-autopick auto-group-${r_id}" style="${autoStyle}; margin-left: 8px;" onclick="autoPick(event, '${r_id}', null)" title="Use Sidebar Slider" ${isLocked ? 'disabled' : ''}>🎲 Auto</button>
+                    <button class="btn-autopick-lucky auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 75)" title="Force Risk to 75" ${isLocked ? 'disabled' : ''}>🍀 Lucky</button>
+                    <button id="btn-clear-${r_id}" class="btn-clear-bets" style="${clearStyle}" onclick="clearRaceBets(event, '${r_id}')" title="Clear all marks in this race" ${isLocked ? 'disabled' : ''}>🧹 Clear Bets</button>
+                    <button id="btn-lock-${r_id}" class="btn-lock-bets${lockClass}" onclick="toggleRaceLock(event, '${r_id}')" title="${isLocked ? 'Unlock to allow mark changes' : 'Lock to prevent any mark changes in this race'}">${lockLabel}</button>
 
-                    <button id="btn-reorder-${r_id}" class="btn-reorder" style="${reorderStyle}" onclick="reorderPicks(event, '${r_id}')" title="Reorder Chosen Picks">✨ Smart Sort</button>
+                    <button id="btn-reorder-${r_id}" class="btn-reorder" style="${reorderStyle}" onclick="reorderPicks(event, '${r_id}')" title="Reorder Chosen Picks" ${isLocked ? 'disabled' : ''}>✨ Smart Sort</button>
                     <span id="risk-badge-${r_id}" class="risk-badge" style="display:none;" onclick="event.stopPropagation()"></span>
                 </h3>
                 <div id="content-${r_id}" class="race-content ${collapsedClass}">
@@ -1440,6 +1467,7 @@ function switchMainTab(date) {
 // Creates the individual prediction buttons (◎, 〇, ▲, △)
 function createMarkBtn(r_id, h_id, symbol, key) {
     const isActive = globalMarks[key] === symbol;
+    const isLocked = !!raceLocks[r_id];
     let activeClass = isActive ? `active-${symbol}` : '';
 
     // If it's not active, AND it's not the X button, check if it's stolen!
@@ -1452,10 +1480,107 @@ function createMarkBtn(r_id, h_id, symbol, key) {
         }
     }
 
-    return `<button id="btn_${key}_${symbol}" class="mark-btn ${activeClass}" onclick="toggleMark('${r_id}', '${h_id}', '${symbol}')">${symbol}</button>`;
+    const lockClass = isLocked ? "locked" : "";
+    const disabledAttr = isLocked ? "disabled" : "";
+    return `<button id="btn_${key}_${symbol}" class="mark-btn ${activeClass} ${lockClass}" ${disabledAttr} onclick="toggleMark('${r_id}', '${h_id}', '${symbol}')">${symbol}</button>`;
+}
+
+function countRaceMarks(r_id) {
+    let markCount = 0;
+    for (const [k, v] of Object.entries(globalMarks)) {
+        if (k.startsWith(`${r_id}_`) && v) markCount++;
+    }
+    return markCount;
+}
+
+function countRaceMainBets(r_id) {
+    let usedCount = 0;
+    const mainSymbols = ["◎", "〇", "▲", "△"];
+    for (const [k, v] of Object.entries(globalMarks)) {
+        if (k.startsWith(`${r_id}_`) && mainSymbols.includes(v)) usedCount++;
+    }
+    return usedCount;
+}
+
+function isRaceLocked(r_id) {
+    return !!raceLocks[r_id];
+}
+
+function updateRaceActionButtons(r_id) {
+    const isLocked = isRaceLocked(r_id);
+    const markCount = countRaceMarks(r_id);
+    const usedCount = countRaceMainBets(r_id);
+
+    const clearBtn = document.getElementById(`btn-clear-${r_id}`);
+    if (clearBtn) {
+        clearBtn.style.display = markCount > 0 ? "inline-block" : "none";
+        clearBtn.disabled = isLocked;
+        clearBtn.title = isLocked ? "Unlock this race to clear marks" : "Clear all marks in this race";
+    }
+
+    const lockBtn = document.getElementById(`btn-lock-${r_id}`);
+    if (lockBtn) {
+        lockBtn.innerText = isLocked ? "🔓 Unlock Bets" : "🔒 Lock Bets";
+        lockBtn.classList.toggle('is-locked', isLocked);
+        lockBtn.title = isLocked
+            ? "Unlock to allow mark changes"
+            : "Lock to prevent any mark changes in this race";
+    }
+
+    const autoBtns = document.querySelectorAll(`.auto-group-${r_id}`);
+    const reorderBtn = document.getElementById(`btn-reorder-${r_id}`);
+
+    autoBtns.forEach(btn => {
+        btn.style.display = (usedCount >= 4) ? "none" : "inline-block";
+        btn.disabled = isLocked;
+    });
+
+    if (reorderBtn) {
+        reorderBtn.style.display = (usedCount >= 4) ? "inline-block" : "none";
+        reorderBtn.disabled = isLocked;
+    }
+}
+
+async function clearRaceBets(event, r_id) {
+    event.stopPropagation();
+    if (isRaceLocked(r_id)) {
+        alert('This race is locked. Unlock bets first.');
+        return;
+    }
+
+    let changed = false;
+    for (const [k, v] of Object.entries(globalMarks)) {
+        if (k.startsWith(`${r_id}_`) && v) {
+            globalMarks[k] = null;
+            changed = true;
+        }
+    }
+
+    if (!changed) return;
+
+    fetch('/api/marks', { method: 'POST', body: JSON.stringify(globalMarks) });
+
+    applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
+    const tbody = document.getElementById(`tbody-${r_id}`);
+    if (tbody) tbody.innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
+    refreshRaceHeaderSortLabels(r_id);
+    updateRaceActionButtons(r_id);
+    updateRiskBadge(r_id);
+}
+
+function toggleRaceLock(event, r_id) {
+    event.stopPropagation();
+    raceLocks[r_id] = !raceLocks[r_id];
+
+    const tbody = document.getElementById(`tbody-${r_id}`);
+    if (tbody) tbody.innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
+
+    updateRaceActionButtons(r_id);
 }
 
 async function toggleMark(r_id, h_id, symbol) {
+    if (isRaceLocked(r_id)) return;
+
     const keyA = `${r_id}_${h_id}`;
     const oldSymA = globalMarks[keyA]; 
     const newSymA = symbol;            
@@ -1499,29 +1624,13 @@ async function toggleMark(r_id, h_id, symbol) {
         if (btnA) btnA.className = `mark-btn active-${newSymA}`;
     }
 
-
-    // --- Show/Hide the Auto-Pick & Reorder buttons live ---
-    let usedCount = 0;
-    const mainSymbols = ["◎", "〇", "▲", "△"];
-    for (const [k, v] of Object.entries(globalMarks)) {
-        if (k.startsWith(`${r_id}_`) && mainSymbols.includes(v)) usedCount++;
-    }
-    
-    // NEW: Grab all three Auto buttons at once using the group class!
-    const autoBtns = document.querySelectorAll(`.auto-group-${r_id}`);
-    const reorderBtn = document.getElementById(`btn-reorder-${r_id}`);
-    
-    if (reorderBtn) {
-        autoBtns.forEach(btn => btn.style.display = (usedCount >= 4) ? "none" : "inline-block");
-        reorderBtn.style.display = (usedCount >= 4) ? "inline-block" : "none";
-    }
-
     // Silently sync the new state to the Python backend
     fetch('/api/marks', { method: 'POST', body: JSON.stringify(globalMarks) });
 
     // NEW: Instantly re-sort and re-render the table so voted horses snap to the top!
     applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
     document.getElementById(`tbody-${r_id}`).innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
+    updateRaceActionButtons(r_id);
     updateRiskBadge(r_id);
 }
 
