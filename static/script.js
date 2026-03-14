@@ -16,16 +16,16 @@ let isFirstLoad = true; // NEW: Track if this is the first page load to auto-col
 
 const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Sire", "Dam", "BMS", "Odds", "Fav"];
 const RACE_COLUMN_META = {
-    Shirushi: { label: "Prediction", sortable: true, sortKey: "Shirushi" },
-    BK: { label: "BK", sortable: false },
-    PP: { label: "PP", sortable: false },
-    Horse: { label: "Horse", sortable: false },
-    Record: { label: "W/S", sortable: true, sortKey: "Record" },
-    Sire: { label: "Sire", sortable: false },
-    Dam: { label: "Dam", sortable: false },
-    BMS: { label: "BMS", sortable: false },
-    Odds: { label: "Odds", sortable: true, sortKey: "Odds" },
-    Fav: { label: "Fav", sortable: true, sortKey: "Fav" }
+    Shirushi: { label: "Prediction", sortable: true, sortKey: "Shirushi", initialAsc: true },
+    BK: { label: "BK", sortable: true, sortKey: "BK", initialAsc: true },
+    PP: { label: "PP", sortable: true, sortKey: "PP", initialAsc: true },
+    Horse: { label: "Horse", sortable: true, sortKey: "Horse", initialAsc: true },
+    Record: { label: "W/S", sortable: true, sortKey: "Record", initialAsc: true },
+    Sire: { label: "Sire", sortable: true, sortKey: "Sire", initialAsc: true },
+    Dam: { label: "Dam", sortable: true, sortKey: "Dam", initialAsc: true },
+    BMS: { label: "BMS", sortable: true, sortKey: "BMS", initialAsc: true },
+    Odds: { label: "Odds", sortable: true, sortKey: "Odds", initialAsc: true },
+    Fav: { label: "Fav", sortable: true, sortKey: "Fav", initialAsc: true }
 };
 
 function normalizeRaceColumnsLayout(layout) {
@@ -56,6 +56,10 @@ function getRaceColumnsLayout() {
 
 function getVisibleRaceColumns() {
     return getRaceColumnsLayout().filter(c => c.visible).map(c => c.key);
+}
+
+function isVoteSortingEnabled() {
+    return appConfig.ui?.voteSortingTop ?? true;
 }
 
 // --- SECURITY: HTML Escaping ---
@@ -674,47 +678,128 @@ function collapseVotedRaces() {
 }
 
 // --- SORTING LOGIC ---
+function comparePrimitiveValues(a, b, asc = true) {
+    if (a === b) return 0;
+    if (a === null || a === undefined) return 1;
+    if (b === null || b === undefined) return -1;
+    if (a < b) return asc ? -1 : 1;
+    return asc ? 1 : -1;
+}
+
+function parseRaceNumber(value) {
+    const parsed = parseFloat(String(value ?? "").trim());
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeRaceText(value) {
+    const text = String(value ?? "").trim().toLowerCase();
+    return text || null;
+}
+
+function parseRecordSortValue(record) {
+    const text = String(record ?? "").trim();
+    const parts = text.match(/(\d+)\s*[\/\\-]\s*(\d+)/);
+    if (!parts) {
+        const nums = text.match(/\d+/g) || [];
+        if (nums.length >= 2) {
+            const wins = parseInt(nums[0], 10) || 0;
+            const starts = parseInt(nums[1], 10) || 0;
+            return { wins, starts, rate: starts > 0 ? wins / starts : -1 };
+        }
+        return { wins: -1, starts: -1, rate: -1 };
+    }
+
+    const wins = parseInt(parts[1], 10) || 0;
+    const starts = parseInt(parts[2], 10) || 0;
+    return { wins, starts, rate: starts > 0 ? wins / starts : -1 };
+}
+
+function compareRecordValues(a, b, asc = true) {
+    const recordA = parseRecordSortValue(a.Record);
+    const recordB = parseRecordSortValue(b.Record);
+
+    if (recordA.rate !== recordB.rate) {
+        return asc
+            ? comparePrimitiveValues(recordB.rate, recordA.rate, true)
+            : comparePrimitiveValues(recordA.rate, recordB.rate, true);
+    }
+
+    if (recordA.wins === 0 && recordB.wins === 0 && recordA.starts !== recordB.starts) {
+        return asc
+            ? comparePrimitiveValues(recordA.starts, recordB.starts, true)
+            : comparePrimitiveValues(recordB.starts, recordA.starts, true);
+    }
+
+    if (recordA.wins !== recordB.wins) {
+        return asc
+            ? comparePrimitiveValues(recordB.wins, recordA.wins, true)
+            : comparePrimitiveValues(recordA.wins, recordB.wins, true);
+    }
+
+    if (recordA.starts !== recordB.starts) {
+        return asc
+            ? comparePrimitiveValues(recordA.starts, recordB.starts, true)
+            : comparePrimitiveValues(recordB.starts, recordA.starts, true);
+    }
+
+    return 0;
+}
+
 function applySortLogic(r_id, col, asc) {
     const entries = globalRaceEntries[r_id];
     const sMap = {"◎": 1, "〇": 2, "▲": 3, "△": 4, "☆": 5, "消": 6, "X": 99};
 
     entries.sort((a, b) => {
-        let valA, valB;
-
         // Our Custom Default (Votes at top, unmarked middle, X at bottom)
         if (col === 'Default') {
             const keyA = `${r_id}_${String(a.Horse_ID).split('.')[0]}`;
             const keyB = `${r_id}_${String(b.Horse_ID).split('.')[0]}`;
-            valA = sMap[globalMarks[keyA]] || 50; 
-            valB = sMap[globalMarks[keyB]] || 50;
-            
-            if (valA === valB) return a.original_index - b.original_index;
-            return valA < valB ? -1 : 1;
-        } 
-        
-        // Explicit Column Sorts
-        else if (col === 'Shirushi') {
-            const keyA = `${r_id}_${String(a.Horse_ID).split('.')[0]}`;
-            const keyB = `${r_id}_${String(b.Horse_ID).split('.')[0]}`;
-            valA = sMap[globalMarks[keyA]] || 50; 
-            valB = sMap[globalMarks[keyB]] || 50;
-            if (valA === valB) return (parseFloat(a.Fav) || 999) - (parseFloat(b.Fav) || 999);
-        }
-        // ... (Keep the rest of your odds/fav/record sorting exactly the same)
-        else if (col === 'Fav') {
-            valA = parseFloat(a.Fav) || 999;
-            valB = parseFloat(b.Fav) || 999;
-        } else if (col === 'Odds') {
-            valA = parseFloat(a.Odds) || 9999.9;
-            valB = parseFloat(b.Odds) || 9999.9;
-        } else if (col === 'Record') {
-            valA = parseFloat(String(a.Record).replace(/[^\d.-]/g, '')) || -1;
-            valB = parseFloat(String(b.Record).replace(/[^\d.-]/g, '')) || -1;
+            const ppA = parseRaceNumber(a.PP);
+            const ppB = parseRaceNumber(b.PP);
+            const voteSortingEnabled = isVoteSortingEnabled();
+
+            if (voteSortingEnabled) {
+                const valA = sMap[globalMarks[keyA]] || 50;
+                const valB = sMap[globalMarks[keyB]] || 50;
+
+                if (valA !== valB) return valA < valB ? -1 : 1;
+            }
+
+            const ppComparison = comparePrimitiveValues(ppA, ppB, true);
+            if (ppComparison !== 0) return ppComparison;
+            return a.original_index - b.original_index;
         }
 
-        if (valA < valB) return asc ? -1 : 1;
-        if (valA > valB) return asc ? 1 : -1;
-        return 0;
+        let comparison = 0;
+        if (col === 'Shirushi') {
+            const keyA = `${r_id}_${String(a.Horse_ID).split('.')[0]}`;
+            const keyB = `${r_id}_${String(b.Horse_ID).split('.')[0]}`;
+            const valA = sMap[globalMarks[keyA]] || 50;
+            const valB = sMap[globalMarks[keyB]] || 50;
+            comparison = comparePrimitiveValues(valA, valB, asc);
+            if (comparison === 0) comparison = comparePrimitiveValues(parseRaceNumber(a.Fav), parseRaceNumber(b.Fav), true);
+        } else if (col === 'BK') {
+            comparison = comparePrimitiveValues(parseRaceNumber(a.BK), parseRaceNumber(b.BK), asc);
+        } else if (col === 'PP') {
+            comparison = comparePrimitiveValues(parseRaceNumber(a.PP), parseRaceNumber(b.PP), asc);
+        } else if (col === 'Horse') {
+            comparison = comparePrimitiveValues(normalizeRaceText(a.Horse), normalizeRaceText(b.Horse), asc);
+        } else if (col === 'Record') {
+            comparison = compareRecordValues(a, b, asc);
+        } else if (col === 'Sire') {
+            comparison = comparePrimitiveValues(normalizeRaceText(a.Sire), normalizeRaceText(b.Sire), asc);
+        } else if (col === 'Dam') {
+            comparison = comparePrimitiveValues(normalizeRaceText(a.Dam), normalizeRaceText(b.Dam), asc);
+        } else if (col === 'BMS') {
+            comparison = comparePrimitiveValues(normalizeRaceText(a.BMS), normalizeRaceText(b.BMS), asc);
+        } else if (col === 'Odds') {
+            comparison = comparePrimitiveValues(parseRaceNumber(a.Odds), parseRaceNumber(b.Odds), asc);
+        } else if (col === 'Fav') {
+            comparison = comparePrimitiveValues(parseRaceNumber(a.Fav), parseRaceNumber(b.Fav), asc);
+        }
+
+        if (comparison !== 0) return comparison;
+        return a.original_index - b.original_index;
     });
 }
 
@@ -744,24 +829,22 @@ function buildTableHeaderRow(r_id) {
 }
 
 function refreshRaceHeaderSortLabels(r_id) {
-    const sortableCols = [
-        { key: 'Shirushi', label: 'Prediction' },
-        { key: 'Record', label: 'W/S' },
-        { key: 'Odds', label: 'Odds' },
-        { key: 'Fav', label: 'Fav' }
-    ];
+    const sortableCols = Object.entries(RACE_COLUMN_META).filter(([, col]) => col.sortable);
 
-    sortableCols.forEach(col => {
-        const el = document.getElementById(`th-${r_id}-${col.key}`);
-        if (el) el.innerHTML = `${col.label} ${getSortIcon(r_id, col.key)}`;
+    sortableCols.forEach(([key, col]) => {
+        const el = document.getElementById(`th-${r_id}-${key}`);
+        if (el) el.innerHTML = `${col.label} ${getSortIcon(r_id, key)}`;
     });
 }
 
 function setSort(r_id, col) {
+    const meta = RACE_COLUMN_META[col];
+    const initialAsc = meta?.initialAsc ?? true;
+
     // Toggle direction or set new column
-    if (!raceSorts[r_id]) raceSorts[r_id] = { col: col, asc: true };
+    if (!raceSorts[r_id]) raceSorts[r_id] = { col: col, asc: initialAsc };
     else if (raceSorts[r_id].col === col) raceSorts[r_id].asc = !raceSorts[r_id].asc;
-    else { raceSorts[r_id].col = col; raceSorts[r_id].asc = true; }
+    else { raceSorts[r_id].col = col; raceSorts[r_id].asc = initialAsc; }
 
     applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
 
@@ -2244,6 +2327,7 @@ function showSettingsModal() {
     document.getElementById('setting-autoPickStrategy').checked = appConfig.sidebarTabs?.autoPickStrategy ?? true;
     document.getElementById('setting-weekendWatchlist').checked = appConfig.sidebarTabs?.weekendWatchlist ?? true;
     document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
+    document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
     renderRaceColumnSettings();
     
     document.getElementById('settings-modal').style.display = 'flex';
@@ -2261,7 +2345,11 @@ async function updateSidebarSettings() {
         autoPickStrategy: document.getElementById('setting-autoPickStrategy').checked,
         weekendWatchlist: document.getElementById('setting-weekendWatchlist').checked
     };
-    appConfig.ui = { ...appConfig.ui, betSafetyIndicator: document.getElementById('setting-betSafetyIndicator').checked };
+    appConfig.ui = {
+        ...appConfig.ui,
+        betSafetyIndicator: document.getElementById('setting-betSafetyIndicator').checked,
+        voteSortingTop: document.getElementById('setting-voteSortingTop').checked
+    };
     
     // Save to server
     await fetch('/api/config', {
@@ -2278,6 +2366,12 @@ async function updateSidebarSettings() {
 
 function applyRaceTableLayoutSettings() {
     Object.keys(globalRaceEntries).forEach(r_id => {
+        if (!raceSorts[r_id]) {
+            raceSorts[r_id] = { col: 'Default', asc: true };
+        }
+
+        applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
+
         const thead = document.getElementById(`thead-${r_id}`);
         if (thead) thead.innerHTML = buildTableHeaderRow(r_id);
 
