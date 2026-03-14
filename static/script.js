@@ -1690,7 +1690,7 @@ async function showExportModal() {
     <!DOCTYPE html>
     <html>
     <head>
-        <title>📋 OrePro Cheat Sheet</title>
+        <title>📋 Voting Cheat Sheet</title>
         <style>
             body { font-family: sans-serif; background-color: #0c0c0c; color: #fafafa; margin: 0; padding: 20px; }
             h2 { color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px; }
@@ -1727,7 +1727,7 @@ async function showExportModal() {
     </head>
     <body>
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px;">
-            <h3 style="margin: 0; font-size: 20px;">📋 OrePro Cheat Sheet</h3>
+            <h3 style="margin: 0; font-size: 20px;">📋 Voting Cheat Sheet</h3>
             <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" style="background: #1dd1a1; color: black; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">🔗 Open OrePro</a>
         </div>
         
