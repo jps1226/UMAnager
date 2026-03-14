@@ -1149,6 +1149,7 @@ function getEffectiveRiskForRace(r_id) {
 
     const currentRisk = parseInt(document.getElementById('risk-slider').value);
     if (isNaN(currentRisk)) return null;
+    const EPSILON = 1e-9;
 
 
     // For each risk level, compute "regret": how much score the user left on the
@@ -1168,18 +1169,23 @@ function getEffectiveRiskForRace(r_id) {
         return (topNSum - userSum) / topNSum;
     };
 
+    const currentRegret = getRegret(currentRisk);
+
     let bestRisk = currentRisk;
     let bestRegret = Infinity;
-    for (let risk = 0; risk <= 100; risk += 5) {
+    for (let risk = 0; risk <= 100; risk += 1) {
         const regret = getRegret(risk);
-        if (regret < bestRegret) {
+        if (
+            regret < bestRegret - EPSILON ||
+            (Math.abs(regret - bestRegret) <= EPSILON && Math.abs(risk - currentRisk) < Math.abs(bestRisk - currentRisk))
+        ) {
             bestRegret = regret;
             bestRisk = risk;
         }
     }
 
-    // Positive delta means slider is riskier than the user's picks.
-    return { bestRisk, currentRisk, delta: currentRisk - bestRisk };
+    // Positive picksDelta means the picks are riskier than the slider target.
+    return { bestRisk, currentRisk, currentRegret, picksDelta: bestRisk - currentRisk };
 }
 
 // Interpolates color from yellow (on target) toward red (riskier) or cyan (safer)
@@ -1216,20 +1222,21 @@ function updateRiskBadge(r_id) {
         return;
     }
 
-    const { bestRisk, currentRisk, delta } = result;
-    const absDelta = Math.abs(delta);
-    const color = getDeviationColor(delta);
+    const { bestRisk, currentRisk, currentRegret, picksDelta } = result;
+    const absDelta = Math.abs(picksDelta);
+    const color = getDeviationColor(picksDelta);
+    const impliedRiskText = `Implied auto-risk: ${bestRisk}`;
 
     let text, title;
-    if (absDelta <= 10) {
+    if (currentRegret <= 1e-9 || absDelta <= 10) {
         text  = "✓ On Target";
-        title = `Your picks align well with the slider (Risk ${currentRisk}).`;
-    } else if (delta > 0) {
+        title = `Your picks align well with the slider (Risk ${currentRisk}). ${impliedRiskText}.`;
+    } else if (picksDelta > 0) {
         text  = `▲ Riskier`;
-        title = `Your slider is riskier than your current picks (slider: ${currentRisk}, picks ~${bestRisk}).`;
+        title = `Your picks are riskier than your slider target (slider: ${currentRisk}, picks ~${bestRisk}). ${impliedRiskText}.`;
     } else {
         text  = `▼ Safer`;
-        title = `Your slider is safer than your current picks (slider: ${currentRisk}, picks ~${bestRisk}).`;
+        title = `Your picks are safer than your slider target (slider: ${currentRisk}, picks ~${bestRisk}). ${impliedRiskText}.`;
     }
 
     badge.style.display = 'inline-block';
