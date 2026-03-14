@@ -6,6 +6,6 @@
         "weekendWatchlist": true
     },
     "ui": {
-        "riskSlider": 50
+        "riskSlider": 60
     }
 }

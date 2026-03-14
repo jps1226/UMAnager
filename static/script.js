@@ -8,6 +8,7 @@ let raceSorts = {}; // NEW: Remembers which column is sorted for each race
 let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 let appConfig = {}; // NEW: Stores app configuration
+let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
 
 // --- SECURITY: HTML Escaping ---
 function escapeHtml(text) {
@@ -987,6 +988,13 @@ async function loadRaces() {
     });
     upcomingRaces.sort((a, b) => a.time - b.time);
     
+    // NEW: Find the next upcoming race on first load for smart collapsing
+    let nextUpcomingRace = null;
+    if (isFirstLoad) {
+        const now = new Date();
+        nextUpcomingRace = upcomingRaces.find(r => r.time > now);
+    }
+    
     // Update jump to race dropdowns
     updateJumpDay();
 
@@ -1042,14 +1050,19 @@ async function loadRaces() {
         data.races_by_date[date].forEach(race => {
             const r_id = race.info.race_id;
             
-            let isPast = false;
-            if (race.info.time !== "TBA" && race.info.sort_time) {
+            // NEW: Determine if this race should be collapsed on first load
+            // Only on first load: collapse races that are completely before the next upcoming race
+            let shouldCollapse = false;
+            if (isFirstLoad && nextUpcomingRace && race.info.time !== "TBA" && race.info.sort_time) {
                 const raceTime = new Date(race.info.sort_time.replace(' ', 'T'));
-                if (raceTime < new Date()) isPast = true;
+                // Collapse only if this race is completely done (before the next upcoming race starts)
+                if (raceTime < nextUpcomingRace.time) {
+                    shouldCollapse = true;
+                }
             }
             
-            const arrow = isPast ? "▶" : "▼";
-            const collapsedClass = isPast ? "collapsed" : "";
+            const arrow = shouldCollapse ? "▶" : "▼";
+            const collapsedClass = shouldCollapse ? "collapsed" : "";
             
             // --- NEW: Apply original index and Default Sort ---
             // Tag every horse with its original race-card index so we can fall back to it
@@ -1121,6 +1134,9 @@ async function loadRaces() {
         html += `</div>`;
         scheds.innerHTML += html;
     });
+    
+    // NEW: Mark first load as complete so subsequent refreshes don't auto-collapse races
+    isFirstLoad = false;
 }
 
 // --- TAB SWITCHING ---
@@ -1268,7 +1284,7 @@ async function fetchLogs() {
         // Auto-scroll to the absolute bottom so you always see the latest action
         consoleBox.scrollTop = consoleBox.scrollHeight;
     } catch (e) {
-        console.error("Waiting for log stream...");
+        
     }
 }
 
@@ -1276,6 +1292,9 @@ async function fetchLogs() {
 async function showExportModal() {
     const summaryByDate = {}; 
     const sMap = {"◎": 1, "〇": 2, "▲": 3, "△": 4, "☆": 5, "消": 6};
+    
+    // NEW: Also track chronological order
+    const summaryChronological = [];
 
     // 1. Group all marks by Date, then Track, then Race Number
     for (const [key, symbol] of Object.entries(globalMarks)) {
@@ -1288,6 +1307,7 @@ async function showExportModal() {
         const dateStr = info.clean_date || "Unknown Date";
         const track = info.place.toUpperCase();
         const raceNum = parseInt(info.race_number);
+        const sortTime = info.sort_time ? new Date(info.sort_time.replace(' ', 'T')) : new Date(0);
 
         if (!summaryByDate[dateStr]) summaryByDate[dateStr] = {};
         if (!summaryByDate[dateStr][track]) summaryByDate[dateStr][track] = {};
@@ -1299,12 +1319,21 @@ async function showExportModal() {
         const pp = horseRow ? parseInt(horseRow.PP) || 99 : 99;
         const bk = horseRow ? parseInt(horseRow.BK) || 0 : 0;
 
-        summaryByDate[dateStr][track][raceNum].push({
-            symbol: symbol, rank: sMap[symbol] || 99, horse: horseName, pp: pp, bk: bk
-        });
+        const raceData = {
+            symbol: symbol, rank: sMap[symbol] || 99, horse: horseName, pp: pp, bk: bk,
+            date: dateStr, track: track, raceNum: raceNum, sortTime: sortTime, time: info.time, r_id: r_id
+        };
+        
+        summaryByDate[dateStr][track][raceNum].push(raceData);
+        
+        // NEW: Add to chronological list
+        summaryChronological.push(raceData);
     }
+    
+    // NEW: Sort chronological list by race time
+    summaryChronological.sort((a, b) => a.sortTime - b.sortTime);
 
-    // 2. Generate the Visual HTML Grid
+    // 2. Generate the Visual HTML Grid (Racecourse View)
     let html = "";
     const dates = Object.keys(summaryByDate).sort();
     
@@ -1379,6 +1408,73 @@ async function showExportModal() {
             });
         });
     }
+    
+    // NEW: Generate Chronological View HTML
+    let chrono_html = "";
+    if (summaryChronological.length === 0) {
+        chrono_html = "<p style='text-align:center; color:#888; margin-top:50px;'>No votes cast yet! Make your selections in the grid first.</p>";
+    } else {
+        // Group by race
+        const racesByRaceId = summaryChronological.reduce((acc, m) => {
+            if (!acc[m.r_id]) {
+                acc[m.r_id] = {
+                    info: m,
+                    marks: []
+                };
+            }
+            acc[m.r_id].marks.push(m);
+            return acc;
+        }, {});
+
+        const sortedRaces = Object.values(racesByRaceId).sort((a,b) => a.info.sortTime - b.info.sortTime);
+
+        let currentDate = null;
+        sortedRaces.forEach(raceGroup => {
+            const m = raceGroup.info; // Use the first mark for race info
+            if (m.date !== currentDate) {
+                if (currentDate !== null) {
+                    chrono_html += `</div>`; // Close previous date group
+                }
+                currentDate = m.date;
+                chrono_html += `<h2 style="color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px;">📅 ${m.date}</h2>`;
+                chrono_html += `<div style="display: flex; flex-direction: column; gap: 12px;">`;
+            }
+
+            const safeId = `chrono-${m.r_id}`;
+            chrono_html += `<div class="export-race-card">
+                <div class="export-race-title" onclick="toggleExportRace('${safeId}')" title="Click to collapse/expand">
+                    <span id="arrow-${safeId}" style="display:inline-block; width:15px; font-size: 10px; vertical-align: middle;">▼</span>
+                    ${m.track} R${m.raceNum} - ${m.time}
+                </div>
+                <div id="content-${safeId}">`;
+
+            raceGroup.marks.sort((a, b) => a.rank - b.rank).forEach(mark => {
+                let symSize = "16px";
+                if(mark.symbol === "◎") { symSize = "19px"; }
+                
+                const bColors = {
+                    1: { bg: '#f8f9fa', color: '#000', border: '#ccc' }, 2: { bg: '#212529', color: '#fff', border: '#444' }, 3: { bg: '#d26363', color: '#fff', border: '#d26363' },
+                    4: { bg: '#5970b0', color: '#fff', border: '#5970b0' }, 5: { bg: '#b8b053', color: '#000', border: '#b8b053' }, 6: { bg: '#72af68', color: '#fff', border: '#72af68' },
+                    7: { bg: '#efa65e', color: '#000', border: '#efa65e' }, 8: { bg: '#dc809a', color: '#000', border: '#dc809a' }
+                };
+                const c = bColors[mark.bk] || { bg: '#444', color: '#fff', border: '#444' };
+                
+                const ppBadge = mark.pp !== 99 ? `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:12px; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:6px;">${mark.pp}</span>` : `<span style="display:inline-block; width:22px; height:22px; margin-right:6px;"></span>`;
+                const markBadge = `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:${symSize}; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:8px;">${mark.symbol}</span>`;
+
+                chrono_html += `<div class="export-horse-line" style="margin-left: 15px;">
+                    ${ppBadge}
+                    ${markBadge}
+                    <span style="font-weight: 500;">${mark.horse}</span>
+                </div>`;
+            });
+            chrono_html += `</div></div>`;
+        });
+
+        if (currentDate !== null) {
+            chrono_html += `</div>`; // Close last date group
+        }
+    }
 
     const fullHtml = `
     <!DOCTYPE html>
@@ -1402,6 +1498,15 @@ async function showExportModal() {
             .export-race-title.collapsed { color: #444; border-bottom-style: solid; border-color: #222; margin-bottom: 0; }
             
             .export-horse-line { display: flex; align-items: center; margin-bottom: 8px; font-size: 14px; }
+            
+            /* NEW: Toggle button styling */
+            .view-toggle-container { display: flex; gap: 8px; justify-content: center; margin: 15px 0; }
+            .view-toggle-btn { padding: 8px 16px; border: 1px solid #555; background: #1a1c23; color: #888; cursor: pointer; border-radius: 4px; font-size: 14px; font-weight: bold; transition: 0.2s; }
+            .view-toggle-btn.active { background: #ff4b4b; color: #fff; border-color: #ff4b4b; }
+            .view-toggle-btn:hover { border-color: #ff4b4b; }
+            
+            .view-content { display: none; }
+            .view-content.active { display: block; }
         </style>
     </head>
     <body>
@@ -1409,9 +1514,44 @@ async function showExportModal() {
             <h3 style="margin: 0; font-size: 20px;">📋 OrePro Cheat Sheet</h3>
             <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" style="background: #1dd1a1; color: black; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">🔗 Open OrePro</a>
         </div>
-        ${html}
+        
+        <!-- NEW: View Toggle Buttons -->
+        <div class="view-toggle-container">
+            <button class="view-toggle-btn active" onclick="switchView('racecourse')">🏇 By Racecourse</button>
+            <button class="view-toggle-btn" onclick="switchView('chronological')">⏱️ Chronological</button>
+        </div>
+        
+        <!-- Racecourse View -->
+        <div id="racecourse-view" class="view-content active">
+            ${html}
+        </div>
+        
+        <!-- Chronological View -->
+        <div id="chronological-view" class="view-content">
+            ${chrono_html}
+        </div>
         
         <script>
+            function switchView(viewName) {
+                // Hide both views
+                document.getElementById('racecourse-view').classList.remove('active');
+                document.getElementById('chronological-view').classList.remove('active');
+                
+                // Remove active class from all buttons
+                document.querySelectorAll('.view-toggle-btn').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+                
+                // Show selected view and highlight button
+                if (viewName === 'racecourse') {
+                    document.getElementById('racecourse-view').classList.add('active');
+                    document.querySelectorAll('.view-toggle-btn')[0].classList.add('active');
+                } else if (viewName === 'chronological') {
+                    document.getElementById('chronological-view').classList.add('active');
+                    document.querySelectorAll('.view-toggle-btn')[1].classList.add('active');
+                }
+            }
+            
             // Toggles individual races
             function toggleExportRace(safeId) {
                 const content = document.getElementById('content-' + safeId);
@@ -1459,7 +1599,7 @@ async function showExportModal() {
             pipWindow.document.write(fullHtml);
             return;
         } catch (err) {
-            console.log("PiP failed, falling back to standard popup.", err);
+            
         }
     }
 
