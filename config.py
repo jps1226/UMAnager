@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 # File paths
-DATA_DIR = Path(__file__).parent
+DATA_DIR = Path(__file__).parent / "data"
 CACHE_FILE = DATA_DIR / "race_cache.pkl"
 MARKS_FILE = DATA_DIR / "saved_marks.json"
 TRACKING_FILE = DATA_DIR / "tracked_horses.txt"

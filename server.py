@@ -24,6 +24,7 @@ CACHE_FILE = config.CACHE_FILE
 MARKS_FILE = config.MARKS_FILE
 TRACKING_FILE = config.TRACKING_FILE
 WATCHLIST_FILE = config.WATCHLIST_FILE
+HORSE_DICT_FILE = config.HORSE_DICT_FILE
 
 # --- NEW: CONSOLE LOGGING MEMORY ---
 scrape_logs = []
@@ -102,7 +103,7 @@ def clear_cache():
 
 @app.post("/api/dict/wipe")
 def wipe_dict():
-    if os.path.exists("horse_names.json"): os.remove("horse_names.json")
+    if os.path.exists(HORSE_DICT_FILE): os.remove(HORSE_DICT_FILE)
     return {"status": "success"}
 
 # --- PEDIGREE LISTS & SNIPER ENDPOINTS ---
@@ -180,7 +181,7 @@ async def snipe_horse(request: Request):
         return {"status": "error", "message": "Failed to add horse"}
 
 # --- CONFIG ENDPOINTS ---
-CONFIG_FILE = "config.json"
+CONFIG_FILE = "data/config.json"
 
 def load_config():
     """Load config from file, return defaults if missing."""
