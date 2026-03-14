@@ -11,6 +11,10 @@ saved_marks.json
 tracked_horses.txt
 watchlist_horses.txt
 
+# Ignore generated data backups
+backups/
+data/*.zip
+
 # Ignore environment variables or virtual environments (if you use them)
 .env
 venv/

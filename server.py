@@ -32,7 +32,7 @@ TRACKING_FILE = config.TRACKING_FILE
 WATCHLIST_FILE = config.WATCHLIST_FILE
 HORSE_DICT_FILE = config.HORSE_DICT_FILE
 DATA_DIR = config.DATA_DIR
-BACKUP_DIR = DATA_DIR / "backups"
+BACKUP_DIR = Path(__file__).parent / "backups"
 
 # --- NEW: CONSOLE LOGGING MEMORY ---
 scrape_logs = []
