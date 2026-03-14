@@ -14,5 +14,3 @@ start http://127.0.0.1:8000
 
 :: Start the FastAPI server with live-reloading
 uvicorn server:app --reload --host 127.0.0.1 --port 8000 --log-level warning > server.log 2>&1
-
-pause

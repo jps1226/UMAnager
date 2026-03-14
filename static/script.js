@@ -972,7 +972,7 @@ function renderTimelineTabs() {
     `;
 }
 
-function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = null) {
+function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = null, keepOpenRaceId = null) {
     const dates = Object.keys(globalRacesByDate).sort();
     const tabsBar = document.getElementById('date-tabs');
     const scheds = document.getElementById('schedules-container');
@@ -1008,7 +1008,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
                 race.info.sort_time
             ) {
                 const raceTime = new Date(race.info.sort_time.replace(' ', 'T'));
-                if (raceTime < collapseBeforeTime) {
+                if (raceTime < collapseBeforeTime && r_id !== keepOpenRaceId) {
                     shouldCollapse = true;
                 }
             }
@@ -1117,6 +1117,17 @@ async function loadRaces() {
             globalAllRacesByDate[timeline][date].forEach(race => {
                 const r_id = race.info.race_id;
 
+                // Preload entries for all timelines so cross-timeline features (export)
+                // work immediately without requiring the user to switch tabs first.
+                if (!globalRaceEntries[r_id]) {
+                    race.entries.forEach((row, idx) => {
+                        if (row.original_index === undefined) {
+                            row.original_index = idx;
+                        }
+                    });
+                    globalRaceEntries[r_id] = race.entries;
+                }
+
                 globalRaceInfo[r_id] = { ...race.info, _timeline: timeline };
                 globalRaceTimelineById[r_id] = timeline;
 
@@ -1135,7 +1146,8 @@ async function loadRaces() {
                 if (timeline === "upcoming" && race.info.time !== "TBA" && race.info.sort_time) {
                     upcomingRaces.push({
                         time: new Date(race.info.sort_time.replace(' ', 'T')),
-                        name: `${race.info.place.toUpperCase()} R${race.info.race_number}`
+                        name: `${race.info.place.toUpperCase()} R${race.info.race_number}`,
+                        r_id: r_id
                     });
                 }
             });
@@ -1145,11 +1157,18 @@ async function loadRaces() {
     upcomingRaces.sort((a, b) => a.time - b.time);
 
     let collapseBeforeTime = null;
+    let keepOpenRaceId = null;
     if (isFirstLoad && upcomingRaces.length > 0) {
         const now = new Date();
-        const nextUpcomingRace = upcomingRaces.find(r => r.time > now);
-        if (nextUpcomingRace) {
+        const nextUpcomingIndex = upcomingRaces.findIndex(r => r.time > now);
+        if (nextUpcomingIndex > -1) {
+            const nextUpcomingRace = upcomingRaces[nextUpcomingIndex];
             collapseBeforeTime = nextUpcomingRace.time;
+
+            // Keep the race that is most likely in-progress expanded.
+            if (nextUpcomingIndex > 0) {
+                keepOpenRaceId = upcomingRaces[nextUpcomingIndex - 1].r_id;
+            }
         }
     }
 
@@ -1192,7 +1211,7 @@ async function loadRaces() {
 
     globalRacesByDate = globalAllRacesByDate[currentTimelineTab] || {};
     renderTimelineTabs();
-    renderDayTabsAndSchedules(null, collapseBeforeTime);
+    renderDayTabsAndSchedules(null, collapseBeforeTime, keepOpenRaceId);
     updateJumpDay();
 
     isFirstLoad = false;
@@ -1492,14 +1511,16 @@ async function showExportModal() {
         if (!summaryByDate[dateStr][track]) summaryByDate[dateStr][track] = {};
         if (!summaryByDate[dateStr][track][raceNum]) summaryByDate[dateStr][track][raceNum] = [];
 
-        const entries = globalRaceEntries[r_id];
+        const entries = globalRaceEntries[r_id] || [];
         const horseRow = entries.find(r => String(r.Horse_ID).split('.')[0] === h_id);
         const horseName = horseRow ? horseRow.Horse : "Unknown Horse";
         const pp = horseRow ? parseInt(horseRow.PP) || 99 : 99;
         const bk = horseRow ? parseInt(horseRow.BK) || 0 : 0;
+        const fav = horseRow ? String(horseRow.Fav || "").trim() : "";
 
         const raceData = {
             symbol: symbol, rank: sMap[symbol] || 99, horse: horseName, pp: pp, bk: bk,
+            fav: fav,
             date: dateStr, track: track, raceNum: raceNum, sortTime: sortTime, time: info.time, r_id: r_id
         };
         
@@ -1574,10 +1595,15 @@ async function showExportModal() {
 
                         const markBadge = `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:${symSize}; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:8px;">${m.symbol}</span>`;
 
+                        const favBadge = m.fav ? `Fav ${m.fav}` : "Fav -";
+
                         html += `<div class="export-horse-line" style="margin-bottom: 8px;">
                             ${ppBadge}
                             ${markBadge}
-                            <span style="font-weight: 500;">${m.horse}</span>
+                            <div class="export-horse-main" style="flex: 1; min-width: 0;">
+                                <span style="font-weight: 500;">${m.horse}</span>
+                                <span class="export-fav-badge">${favBadge}</span>
+                            </div>
                         </div>`;
                     });
                     html += `</div>`; 
@@ -1620,7 +1646,7 @@ async function showExportModal() {
             }
 
             const safeId = `chrono-${m.r_id}`;
-            chrono_html += `<div class="export-race-card">
+            chrono_html += `<div class="export-race-card chrono-race-card" data-sort-ms="${m.sortTime.getTime()}" data-safe-id="${safeId}">
                 <div class="export-race-title" onclick="toggleExportRace('${safeId}')" title="Click to collapse/expand">
                     <span id="arrow-${safeId}" style="display:inline-block; width:15px; font-size: 10px; vertical-align: middle;">▼</span>
                     ${m.track} R${m.raceNum} - ${m.time}
@@ -1641,10 +1667,15 @@ async function showExportModal() {
                 const ppBadge = mark.pp !== 99 ? `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:12px; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:6px;">${mark.pp}</span>` : `<span style="display:inline-block; width:22px; height:22px; margin-right:6px;"></span>`;
                 const markBadge = `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:${symSize}; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:8px;">${mark.symbol}</span>`;
 
+                const favBadge = mark.fav ? `Fav ${mark.fav}` : "Fav -";
+
                 chrono_html += `<div class="export-horse-line" style="margin-left: 15px;">
                     ${ppBadge}
                     ${markBadge}
-                    <span style="font-weight: 500;">${mark.horse}</span>
+                    <div class="export-horse-main" style="flex: 1; min-width: 0;">
+                        <span style="font-weight: 500;">${mark.horse}</span>
+                        <span class="export-fav-badge">${favBadge}</span>
+                    </div>
                 </div>`;
             });
             chrono_html += `</div></div>`;
@@ -1677,12 +1708,18 @@ async function showExportModal() {
             .export-race-title.collapsed { color: #444; border-bottom-style: solid; border-color: #222; margin-bottom: 0; }
             
             .export-horse-line { display: flex; align-items: center; margin-bottom: 8px; font-size: 14px; }
+            .export-horse-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+            .export-fav-badge { font-size: 11px; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
             
             /* NEW: Toggle button styling */
             .view-toggle-container { display: flex; gap: 8px; justify-content: center; margin: 15px 0; }
             .view-toggle-btn { padding: 8px 16px; border: 1px solid #555; background: #1a1c23; color: #888; cursor: pointer; border-radius: 4px; font-size: 14px; font-weight: bold; transition: 0.2s; }
             .view-toggle-btn.active { background: #ff4b4b; color: #fff; border-color: #ff4b4b; }
             .view-toggle-btn:hover { border-color: #ff4b4b; }
+
+            .live-toggle-wrap { display: none; margin-top: 8px; text-align: center; }
+            .live-toggle-wrap label { font-size: 12px; color: #ccc; cursor: pointer; user-select: none; }
+            .live-toggle-wrap input { margin-right: 6px; vertical-align: middle; }
             
             .view-content { display: none; }
             .view-content.active { display: block; }
@@ -1697,7 +1734,10 @@ async function showExportModal() {
         <!-- NEW: View Toggle Buttons -->
         <div class="view-toggle-container">
             <button class="view-toggle-btn active" onclick="switchView('racecourse')">🏇 By Racecourse</button>
-            <button class="view-toggle-btn" onclick="switchView('chronological')">⏱️ Chronological</button>
+            <button class="view-toggle-btn" onclick="switchView('chronological')">⏱️ Live Race Flow</button>
+        </div>
+        <div id="live-toggle-wrap" class="live-toggle-wrap">
+            <label><input type="checkbox" id="auto-follow-current" onchange="toggleAutoFollowCurrent(this.checked)"> Auto-collapse finished races and keep current race at top</label>
         </div>
         
         <!-- Racecourse View -->
@@ -1711,10 +1751,14 @@ async function showExportModal() {
         </div>
         
         <script>
+            let autoFollowTimer = null;
+            let lastAutoFollowSafeId = null;
+
             function switchView(viewName) {
                 // Hide both views
                 document.getElementById('racecourse-view').classList.remove('active');
                 document.getElementById('chronological-view').classList.remove('active');
+                const liveToggle = document.getElementById('live-toggle-wrap');
                 
                 // Remove active class from all buttons
                 document.querySelectorAll('.view-toggle-btn').forEach(btn => {
@@ -1725,9 +1769,92 @@ async function showExportModal() {
                 if (viewName === 'racecourse') {
                     document.getElementById('racecourse-view').classList.add('active');
                     document.querySelectorAll('.view-toggle-btn')[0].classList.add('active');
+                    if (liveToggle) liveToggle.style.display = 'none';
                 } else if (viewName === 'chronological') {
                     document.getElementById('chronological-view').classList.add('active');
                     document.querySelectorAll('.view-toggle-btn')[1].classList.add('active');
+                    if (liveToggle) liveToggle.style.display = 'block';
+                    runAutoFollowTick();
+                }
+            }
+
+            function setRaceCollapsed(safeId, collapseIt) {
+                const content = document.getElementById('content-' + safeId);
+                const titleArrow = document.getElementById('arrow-' + safeId);
+                if (!content || !titleArrow) return;
+
+                const title = titleArrow.parentElement;
+                if (collapseIt) {
+                    content.style.display = 'none';
+                    title.classList.add('collapsed');
+                    titleArrow.innerText = '▶';
+                } else {
+                    content.style.display = '';
+                    title.classList.remove('collapsed');
+                    titleArrow.innerText = '▼';
+                }
+            }
+
+            function toggleAutoFollowCurrent(enabled) {
+                if (autoFollowTimer) {
+                    clearInterval(autoFollowTimer);
+                    autoFollowTimer = null;
+                }
+                if (!enabled) return;
+
+                runAutoFollowTick();
+                autoFollowTimer = setInterval(runAutoFollowTick, 15000);
+            }
+
+            function runAutoFollowTick() {
+                const checkbox = document.getElementById('auto-follow-current');
+                const chronoView = document.getElementById('chronological-view');
+                if (!checkbox || !checkbox.checked || !chronoView || !chronoView.classList.contains('active')) return;
+
+                const cards = Array.from(document.querySelectorAll('.chrono-race-card'))
+                    .sort((a, b) => (parseInt(a.dataset.sortMs || '0', 10) - parseInt(b.dataset.sortMs || '0', 10)));
+                if (cards.length === 0) return;
+
+                const now = Date.now();
+                const THIRTY_MIN_MS = 30 * 60 * 1000;
+
+                // A race is active from its start until the earlier of:
+                // 1) next race start, or 2) 30 minutes after its own start.
+                let currentIndex = -1;
+                for (let i = 0; i < cards.length; i++) {
+                    const startMs = parseInt(cards[i].dataset.sortMs || '0', 10);
+                    const nextStartMs = (i + 1 < cards.length)
+                        ? parseInt(cards[i + 1].dataset.sortMs || '0', 10)
+                        : Number.MAX_SAFE_INTEGER;
+                    const finishMs = Math.min(nextStartMs, startMs + THIRTY_MIN_MS);
+
+                    if (now >= startMs && now < finishMs) {
+                        currentIndex = i;
+                        break;
+                    }
+                }
+
+                // If no race is currently active, focus the next upcoming race.
+                if (currentIndex < 0) {
+                    const nextIndex = cards.findIndex(card => parseInt(card.dataset.sortMs || '0', 10) > now);
+                    currentIndex = nextIndex >= 0 ? nextIndex : cards.length - 1;
+                }
+
+                for (let i = 0; i < currentIndex; i++) {
+                    const safeId = cards[i].dataset.safeId;
+                    if (safeId) setRaceCollapsed(safeId, true);
+                }
+
+                const currentCard = cards[currentIndex];
+                if (!currentCard) return;
+
+                const currentSafeId = currentCard.dataset.safeId;
+                if (currentSafeId) {
+                    setRaceCollapsed(currentSafeId, false);
+                    if (lastAutoFollowSafeId !== currentSafeId) {
+                        currentCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        lastAutoFollowSafeId = currentSafeId;
+                    }
                 }
             }
             
