@@ -13,6 +13,50 @@ let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 let appConfig = {}; // NEW: Stores app configuration
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
 
+const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Sire", "Dam", "BMS", "Odds", "Fav"];
+const RACE_COLUMN_META = {
+    Shirushi: { label: "Prediction", sortable: true, sortKey: "Shirushi" },
+    BK: { label: "BK", sortable: false },
+    PP: { label: "PP", sortable: false },
+    Horse: { label: "Horse", sortable: false },
+    Record: { label: "W/S", sortable: true, sortKey: "Record" },
+    Sire: { label: "Sire", sortable: false },
+    Dam: { label: "Dam", sortable: false },
+    BMS: { label: "BMS", sortable: false },
+    Odds: { label: "Odds", sortable: true, sortKey: "Odds" },
+    Fav: { label: "Fav", sortable: true, sortKey: "Fav" }
+};
+
+function normalizeRaceColumnsLayout(layout) {
+    const valid = new Set(DEFAULT_RACE_COLUMNS);
+    const normalized = [];
+    const seen = new Set();
+
+    if (Array.isArray(layout)) {
+        layout.forEach(item => {
+            if (!item || !valid.has(item.key) || seen.has(item.key)) return;
+            seen.add(item.key);
+            normalized.push({ key: item.key, visible: item.visible !== false });
+        });
+    }
+
+    DEFAULT_RACE_COLUMNS.forEach(key => {
+        if (!seen.has(key)) normalized.push({ key: key, visible: true });
+    });
+
+    return normalized;
+}
+
+function getRaceColumnsLayout() {
+    if (!appConfig.ui) appConfig.ui = {};
+    appConfig.ui.raceTableColumns = normalizeRaceColumnsLayout(appConfig.ui.raceTableColumns);
+    return appConfig.ui.raceTableColumns;
+}
+
+function getVisibleRaceColumns() {
+    return getRaceColumnsLayout().filter(c => c.visible).map(c => c.key);
+}
+
 // --- SECURITY: HTML Escaping ---
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -304,6 +348,7 @@ async function init() {
     
     // NEW: Save slider state to config periodically
     document.getElementById('risk-slider').addEventListener('change', saveConfigToServer);
+    document.getElementById('risk-slider').addEventListener('input', updateAllRiskBadges);
     
     // NEW: Load saved slider state from config
     const savedRisk = appConfig.ui?.riskSlider || 50;
@@ -676,6 +721,40 @@ function getSortIcon(r_id, col) {
     return raceSorts[r_id].asc ? '<span class="sort-icon" style="color:#ff4b4b;">▲</span>' : '<span class="sort-icon" style="color:#ff4b4b;">▼</span>';
 }
 
+function buildTableHeaderRow(r_id) {
+    const cols = getVisibleRaceColumns();
+    let html = "<tr>";
+
+    cols.forEach(col => {
+        const meta = RACE_COLUMN_META[col];
+        if (!meta) return;
+
+        if (meta.sortable) {
+            const sortKey = meta.sortKey;
+            html += `<th class="sortable" id="th-${r_id}-${sortKey}" onclick="setSort('${r_id}', '${sortKey}')">${meta.label} ${getSortIcon(r_id, sortKey)}</th>`;
+        } else {
+            html += `<th>${meta.label}</th>`;
+        }
+    });
+
+    html += "</tr>";
+    return html;
+}
+
+function refreshRaceHeaderSortLabels(r_id) {
+    const sortableCols = [
+        { key: 'Shirushi', label: 'Prediction' },
+        { key: 'Record', label: 'W/S' },
+        { key: 'Odds', label: 'Odds' },
+        { key: 'Fav', label: 'Fav' }
+    ];
+
+    sortableCols.forEach(col => {
+        const el = document.getElementById(`th-${r_id}-${col.key}`);
+        if (el) el.innerHTML = `${col.label} ${getSortIcon(r_id, col.key)}`;
+    });
+}
+
 function setSort(r_id, col) {
     // Toggle direction or set new column
     if (!raceSorts[r_id]) raceSorts[r_id] = { col: col, asc: true };
@@ -686,10 +765,7 @@ function setSort(r_id, col) {
 
     // Instantly replace just the table body and headers for THIS race (Zero flashing!)
     document.getElementById(`tbody-${r_id}`).innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
-    document.getElementById(`th-${r_id}-Shirushi`).innerHTML = `Prediction ${getSortIcon(r_id, 'Shirushi')}`;
-    document.getElementById(`th-${r_id}-Record`).innerHTML = `W/S ${getSortIcon(r_id, 'Record')}`;
-    document.getElementById(`th-${r_id}-Odds`).innerHTML = `Odds ${getSortIcon(r_id, 'Odds')}`;
-    document.getElementById(`th-${r_id}-Fav`).innerHTML = `Fav ${getSortIcon(r_id, 'Fav')}`;
+    refreshRaceHeaderSortLabels(r_id);
 }
 
 // Generates the inner rows (Pulled out of loadRaces to be reusable)
@@ -737,21 +813,27 @@ function buildTableBody(r_id, entries) {
         const bmsStr = buildNameWithHover(row.BMS_ID, row.BMS, 'favorites', tracking.bms, tracking.intensity, tracking.isMixed);
         
         // NEW: Added id="row-${r_id}-${h_id}" to the <tr>
-        rowsHtml += `<tr id="row-${r_id}-${h_id}" class="${trClass}">
-            <td style="min-width: 170px;">
+        const cellHtmlByCol = {
+            Shirushi: `<td style="min-width: 170px;">
                 ${createMarkBtn(r_id, h_id, '◎', key)}
                 ${createMarkBtn(r_id, h_id, '〇', key)}
                 ${createMarkBtn(r_id, h_id, '▲', key)}
                 ${createMarkBtn(r_id, h_id, '△', key)}
                 ${createMarkBtn(r_id, h_id, 'X', key)}
-            </td>
+            </td>`,
+            BK: `<td>${row.BK || ""}</td>`,
+            PP: `<td>${row.PP || ""}</td>`,
+            Horse: `<td style="font-weight: bold;">${horseStr}</td>`,
+            Record: `<td>${row.Record || ""}</td>`,
+            Sire: `<td>${sireStr}</td>`,
+            Dam: `<td>${damStr}</td>`,
+            BMS: `<td>${bmsStr}</td>`,
+            Odds: `<td>${row.Odds || ""}</td>`,
+            Fav: `<td>${row.Fav || ""}</td>`
+        };
 
-            <td>${row.BK || ""}</td><td>${row.PP || ""}</td>
-            <td style="font-weight: bold;">${horseStr}</td>
-            <td>${row.Record || ""}</td>
-            <td>${sireStr}</td><td>${damStr}</td><td>${bmsStr}</td>
-            <td>${row.Odds || ""}</td><td>${row.Fav || ""}</td>
-        </tr>`;
+        const orderedCells = getVisibleRaceColumns().map(col => cellHtmlByCol[col] || "").join("");
+        rowsHtml += `<tr id="row-${r_id}-${h_id}" class="${trClass}">${orderedCells}</tr>`;
     });
     return rowsHtml;
 }
@@ -773,6 +855,22 @@ function updateRiskLabel(val) {
     label.innerText = `${text} (${val})`;
     label.style.color = color;
     slider.style.color = color; // Changes the thumb color dynamically!
+}
+
+function getRiskColor(val) {
+    if (val <= 20) return "#0abde3";
+    if (val <= 40) return "#1dd1a1";
+    if (val <= 60) return "#ff9f43";
+    if (val <= 85) return "#ff4b4b";
+    return "#ff0000";
+}
+
+function getRiskLabel(val) {
+    if (val <= 20) return "Ultra Safe";
+    if (val <= 40) return "Chalky";
+    if (val <= 60) return "Balanced";
+    if (val <= 85) return "Value Hunter";
+    return "Max Chaos";
 }
 
 // NEW: Save config to server when slider changes
@@ -889,12 +987,13 @@ async function autoPick(event, r_id, riskOverride = null) {
     raceSorts[r_id] = { col: 'Default', asc: true };
     applySortLogic(r_id, 'Default', true);
     document.getElementById(`tbody-${r_id}`).innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
-    document.getElementById(`th-${r_id}-Shirushi`).innerHTML = `Prediction ${getSortIcon(r_id, 'Shirushi')}`;
+    refreshRaceHeaderSortLabels(r_id);
 
     // 5. Hide the Auto-Pick buttons and reveal the Smart Sort button!
     document.querySelectorAll(`.auto-group-${r_id}`).forEach(btn => btn.style.display = "none");
     const reorderBtn = document.getElementById(`btn-reorder-${r_id}`);
     if (reorderBtn) reorderBtn.style.display = "inline-block";
+    updateRiskBadge(r_id);
 }
 
 // --- REORDER EXISTING PICKS ---
@@ -945,7 +1044,118 @@ async function reorderPicks(event, r_id) {
     raceSorts[r_id] = { col: 'Default', asc: true };
     applySortLogic(r_id, 'Default', true);
     document.getElementById(`tbody-${r_id}`).innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
-    document.getElementById(`th-${r_id}-Shirushi`).innerHTML = `Prediction ${getSortIcon(r_id, 'Shirushi')}`;
+    refreshRaceHeaderSortLabels(r_id);
+    updateRiskBadge(r_id);
+}
+
+// --- BET SAFETY INDICATOR ---
+function getEffectiveRiskForRace(r_id) {
+    const entries = globalRaceEntries[r_id];
+    if (!entries || entries.length === 0) return null;
+
+    const mainSymbols = ["◎", "〇", "▲", "△"];
+    const userPickIds = [];
+    for (const [k, v] of Object.entries(globalMarks)) {
+        if (k.startsWith(`${r_id}_`) && mainSymbols.includes(v)) {
+            userPickIds.push(k.split('_')[1]);
+        }
+    }
+    if (userPickIds.length === 0) return null;
+
+    const currentRisk = parseInt(document.getElementById('risk-slider').value);
+    if (isNaN(currentRisk)) return null;
+
+
+    // For each risk level, compute "regret": how much score the user left on the
+    // table vs. the ideal top-N picks at that risk level, normalized to [0,1].
+    // The risk level with minimum regret is the one the user's picks best match.
+    const N = userPickIds.length;
+    const getRegret = (risk) => {
+        const scored = entries
+            .map(row => ({ h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, risk) }))
+            .sort((a, b) => b.power - a.power);
+        const topNSum = scored.slice(0, N).reduce((s, h) => s + h.power, 0);
+        if (topNSum <= 0) return 1;
+        const userSum = userPickIds.reduce((s, id) => {
+            const h = scored.find(h => h.h_id === id);
+            return s + (h ? Math.max(0, h.power) : 0);
+        }, 0);
+        return (topNSum - userSum) / topNSum;
+    };
+
+    let bestRisk = currentRisk;
+    let bestRegret = Infinity;
+    for (let risk = 0; risk <= 100; risk += 5) {
+        const regret = getRegret(risk);
+        if (regret < bestRegret) {
+            bestRegret = regret;
+            bestRisk = risk;
+        }
+    }
+
+    // Positive delta means slider is riskier than the user's picks.
+    return { bestRisk, currentRisk, delta: currentRisk - bestRisk };
+}
+
+// Interpolates color from yellow (on target) toward red (riskier) or cyan (safer)
+function getDeviationColor(delta) {
+    const t = Math.max(-100, Math.min(100, delta)) / 100; // -1 to +1
+    if (t >= 0) {
+        // yellow #f9ca24 → red #ff0000
+        const r = 249 + Math.round((255 - 249) * t);
+        const g = Math.round(202 * (1 - t));
+        const b = Math.round(36  * (1 - t));
+        return `rgb(${r},${g},${b})`;
+    } else {
+        // yellow #f9ca24 → cyan #0abde3
+        const abs = -t;
+        const r = Math.round(249 * (1 - abs) + 10  * abs);
+        const g = Math.round(202 * (1 - abs) + 189 * abs);
+        const b = Math.round(36  * (1 - abs) + 227 * abs);
+        return `rgb(${r},${g},${b})`;
+    }
+}
+
+function updateRiskBadge(r_id) {
+    const badge = document.getElementById(`risk-badge-${r_id}`);
+    if (!badge) return;
+
+    if (!(appConfig.ui?.betSafetyIndicator ?? true)) {
+        badge.style.display = 'none';
+        return;
+    }
+
+    const result = getEffectiveRiskForRace(r_id);
+    if (result === null) {
+        badge.style.display = 'none';
+        return;
+    }
+
+    const { bestRisk, currentRisk, delta } = result;
+    const absDelta = Math.abs(delta);
+    const color = getDeviationColor(delta);
+
+    let text, title;
+    if (absDelta <= 10) {
+        text  = "✓ On Target";
+        title = `Your picks align well with the slider (Risk ${currentRisk}).`;
+    } else if (delta > 0) {
+        text  = `▲ Riskier`;
+        title = `Your slider is riskier than your current picks (slider: ${currentRisk}, picks ~${bestRisk}).`;
+    } else {
+        text  = `▼ Safer`;
+        title = `Your slider is safer than your current picks (slider: ${currentRisk}, picks ~${bestRisk}).`;
+    }
+
+    badge.style.display = 'inline-block';
+    badge.style.color = color;
+    badge.style.borderColor = color;
+    badge.title = title;
+    badge.textContent = `⚡ ${text}`;
+}
+
+function updateAllRiskBadges() {
+    Object.keys(globalRaceEntries).forEach(r_id => updateRiskBadge(r_id));
 }
 
 function normalizeRacesPayload(data) {
@@ -1063,19 +1273,11 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
                     <button class="btn-autopick-lucky auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 75)" title="Force Risk to 75">🍀 Lucky</button>
 
                     <button id="btn-reorder-${r_id}" class="btn-reorder" style="${reorderStyle}" onclick="reorderPicks(event, '${r_id}')" title="Reorder Chosen Picks">✨ Smart Sort</button>
+                    <span id="risk-badge-${r_id}" class="risk-badge" style="display:none;" onclick="event.stopPropagation()"></span>
                 </h3>
                 <div id="content-${r_id}" class="race-content ${collapsedClass}">
                     <table>
-                        <thead>
-                            <tr>
-                                <th class="sortable" id="th-${r_id}-Shirushi" onclick="setSort('${r_id}', 'Shirushi')">Prediction ${getSortIcon(r_id, 'Shirushi')}</th>
-                                <th>BK</th><th>PP</th><th>Horse</th>
-                                <th class="sortable" id="th-${r_id}-Record" onclick="setSort('${r_id}', 'Record')">W/S ${getSortIcon(r_id, 'Record')}</th>
-                                <th>Sire</th><th>Dam</th><th>BMS</th>
-                                <th class="sortable" id="th-${r_id}-Odds" onclick="setSort('${r_id}', 'Odds')">Odds ${getSortIcon(r_id, 'Odds')}</th>
-                                <th class="sortable" id="th-${r_id}-Fav" onclick="setSort('${r_id}', 'Fav')">Fav ${getSortIcon(r_id, 'Fav')}</th>
-                            </tr>
-                        </thead>
+                        <thead id="thead-${r_id}">${buildTableHeaderRow(r_id)}</thead>
                         <tbody id="tbody-${r_id}">${rowsHtml}</tbody>
                     </table>
                 </div>
@@ -1213,6 +1415,7 @@ async function loadRaces() {
     renderTimelineTabs();
     renderDayTabsAndSchedules(null, collapseBeforeTime, keepOpenRaceId);
     updateJumpDay();
+    updateAllRiskBadges();
 
     isFirstLoad = false;
 }
@@ -1319,6 +1522,7 @@ async function toggleMark(r_id, h_id, symbol) {
     // NEW: Instantly re-sort and re-render the table so voted horses snap to the top!
     applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
     document.getElementById(`tbody-${r_id}`).innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
+    updateRiskBadge(r_id);
 }
 
 // --- API CALLS ---
@@ -1930,6 +2134,8 @@ function showSettingsModal() {
     document.getElementById('setting-pedigreeLists').checked = appConfig.sidebarTabs?.pedigreeLists ?? true;
     document.getElementById('setting-autoPickStrategy').checked = appConfig.sidebarTabs?.autoPickStrategy ?? true;
     document.getElementById('setting-weekendWatchlist').checked = appConfig.sidebarTabs?.weekendWatchlist ?? true;
+    document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
+    renderRaceColumnSettings();
     
     document.getElementById('settings-modal').style.display = 'flex';
 }
@@ -1946,6 +2152,7 @@ async function updateSidebarSettings() {
         autoPickStrategy: document.getElementById('setting-autoPickStrategy').checked,
         weekendWatchlist: document.getElementById('setting-weekendWatchlist').checked
     };
+    appConfig.ui = { ...appConfig.ui, betSafetyIndicator: document.getElementById('setting-betSafetyIndicator').checked };
     
     // Save to server
     await fetch('/api/config', {
@@ -1956,6 +2163,79 @@ async function updateSidebarSettings() {
     
     // Apply settings immediately to sidebar
     applySidebarSettings();
+    updateAllRiskBadges();
+    applyRaceTableLayoutSettings();
+}
+
+function applyRaceTableLayoutSettings() {
+    Object.keys(globalRaceEntries).forEach(r_id => {
+        const thead = document.getElementById(`thead-${r_id}`);
+        if (thead) thead.innerHTML = buildTableHeaderRow(r_id);
+
+        const tbody = document.getElementById(`tbody-${r_id}`);
+        if (tbody) tbody.innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
+
+        refreshRaceHeaderSortLabels(r_id);
+    });
+}
+
+function renderRaceColumnSettings() {
+    const container = document.getElementById('setting-race-columns');
+    if (!container) return;
+
+    const cols = getRaceColumnsLayout();
+    container.innerHTML = cols.map((c, idx) => {
+        const meta = RACE_COLUMN_META[c.key] || { label: c.key };
+        const upDisabled = idx === 0 ? 'disabled' : '';
+        const downDisabled = idx === cols.length - 1 ? 'disabled' : '';
+        return `<div class="setting-column-row">
+            <label class="setting-column-label">
+                <input type="checkbox" ${c.visible ? 'checked' : ''} onchange="toggleRaceColumnVisibility('${c.key}', this.checked)">
+                <span>${meta.label}</span>
+            </label>
+            <div class="setting-column-actions">
+                <button type="button" ${upDisabled} onclick="moveRaceColumn('${c.key}', -1)">↑</button>
+                <button type="button" ${downDisabled} onclick="moveRaceColumn('${c.key}', 1)">↓</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function moveRaceColumn(colKey, direction) {
+    const cols = [...getRaceColumnsLayout()];
+    const idx = cols.findIndex(c => c.key === colKey);
+    if (idx < 0) return;
+
+    const newIdx = idx + direction;
+    if (newIdx < 0 || newIdx >= cols.length) return;
+
+    const tmp = cols[idx];
+    cols[idx] = cols[newIdx];
+    cols[newIdx] = tmp;
+
+    appConfig.ui.raceTableColumns = cols;
+    renderRaceColumnSettings();
+    await updateSidebarSettings();
+}
+
+async function toggleRaceColumnVisibility(colKey, visible) {
+    const cols = getRaceColumnsLayout().map(c => ({ ...c }));
+    const target = cols.find(c => c.key === colKey);
+    if (!target) return;
+
+    if (!visible) {
+        const visibleCount = cols.filter(c => c.visible).length;
+        if (visibleCount <= 1 && target.visible) {
+            alert('At least one race column must remain visible.');
+            renderRaceColumnSettings();
+            return;
+        }
+    }
+
+    target.visible = visible;
+    appConfig.ui.raceTableColumns = cols;
+    renderRaceColumnSettings();
+    await updateSidebarSettings();
 }
 
 function applySidebarSettings() {

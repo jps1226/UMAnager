@@ -191,6 +191,17 @@
                     <span>🏆 Weekend Watchlist</span>
                 </label>
             </div>
+            <h4 style="color: #1dd1a1; margin-top: 18px; margin-bottom: 12px;">Display Options</h4>
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                    <input type="checkbox" id="setting-betSafetyIndicator" onchange="updateSidebarSettings()">
+                    <span>⚡ Bet Safety Indicator</span>
+                </label>
+            </div>
+
+            <h4 style="color: #1dd1a1; margin-top: 18px; margin-bottom: 12px;">Race Table Columns</h4>
+            <div style="font-size: 12px; color: #999; margin-bottom: 8px;">Toggle visibility and move columns up/down. This applies globally.</div>
+            <div id="setting-race-columns" class="setting-columns-wrap"></div>
         </div>
         <button onclick="closeSettingsModal()" class="btn-full" style="background: #333; color: white;">Close</button>
     </div>

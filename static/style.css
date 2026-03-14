@@ -545,8 +545,23 @@ th.sortable:hover {
 .race-header.collapsed .btn-autopick-safe,
 .race-header.collapsed .btn-autopick-lucky,
 .race-header.collapsed .btn-history-refresh,
-.race-header.collapsed .btn-reorder {
+.race-header.collapsed .btn-reorder,
+.race-header.collapsed .risk-badge {
     display: none !important;
+}
+
+/* --- BET SAFETY INDICATOR BADGE --- */
+.risk-badge {
+    font-size: 11px;
+    font-weight: bold;
+    padding: 2px 8px;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    margin-left: 8px;
+    cursor: default;
+    vertical-align: middle;
+    opacity: 0.9;
+    white-space: nowrap;
 }
 
 /* --- STRATEGY SLIDER --- */
@@ -588,6 +603,55 @@ input[type=range]::-webkit-slider-runnable-track {
 .suggestion-item { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid #333; font-size: 13px; display: flex; flex-direction: column; }
 .suggestion-item:last-child { border-bottom: none; }
 .suggestion-item:hover, .suggestion-item.active { background: #333; color: #1dd1a1; }
+
+/* --- SETTINGS: RACE COLUMN LAYOUT --- */
+.setting-columns-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 220px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.setting-column-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #1a1c23;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 6px 8px;
+}
+
+.setting-column-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.setting-column-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.setting-column-actions button {
+    width: 24px;
+    height: 24px;
+    border: 1px solid #555;
+    border-radius: 4px;
+    background: #262730;
+    color: #ddd;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.setting-column-actions button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
 
 /* --- ROW HIGHLIGHT ANIMATION --- */
 .highlight-row td { animation: flash-row 2.5s ease-out forwards; }

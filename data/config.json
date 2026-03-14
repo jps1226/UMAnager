@@ -6,6 +6,49 @@
         "weekendWatchlist": true
     },
     "ui": {
-        "riskSlider": 60
+        "riskSlider": 0,
+        "raceTableColumns": [
+            {
+                "key": "Fav",
+                "visible": true
+            },
+            {
+                "key": "Shirushi",
+                "visible": true
+            },
+            {
+                "key": "BK",
+                "visible": false
+            },
+            {
+                "key": "PP",
+                "visible": true
+            },
+            {
+                "key": "Horse",
+                "visible": true
+            },
+            {
+                "key": "Record",
+                "visible": true
+            },
+            {
+                "key": "Sire",
+                "visible": true
+            },
+            {
+                "key": "Dam",
+                "visible": true
+            },
+            {
+                "key": "BMS",
+                "visible": true
+            },
+            {
+                "key": "Odds",
+                "visible": true
+            }
+        ],
+        "betSafetyIndicator": true
     }
 }
