@@ -1486,7 +1486,7 @@ async function fetchLogs() {
     }
 }
 
-// --- EXPORT TO OREPRO (POP-OUT WINDOW) ---
+// --- Voting Cheat Sheet (POP-OUT WINDOW) ---
 async function showExportModal() {
     const summaryByDate = {}; 
     const sMap = {"◎": 1, "〇": 2, "▲": 3, "△": 4, "☆": 5, "消": 6};
