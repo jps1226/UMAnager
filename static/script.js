@@ -3,7 +3,10 @@ let listsData = { favorites: "", watchlist: "" };
 let upcomingRaces = []; // NEW: Stores our parsed race times
 let globalRaceEntries = {}; // NEW: Stores local row data for instant sorting
 let globalRaceInfo = {}; // NEW: Stores the Racetrack names and numbers
-let globalRacesByDate = {}; // NEW: Stores races organized by date for jump dropdowns
+let globalRacesByDate = {}; // Active timeline races organized by date for jump dropdowns
+let globalAllRacesByDate = { upcoming: {}, past: {} }; // Full timeline buckets from API
+let globalRaceTimelineById = {}; // Maps race_id -> "upcoming" | "past"
+let currentTimelineTab = "upcoming";
 let raceSorts = {}; // NEW: Remembers which column is sorted for each race
 let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
@@ -338,7 +341,7 @@ function buildListHTML(rawText, listType) {
                 if (horseData) {
                     html += `
                 <div class="horse-item">
-                    <span class="horse-item-name" style="cursor: pointer;" onclick="jumpToHorse('${horseData.date}', '${horseData.r_id}', '${horseData.h_id}')" title="Click to view in race">${escapedName}</span>
+                    <span class="horse-item-name" style="cursor: pointer;" onclick="jumpToHorse('${horseData.date}', '${horseData.r_id}', '${horseData.h_id}', '${horseData.timeline || "upcoming"}')" title="Click to view in race">${escapedName}</span>
                     <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapeHtml(listType)}', '${escapedId}')">✖</button>
                 </div>`;
                 } else {
@@ -384,8 +387,9 @@ function navigateToHorse(horseId) {
         return;
     }
     
-    // Switch to the correct date tab
-    switchMainTab(foundDate);
+    // Switch to the correct timeline and date tab
+    const foundTimeline = globalRaceTimelineById[foundRaceId] || currentTimelineTab;
+    switchTimelineTab(foundTimeline, foundDate);
     
     // Expand the specific race if it is collapsed then scroll to it
     setTimeout(() => {
@@ -944,161 +948,102 @@ async function reorderPicks(event, r_id) {
     document.getElementById(`th-${r_id}-Shirushi`).innerHTML = `Prediction ${getSortIcon(r_id, 'Shirushi')}`;
 }
 
-// --- RENDER DASHBOARD ---
-async function loadRaces() {
-    const racesRes = await fetch('/api/races');
-    const data = await racesRes.json();
-    
-    // Setup countdown array
-    upcomingRaces = [];// --- NEW: Populate Search Database ---
-    searchableHorses = []; 
-    Object.keys(data.races_by_date).forEach(date => {
-        data.races_by_date[date].forEach(race => {
-            race.entries.forEach(row => {
-                searchableHorses.push({
-                    name: row.Horse,
-                    date: date,
-                    r_id: race.info.race_id,
-                    h_id: String(row.Horse_ID).split('.')[0],
-                    track: race.info.place.toUpperCase(),
-                    r_num: race.info.race_number
-                });
-            });
-        });
-    });
+function normalizeRacesPayload(data) {
+    return {
+        upcoming: data.upcoming_races_by_date || data.races_by_date || {},
+        past: data.past_races_by_date || {}
+    };
+}
 
-    Object.keys(data.races_by_date).forEach(date => {
-        data.races_by_date[date].forEach(race => {
-            const r_id = race.info.race_id;
-            globalRaceInfo[r_id] = race.info; // NEW: Save info for the export tool
-            
-            // NEW: Organize by date for jump dropdowns
-            if (!globalRacesByDate[date]) {
-                globalRacesByDate[date] = [];
-            }
-            globalRacesByDate[date].push(race.info);
-            
-            if (race.info.time !== "TBA" && race.info.sort_time) {
-                upcomingRaces.push({
-                    time: new Date(race.info.sort_time.replace(' ', 'T')),
-                    name: `${race.info.place.toUpperCase()} R${race.info.race_number}`
-                });
-            }
-        });
-    });
-    upcomingRaces.sort((a, b) => a.time - b.time);
-    
-    // NEW: Find the next upcoming race on first load for smart collapsing
-    let nextUpcomingRace = null;
-    if (isFirstLoad) {
-        const now = new Date();
-        nextUpcomingRace = upcomingRaces.find(r => r.time > now);
-    }
-    
-    // Update jump to race dropdowns
-    updateJumpDay();
+function getTimelineLabel(timeline) {
+    return timeline === 'past' ? 'Past Races' : 'Upcoming Races';
+}
 
-    // Render Weekend Watchlist (Now in the Sidebar!)
-    const tpContainer = document.getElementById('sidebar-weekend-watchlist');
-    if (tpContainer) {
-        if (data.top_picks && data.top_picks.length > 0) {
-            let tpHTML = `<div class="horse-list-container" style="max-height: none;">`;
-            data.top_picks.forEach(p => {
-                // p array: [0: Match, 1: Record, 2: Odds, 3: Horse, 4: Symbol, 5: Race_ID]
-                const r_id = p[5];
-                const horseName = p[3];
-                
-                // Find this horse in searchableHorses to get date and h_id
-                const raceData = searchableHorses.find(h => h.r_id === r_id && h.name === horseName);
-                
-                if (raceData) {
-                    tpHTML += `
-                    <div class="horse-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
-                        <span style="color: #fafafa; font-weight: bold; font-size: 14px; cursor: pointer;" onclick="jumpToHorse('${raceData.date}', '${raceData.r_id}', '${raceData.h_id}')" title="Click to view in race">${p[4]} ${horseName}</span>
-                        <span style="font-size: 11px; color: #888;">${p[0]} | W/S: ${p[1]} | Odds: ${p[2]}</span>
-                    </div>`;
-                } else {
-                    // Fallback if not found
-                    tpHTML += `
-                    <div class="horse-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
-                        <span style="color: #888; font-weight: bold; font-size: 14px;">${p[4]} ${horseName}</span>
-                        <span style="font-size: 11px; color: #888;">${p[0]} | W/S: ${p[1]} | Odds: ${p[2]}</span>
-                    </div>`;
-                }
-            });
-            tpHTML += `</div>`;
-            tpContainer.innerHTML = tpHTML;
-        } else {
-            tpContainer.innerHTML = "<div style='color:#888; font-size:12px; text-align:center; margin-top:10px;'>Run Auto-Pick to generate top picks.</div>";
-        }
-    }
+function renderTimelineTabs() {
+    const timelineBar = document.getElementById('timeline-tabs');
+    if (!timelineBar) return;
 
-    const dates = Object.keys(data.races_by_date).sort();
+    const upcomingDays = Object.keys(globalAllRacesByDate.upcoming || {}).length;
+    const pastDays = Object.keys(globalAllRacesByDate.past || {}).length;
+
+    timelineBar.innerHTML = `
+        <button class="tab-btn ${currentTimelineTab === 'past' ? 'active' : ''}" onclick="switchTimelineTab('past')">Past (${pastDays})</button>
+        <button class="tab-btn ${currentTimelineTab === 'upcoming' ? 'active' : ''}" onclick="switchTimelineTab('upcoming')">Upcoming (${upcomingDays})</button>
+    `;
+}
+
+function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = null) {
+    const dates = Object.keys(globalRacesByDate).sort();
     const tabsBar = document.getElementById('date-tabs');
     const scheds = document.getElementById('schedules-container');
-    tabsBar.innerHTML = ""; scheds.innerHTML = "";
+    tabsBar.innerHTML = "";
+    scheds.innerHTML = "";
+
+    if (dates.length === 0) {
+        scheds.innerHTML = `<div class="tab-content active"><div style="color:#888; font-size:14px; text-align:center; padding:30px 10px;">No ${getTimelineLabel(currentTimelineTab).toLowerCase()} available.</div></div>`;
+        return;
+    }
+
+    let activeDate = preferredDate && dates.includes(preferredDate) ? preferredDate : dates[0];
 
     dates.forEach((date, i) => {
+        const isActive = date === activeDate;
         const btn = document.createElement('button');
-        btn.className = `tab-btn ${i === 0 ? 'active' : ''}`;
+        btn.className = `tab-btn ${isActive ? 'active' : ''}`;
         btn.innerText = date;
         btn.onclick = () => switchMainTab(date);
         tabsBar.appendChild(btn);
 
-        let html = `<div id="tab-${date}" class="tab-content ${i === 0 ? 'active' : ''}">`;
-        
-        data.races_by_date[date].forEach(race => {
+        let html = `<div id="tab-${date}" class="tab-content ${isActive ? 'active' : ''}">`;
+
+        globalRacesByDate[date].forEach(race => {
             const r_id = race.info.race_id;
-            
-            // NEW: Determine if this race should be collapsed on first load
-            // Only on first load: collapse races that are completely before the next upcoming race
+
             let shouldCollapse = false;
-            if (isFirstLoad && nextUpcomingRace && race.info.time !== "TBA" && race.info.sort_time) {
+            if (
+                currentTimelineTab === 'upcoming' &&
+                isFirstLoad &&
+                collapseBeforeTime &&
+                race.info.time !== "TBA" &&
+                race.info.sort_time
+            ) {
                 const raceTime = new Date(race.info.sort_time.replace(' ', 'T'));
-                // Collapse only if this race is completely done (before the next upcoming race starts)
-                if (raceTime < nextUpcomingRace.time) {
+                if (raceTime < collapseBeforeTime) {
                     shouldCollapse = true;
                 }
             }
-            
+
             const arrow = shouldCollapse ? "▶" : "▼";
             const collapsedClass = shouldCollapse ? "collapsed" : "";
-            
-            // --- NEW: Apply original index and Default Sort ---
-            // Tag every horse with its original race-card index so we can fall back to it
+
             race.entries.forEach((row, idx) => { row.original_index = idx; });
             globalRaceEntries[r_id] = race.entries;
-            
-            // If a sort hasn't been explicitly chosen, use our new Default!
+
             if (!raceSorts[r_id]) {
                 raceSorts[r_id] = { col: 'Default', asc: true };
             }
 
-
             applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
-            // --------------------------------------------------
-            
+
             let hasFav = false;
             let hasWatch = false;
             globalRaceEntries[r_id].forEach(row => {
                 if (row.Status === "FAV") hasFav = true;
                 if (row.Status === "WATCH") hasWatch = true;
             });
-            
+
             const rowsHtml = buildTableBody(r_id, globalRaceEntries[r_id]);
-            
+
             let headerClass = "race-header";
             if (hasFav) headerClass += " has-fav";
             else if (hasWatch) headerClass += " has-watch";
 
-            // --- Determine Button Visibility ---
             let usedCount = 0;
             const mainSymbols = ["◎", "〇", "▲", "△"];
             for (const [k, v] of Object.entries(globalMarks)) {
                 if (k.startsWith(`${r_id}_`) && mainSymbols.includes(v)) usedCount++;
             }
-            
-            // If 4 are used, hide the Auto-Pick group and show Smart Sort!
+
             const autoStyle = (usedCount >= 4) ? "display: none;" : "display: inline-block;";
             const reorderStyle = (usedCount >= 4) ? "display: inline-block;" : "display: none;";
 
@@ -1107,11 +1052,11 @@ async function loadRaces() {
             html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
                 <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
                     <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> 🕒 ${race.info.time} | ${race.info.place.toUpperCase()} R${race.info.race_number}: ${localName}
-                    
+
                     <button class="btn-autopick-safe auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20">🛡️ Safe Bet</button>
                     <button class="btn-autopick auto-group-${r_id}" style="${autoStyle}; margin-left: 8px;" onclick="autoPick(event, '${r_id}', null)" title="Use Sidebar Slider">🎲 Auto</button>
                     <button class="btn-autopick-lucky auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 75)" title="Force Risk to 75">🍀 Lucky</button>
-                    
+
                     <button id="btn-reorder-${r_id}" class="btn-reorder" style="${reorderStyle}" onclick="reorderPicks(event, '${r_id}')" title="Reorder Chosen Picks">✨ Smart Sort</button>
                 </h3>
                 <div id="content-${r_id}" class="race-content ${collapsedClass}">
@@ -1131,11 +1076,120 @@ async function loadRaces() {
                 </div>
             </div>`;
         });
+
         html += `</div>`;
         scheds.innerHTML += html;
     });
-    
-    // NEW: Mark first load as complete so subsequent refreshes don't auto-collapse races
+}
+
+function switchTimelineTab(timeline, preferredDate = null) {
+    currentTimelineTab = timeline;
+    globalRacesByDate = globalAllRacesByDate[currentTimelineTab] || {};
+    renderTimelineTabs();
+    renderDayTabsAndSchedules(preferredDate);
+    updateJumpDay();
+}
+
+// --- RENDER DASHBOARD ---
+async function loadRaces() {
+    const racesRes = await fetch('/api/races');
+    const data = await racesRes.json();
+    const timelineData = normalizeRacesPayload(data);
+
+    // Reset cached structures for a clean rebuild.
+    upcomingRaces = [];
+    searchableHorses = [];
+    globalRaceEntries = {};
+    globalRaceInfo = {};
+    globalRaceTimelineById = {};
+    globalAllRacesByDate = {
+        upcoming: timelineData.upcoming || {},
+        past: timelineData.past || {}
+    };
+
+    ["upcoming", "past"].forEach(timeline => {
+        Object.keys(globalAllRacesByDate[timeline]).forEach(date => {
+            globalAllRacesByDate[timeline][date].forEach(race => {
+                const r_id = race.info.race_id;
+
+                globalRaceInfo[r_id] = { ...race.info, _timeline: timeline };
+                globalRaceTimelineById[r_id] = timeline;
+
+                race.entries.forEach(row => {
+                    searchableHorses.push({
+                        name: row.Horse,
+                        date: date,
+                        r_id: r_id,
+                        h_id: String(row.Horse_ID).split('.')[0],
+                        track: race.info.place.toUpperCase(),
+                        r_num: race.info.race_number,
+                        timeline: timeline
+                    });
+                });
+
+                if (timeline === "upcoming" && race.info.time !== "TBA" && race.info.sort_time) {
+                    upcomingRaces.push({
+                        time: new Date(race.info.sort_time.replace(' ', 'T')),
+                        name: `${race.info.place.toUpperCase()} R${race.info.race_number}`
+                    });
+                }
+            });
+        });
+    });
+
+    upcomingRaces.sort((a, b) => a.time - b.time);
+
+    let collapseBeforeTime = null;
+    if (isFirstLoad && upcomingRaces.length > 0) {
+        const now = new Date();
+        const nextUpcomingRace = upcomingRaces.find(r => r.time > now);
+        if (nextUpcomingRace) {
+            collapseBeforeTime = nextUpcomingRace.time;
+        }
+    }
+
+    const tpContainer = document.getElementById('sidebar-weekend-watchlist');
+    if (tpContainer) {
+        if (data.top_picks && data.top_picks.length > 0) {
+            let tpHTML = `<div class="horse-list-container" style="max-height: none;">`;
+            data.top_picks.forEach(p => {
+                const r_id = p[5];
+                const horseName = p[3];
+                const raceData = searchableHorses.find(h => h.r_id === r_id && h.name === horseName);
+
+                if (raceData) {
+                    tpHTML += `
+                    <div class="horse-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+                        <span style="color: #fafafa; font-weight: bold; font-size: 14px; cursor: pointer;" onclick="jumpToHorse('${raceData.date}', '${raceData.r_id}', '${raceData.h_id}', '${raceData.timeline || "upcoming"}')" title="Click to view in race">${p[4]} ${horseName}</span>
+                        <span style="font-size: 11px; color: #888;">${p[0]} | W/S: ${p[1]} | Odds: ${p[2]}</span>
+                    </div>`;
+                } else {
+                    tpHTML += `
+                    <div class="horse-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+                        <span style="color: #888; font-weight: bold; font-size: 14px;">${p[4]} ${horseName}</span>
+                        <span style="font-size: 11px; color: #888;">${p[0]} | W/S: ${p[1]} | Odds: ${p[2]}</span>
+                    </div>`;
+                }
+            });
+            tpHTML += `</div>`;
+            tpContainer.innerHTML = tpHTML;
+        } else {
+            tpContainer.innerHTML = "<div style='color:#888; font-size:12px; text-align:center; margin-top:10px;'>Run Auto-Pick to generate top picks.</div>";
+        }
+    }
+
+    const hasUpcoming = Object.keys(globalAllRacesByDate.upcoming || {}).length > 0;
+    if (isFirstLoad) {
+        currentTimelineTab = hasUpcoming ? "upcoming" : "past";
+    } else if (!globalAllRacesByDate[currentTimelineTab] || Object.keys(globalAllRacesByDate[currentTimelineTab]).length === 0) {
+        currentTimelineTab = hasUpcoming ? "upcoming" : "past";
+    }
+
+    globalRacesByDate = globalAllRacesByDate[currentTimelineTab] || {};
+    renderTimelineTabs();
+    renderDayTabsAndSchedules(null, collapseBeforeTime);
+    updateJumpDay();
+
     isFirstLoad = false;
 }
 
@@ -1245,6 +1299,42 @@ async function toggleMark(r_id, h_id, symbol) {
 
 // --- API CALLS ---
 let logInterval = null;
+
+async function triggerPost(url) {
+    try {
+        const res = await fetch(url, { method: 'POST' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await refreshDataAndUI();
+    } catch (err) {
+        alert(`Request failed: ${err.message}`);
+    }
+}
+
+async function closeServerInstances() {
+    const confirmed = confirm('Close all running UMAnager server instances on port 8000?');
+    if (!confirmed) return;
+
+    try {
+        await fetch('/api/server/shutdown', { method: 'POST' });
+
+        // Best-effort clean exit: close this tab/window after server shutdown signal.
+        setTimeout(() => {
+            try {
+                window.open('', '_self');
+                window.close();
+            } catch (e) {
+                
+            }
+
+            // Fallback if browser blocks window.close() for user-opened tabs.
+            if (!window.closed) {
+                window.location.replace('about:blank');
+            }
+        }, 150);
+    } catch (err) {
+        alert(`Failed to send shutdown command: ${err.message}`);
+    }
+}
 
 async function triggerScrape(mode) {
     document.getElementById('btn-new-race').disabled = true;
@@ -1724,7 +1814,7 @@ function performSearch() {
 
     let html = '';
     matches.slice(0, 10).forEach((m, idx) => {
-        html += `<div class="suggestion-item" id="sugg-${idx}" onclick="jumpToHorse('${m.date}', '${m.r_id}', '${m.h_id}')">
+        html += `<div class="suggestion-item" id="sugg-${idx}" onclick="jumpToHorse('${m.date}', '${m.r_id}', '${m.h_id}', '${m.timeline || "upcoming"}')">
             <strong>${m.name}</strong> <span style="color:#888; font-size:11px;">(${m.track} R${m.r_num})</span>
         </div>`;
     });
@@ -1761,11 +1851,13 @@ function updateSearchSelection(items) {
     });
 }
 
-function jumpToHorse(date, r_id, h_id) {
+function jumpToHorse(date, r_id, h_id, timeline = null) {
     document.getElementById('search-suggestions').style.display = 'none';
     document.getElementById('horse-search').value = '';
 
-    // 1. Force the correct Date Tab open
+    // 1. Force the correct Timeline + Date tab open
+    const targetTimeline = timeline || globalRaceTimelineById[r_id] || currentTimelineTab;
+    switchTimelineTab(targetTimeline, date);
     switchMainTab(date);
 
     // 2. Expand the specific race if it is collapsed
@@ -1881,8 +1973,8 @@ function checkAndJump() {
         return;
     }
     
-    const firstHorseId = races[0].Horse_ID;
-    jumpToHorse(selectedDay, selectedRaceId, firstHorseId);
+    const firstHorseId = String(races[0].Horse_ID).split('.')[0];
+    jumpToHorse(selectedDay, selectedRaceId, firstHorseId, currentTimelineTab);
 }
 
 function performJump() {

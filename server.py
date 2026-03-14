@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import asyncio
@@ -6,6 +6,9 @@ import pickle
 import json
 import os
 import re
+import datetime
+import subprocess
+import signal
 import pandas as pd
 import logging
 import data_manager
@@ -71,6 +74,84 @@ def load_ids(filepath):
 def force_str(val):
     if not val or str(val) == 'nan' or str(val) == '---': return ""
     return str(val).split('.')[0].strip()
+
+def parse_sort_time(sort_time_str):
+    """Parse a race sort_time string (YYYY-MM-DD HH:MM) safely."""
+    if not sort_time_str:
+        return None
+    try:
+        return datetime.datetime.strptime(str(sort_time_str), "%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return None
+
+def split_races_by_day_completion(races_by_date):
+    """Classify each race day as upcoming or past; days move only as a full group."""
+    now = datetime.datetime.now()
+    today = now.date()
+    upcoming = {}
+    past = {}
+
+    for date_str, races in races_by_date.items():
+        day_datetimes = []
+        day_date = None
+
+        for race in races:
+            info = race.get("info", {})
+            dt_val = parse_sort_time(info.get("sort_time"))
+            if dt_val:
+                day_datetimes.append(dt_val)
+                if day_date is None:
+                    day_date = dt_val.date()
+
+        # Move only when the whole day is considered complete.
+        if day_datetimes:
+            is_day_complete = now >= max(day_datetimes)
+        else:
+            # Fallback for missing times: move day after calendar day has passed.
+            if day_date is None:
+                try:
+                    day_date = datetime.datetime.strptime(str(date_str), "%Y-%m-%d").date()
+                except (ValueError, TypeError):
+                    day_date = today
+            is_day_complete = day_date < today
+
+        target = past if is_day_complete else upcoming
+        target[date_str] = races
+
+    return upcoming, past
+
+def find_listening_pids(port=8000):
+    """Find PIDs listening on a TCP port (Windows and POSIX best effort)."""
+    pids = set()
+    try:
+        res = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True, check=False)
+        for line in res.stdout.splitlines():
+            line_u = line.upper()
+            if f":{port}" not in line or "LISTEN" not in line_u:
+                continue
+            parts = line.split()
+            if parts and parts[-1].isdigit():
+                pids.add(int(parts[-1]))
+    except Exception as e:
+        logger.warning(f"Could not inspect netstat for port {port}: {e}")
+    return pids
+
+def terminate_pid(pid):
+    """Terminate a process by PID with platform-specific commands."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, text=True, check=False)
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except Exception as e:
+        logger.warning(f"Failed to terminate PID {pid}: {e}")
+
+def shutdown_server_instances(port=8000):
+    """Best-effort shutdown for server instances on the configured port."""
+    pids = find_listening_pids(port=port)
+    pids.add(os.getpid())
+    for pid in pids:
+        terminate_pid(pid)
 
 @app.get("/")
 def read_root():
@@ -223,7 +304,13 @@ async def save_marks(request: Request):
 
 @app.get("/api/races")
 def get_races():
-    if not os.path.exists(CACHE_FILE): return {"top_picks": [], "races_by_date": {}}
+    if not os.path.exists(CACHE_FILE):
+        return {
+            "top_picks": [],
+            "races_by_date": {},
+            "upcoming_races_by_date": {},
+            "past_races_by_date": {}
+        }
         
     with open(CACHE_FILE, "rb") as f: weekend_races = pickle.load(f)
     tracked_ids = load_ids(TRACKING_FILE)
@@ -264,4 +351,18 @@ def get_races():
         
         races_by_date[date_str].append({"info": info, "entries": df.to_dict(orient="records")})
         
-    return {"top_picks": top_picks, "races_by_date": races_by_date}
+    upcoming_races_by_date, past_races_by_date = split_races_by_day_completion(races_by_date)
+    upcoming_dates = set(upcoming_races_by_date.keys())
+    filtered_top_picks = [pick for pick in top_picks if pick[0] in upcoming_dates]
+
+    return {
+        "top_picks": filtered_top_picks,
+        "races_by_date": upcoming_races_by_date,
+        "upcoming_races_by_date": upcoming_races_by_date,
+        "past_races_by_date": past_races_by_date
+    }
+
+@app.post("/api/server/shutdown")
+def shutdown_server(background_tasks: BackgroundTasks):
+    background_tasks.add_task(shutdown_server_instances, 8000)
+    return {"status": "success", "message": "Shutdown signal sent."}

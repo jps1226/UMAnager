@@ -28,6 +28,7 @@
                     <button class="btn-full" style="font-size: 12px; padding: 6px;" onclick="triggerScrape('all')" id="btn-all-race">🔄 Force Full Re-Scrape</button>
                     <button class="btn-full" style="font-size: 12px; padding: 6px;" onclick="triggerPost('/api/cache/clear')">🗑️ Clear Cached Races</button>
                     <button class="btn-full btn-danger" style="font-size: 12px; padding: 6px;" onclick="triggerPost('/api/dict/wipe')">🚨 Reset Translation Memory</button>
+                    <button class="btn-full btn-danger" style="font-size: 12px; padding: 6px;" onclick="closeServerInstances()">⏻ Close Server</button>
                 </div>
             </details>
             
@@ -104,7 +105,10 @@
         </div>
 
         <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #333; padding-bottom: 6px;">
-            <div id="date-tabs" class="tab-bar" style="border-bottom: none; margin-bottom: 0;"></div>
+            <div style="display: flex; flex-direction: column; gap: 8px; min-width: 360px;">
+                <div id="timeline-tabs" class="tab-bar" style="border-bottom: none; margin-bottom: 0;"></div>
+                <div id="date-tabs" class="tab-bar" style="border-bottom: none; margin-bottom: 0;"></div>
+            </div>
             <div style="display: flex; align-items: center; gap: 10px;">
                 
                 <div class="search-container">
