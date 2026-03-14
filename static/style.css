@@ -1,5 +1,24 @@
         /* --- LAYOUT & DARK MODE --- */
         body { font-family: sans-serif; background-color: #0e1117; color: #fafafa; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
+
+.global-close-server-btn {
+    position: fixed;
+    top: 10px;
+    right: 12px;
+    z-index: 3000;
+    background: #4a1919;
+    border: 1px solid #ff4b4b;
+    color: #fff;
+    font-size: 12px;
+    font-weight: bold;
+    padding: 6px 10px;
+    border-radius: 6px;
+}
+.global-close-server-btn:hover {
+    background: #ff4b4b;
+    color: #000;
+}
+
         .sidebar { width: 380px; background-color: #1a1c23; padding: 20px; overflow-y: auto; border-right: 1px solid #333; }
         
 /* --- SIDEBAR GROUPS --- */
@@ -427,6 +446,23 @@ th.sortable:hover {
     color: #000;
 }
 
+.btn-history-refresh {
+    background: transparent;
+    border: 1px solid #1dd1a1;
+    color: #1dd1a1;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 15px;
+    transition: 0.2s;
+    vertical-align: middle;
+}
+.btn-history-refresh:hover {
+    background: #1dd1a1;
+    color: #000;
+}
+
 /* --- EXPORT MODAL --- */
 .modal-overlay {
     position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
@@ -508,12 +544,13 @@ th.sortable:hover {
 .race-header.collapsed .btn-autopick,
 .race-header.collapsed .btn-autopick-safe,
 .race-header.collapsed .btn-autopick-lucky,
+.race-header.collapsed .btn-history-refresh,
 .race-header.collapsed .btn-reorder {
     display: none !important;
 }
 
 /* --- STRATEGY SLIDER --- */
-input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+input[type=range] { appearance: none; -webkit-appearance: none; width: 100%; background: transparent; }
 input[type=range]:focus { outline: none; }
 input[type=range]::-webkit-slider-thumb { 
     -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%; 

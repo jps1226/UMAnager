@@ -476,3 +476,141 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
     
     with open(CACHE_FILE, "wb") as f: pickle.dump(weekend_races, f)
     return weekend_races
+
+def fetch_race_history_by_id(race_id):
+    """Fetch finalized race history data and map it by horse_id."""
+    try:
+        result = keibascraper.load("result", race_id)
+    except Exception as e:
+        logger.warning(f"History fetch failed for race {race_id}: {e}")
+        return {}
+
+    history_rows = None
+    if isinstance(result, tuple) and len(result) >= 2:
+        history_rows = result[1]
+    elif isinstance(result, list):
+        history_rows = result
+    elif isinstance(result, pd.DataFrame):
+        history_rows = result.to_dict(orient="records")
+
+    if not history_rows:
+        return {}
+
+    df = pd.DataFrame(history_rows)
+    if df.empty:
+        return {}
+
+    columns_by_lower = {str(c).strip().lower(): c for c in df.columns}
+
+    def pick_col(candidates):
+        for candidate in candidates:
+            key = candidate.strip().lower()
+            if key in columns_by_lower:
+                return columns_by_lower[key]
+        return None
+
+    horse_id_col = pick_col(["horse_id", "horseid", "horse id", "horseID"])
+    horse_url_col = pick_col(["horse_url", "horseurl", "horse_link", "url"])
+    odds_col = pick_col(["win_odds", "odds", "単勝オッズ", "tan_odds"])
+    fav_col = pick_col(["popularity", "pop", "fav", "人気", "ninki"])
+    finish_col = pick_col(["rank", "result", "finish", "order_of_finish", "着順"])
+
+    history_map = {}
+    for _, row in df.iterrows():
+        horse_id = ""
+
+        if horse_id_col:
+            horse_id = str(row.get(horse_id_col, "")).replace(".0", "").strip()
+
+        if (not horse_id or horse_id.lower() == "nan") and horse_url_col:
+            url_val = str(row.get(horse_url_col, ""))
+            m = re.search(r"/([a-zA-Z0-9]{10})/?", url_val)
+            if m:
+                horse_id = m.group(1)
+
+        if not horse_id or horse_id.lower() == "nan":
+            continue
+
+        odds_val = ""
+        fav_val = ""
+        finish_val = ""
+
+        if odds_col:
+            odds_val = str(row.get(odds_col, "")).strip()
+            if odds_val.lower() == "nan":
+                odds_val = ""
+
+        if fav_col:
+            fav_val = str(row.get(fav_col, "")).strip()
+            if fav_val.lower() == "nan":
+                fav_val = ""
+
+        if finish_col:
+            finish_val = str(row.get(finish_col, "")).strip()
+            if finish_val.lower() == "nan":
+                finish_val = ""
+
+        history_map[horse_id] = {
+            "odds": odds_val,
+            "fav": fav_val,
+            "finish": finish_val
+        }
+
+    return history_map
+
+def fetch_upcoming_race_snapshot(race_id):
+    """Fetch latest entry snapshot for an upcoming race (posts/brackets/odds/fav/time)."""
+    try:
+        result = keibascraper.load("entry", race_id)
+    except Exception as e:
+        logger.warning(f"Upcoming snapshot fetch failed for race {race_id}: {e}")
+        return None
+
+    if not (isinstance(result, tuple) and len(result) == 2 and result[0]):
+        return None
+
+    race_info = result[0][0]
+    entry_list = result[1]
+    str_id = str(race_id)
+
+    place = race_info.get('place', race_info.get('course', ''))
+    race_info['place'] = config.TRACK_TRANSLATIONS.get(place, place)
+    race_info['race_name'] = romanize(race_info.get('race_name', ''))
+    race_info['race_id'] = str_id
+
+    jst_zone = ZoneInfo("Asia/Tokyo")
+    ct_zone = ZoneInfo("America/Chicago")
+    date_str = race_info.get('date', race_info.get('race_date', ''))
+
+    if date_str:
+        clean_date_str = str(date_str).split(' ')[0]
+        try:
+            race_date = pd.to_datetime(clean_date_str).date()
+            race_info['clean_date'] = str(race_date)
+        except Exception:
+            race_date = None
+            race_info['clean_date'] = clean_date_str
+    else:
+        race_date = None
+
+    jst_time = fetch_real_post_time(race_id)
+    if jst_time and race_date:
+        try:
+            dt_jst = datetime.datetime.strptime(f"{race_date} {jst_time}", "%Y-%m-%d %H:%M").replace(tzinfo=jst_zone)
+            dt_ct = dt_jst.astimezone(ct_zone)
+            race_info['time'] = dt_ct.strftime("%I:%M %p")
+            race_info['sort_time'] = dt_ct.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            race_info['time'] = jst_time
+            race_info['sort_time'] = f"{race_info.get('clean_date', '')} {jst_time}".strip()
+    elif jst_time:
+        race_info['time'] = jst_time
+    elif race_date and not race_info.get('sort_time'):
+        race_info['sort_time'] = f"{race_date} 00:00"
+
+    preds = fetch_predictions(str_id)
+    formatted_entries = format_entry_data(entry_list, preds)
+    return {
+        "info": race_info,
+        "entries": formatted_entries
+    }

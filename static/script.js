@@ -1048,10 +1048,15 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
             const reorderStyle = (usedCount >= 4) ? "display: inline-block;" : "display: none;";
 
             const localName = localizeRaceName(race.info.race_name);
+            const historyBtnHtml = currentTimelineTab === 'past'
+                ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Refresh this race using keibascraper history table">📜 Update History</button>`
+                : "";
 
             html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
                 <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
                     <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> 🕒 ${race.info.time} | ${race.info.place.toUpperCase()} R${race.info.race_number}: ${localName}
+
+                    ${historyBtnHtml}
 
                     <button class="btn-autopick-safe auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20">🛡️ Safe Bet</button>
                     <button class="btn-autopick auto-group-${r_id}" style="${autoStyle}; margin-left: 8px;" onclick="autoPick(event, '${r_id}', null)" title="Use Sidebar Slider">🎲 Auto</button>
@@ -1307,6 +1312,97 @@ async function triggerPost(url) {
         await refreshDataAndUI();
     } catch (err) {
         alert(`Request failed: ${err.message}`);
+    }
+}
+
+async function postJson(url, payload) {
+    const res = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload || {})
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error(data.detail || data.message || `HTTP ${res.status}`);
+    }
+    return data;
+}
+
+async function createDataBackup() {
+    try {
+        const data = await postJson('/api/data/backup', {});
+        if (data.download_url) {
+            const a = document.createElement('a');
+            a.href = data.download_url;
+            a.download = data.filename || '';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+    } catch (err) {
+        alert(`Backup failed: ${err.message}`);
+    }
+}
+
+async function refreshUpcomingRacesLite() {
+    const btn = document.getElementById('btn-upcoming-refresh');
+    if (btn) btn.disabled = true;
+
+    try {
+        const data = await postJson('/api/races/upcoming/refresh', {});
+        await refreshDataAndUI();
+        switchTimelineTab('upcoming');
+
+        const failedCount = Array.isArray(data.failed_races) ? data.failed_races.length : 0;
+        alert(`Upcoming refresh complete. Races updated: ${data.updated_races || 0}, rows updated: ${data.updated_rows || 0}, failed races: ${failedCount}.`);
+    } catch (err) {
+        alert(`Upcoming refresh failed: ${err.message}`);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function deleteDayData() {
+    const dateInput = document.getElementById('delete-day-date');
+    const scopeInput = document.getElementById('delete-day-scope');
+    const targetDate = (dateInput?.value || '').trim();
+    const scope = (scopeInput?.value || 'marks').trim();
+
+    if (!targetDate) {
+        alert('Pick a day first.');
+        return;
+    }
+
+    const warningByScope = {
+        marks: 'This will remove all marks for races on that day.',
+        entries: 'This will remove all race entries for that day from cache.',
+        all: 'This will remove marks, entries, and day horse dictionary entries.'
+    };
+    const confirmed = confirm(`${warningByScope[scope] || 'Proceed?'}\n\nDay: ${targetDate}`);
+    if (!confirmed) return;
+
+    try {
+        const result = await postJson('/api/day/delete', { date: targetDate, scope: scope });
+        alert(`Done. Races removed: ${result.removed_races}, marks removed: ${result.removed_marks}, horse dict entries removed: ${result.removed_horse_entries}`);
+        await refreshDataAndUI();
+        switchTimelineTab(currentTimelineTab, targetDate);
+    } catch (err) {
+        alert(`Delete failed: ${err.message}`);
+    }
+}
+
+async function refreshRaceHistory(event, r_id) {
+    event.stopPropagation();
+    const raceInfo = globalRaceInfo[r_id] || {};
+    const raceDate = raceInfo.clean_date || null;
+
+    try {
+        const result = await postJson(`/api/races/${encodeURIComponent(r_id)}/refresh-history`, {});
+        await refreshDataAndUI();
+        switchTimelineTab('past', raceDate);
+        alert(`History refreshed for ${result.updated_entries || 0} entries.`);
+    } catch (err) {
+        alert(`History refresh failed: ${err.message}`);
     }
 }
 

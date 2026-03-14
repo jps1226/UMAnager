@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import asyncio
 import pickle
@@ -9,6 +10,8 @@ import re
 import datetime
 import subprocess
 import signal
+import zipfile
+from pathlib import Path
 import pandas as pd
 import logging
 import data_manager
@@ -28,6 +31,8 @@ MARKS_FILE = config.MARKS_FILE
 TRACKING_FILE = config.TRACKING_FILE
 WATCHLIST_FILE = config.WATCHLIST_FILE
 HORSE_DICT_FILE = config.HORSE_DICT_FILE
+DATA_DIR = config.DATA_DIR
+BACKUP_DIR = DATA_DIR / "backups"
 
 # --- NEW: CONSOLE LOGGING MEMORY ---
 scrape_logs = []
@@ -74,6 +79,36 @@ def load_ids(filepath):
 def force_str(val):
     if not val or str(val) == 'nan' or str(val) == '---': return ""
     return str(val).split('.')[0].strip()
+
+def load_cached_races():
+    if not os.path.exists(CACHE_FILE):
+        return []
+    with open(CACHE_FILE, "rb") as f:
+        return pickle.load(f)
+
+def save_cached_races(races):
+    with open(CACHE_FILE, "wb") as f:
+        pickle.dump(races, f)
+
+def load_marks_data():
+    if not os.path.exists(MARKS_FILE):
+        return {}
+    with open(MARKS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_marks_data(marks):
+    with open(MARKS_FILE, "w", encoding="utf-8") as f:
+        json.dump(marks, f, ensure_ascii=False, indent=4)
+
+def load_horse_dict_data():
+    if not os.path.exists(HORSE_DICT_FILE):
+        return {}
+    with open(HORSE_DICT_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_horse_dict_data(horse_dict):
+    with open(HORSE_DICT_FILE, "w", encoding="utf-8") as f:
+        json.dump(horse_dict, f, ensure_ascii=False, indent=4)
 
 def parse_sort_time(sort_time_str):
     """Parse a race sort_time string (YYYY-MM-DD HH:MM) safely."""
@@ -186,6 +221,39 @@ def clear_cache():
 def wipe_dict():
     if os.path.exists(HORSE_DICT_FILE): os.remove(HORSE_DICT_FILE)
     return {"status": "success"}
+
+@app.post("/api/data/backup")
+def create_data_backup():
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_name = f"umanager_data_backup_{stamp}.zip"
+    backup_path = BACKUP_DIR / backup_name
+
+    with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for file_path in DATA_DIR.rglob("*"):
+            if not file_path.is_file():
+                continue
+            if file_path.parent == BACKUP_DIR:
+                continue
+            if file_path.name.lower() == "requirements.txt" and file_path.parent == DATA_DIR:
+                continue
+
+            arcname = file_path.relative_to(DATA_DIR.parent)
+            zf.write(file_path, arcname=arcname)
+
+    return {
+        "status": "success",
+        "filename": backup_name,
+        "download_url": f"/api/data/backup/{backup_name}"
+    }
+
+@app.get("/api/data/backup/{backup_name}")
+def download_data_backup(backup_name: str):
+    safe_name = Path(backup_name).name
+    target = BACKUP_DIR / safe_name
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Backup not found")
+    return FileResponse(path=str(target), filename=safe_name, media_type="application/zip")
 
 # --- PEDIGREE LISTS & SNIPER ENDPOINTS ---
 @app.get("/api/lists")
@@ -312,7 +380,7 @@ def get_races():
             "past_races_by_date": {}
         }
         
-    with open(CACHE_FILE, "rb") as f: weekend_races = pickle.load(f)
+    weekend_races = load_cached_races()
     tracked_ids = load_ids(TRACKING_FILE)
     watchlist_ids = load_ids(WATCHLIST_FILE)
     
@@ -360,6 +428,195 @@ def get_races():
         "races_by_date": upcoming_races_by_date,
         "upcoming_races_by_date": upcoming_races_by_date,
         "past_races_by_date": past_races_by_date
+    }
+
+@app.post("/api/races/{race_id}/refresh-history")
+def refresh_race_history(race_id: str):
+    weekend_races = load_cached_races()
+    if not weekend_races:
+        raise HTTPException(status_code=404, detail="No cached races found")
+
+    target_index = None
+    for i, race in enumerate(weekend_races):
+        if str(race.get("info", {}).get("race_id", "")) == str(race_id):
+            target_index = i
+            break
+
+    if target_index is None:
+        raise HTTPException(status_code=404, detail="Race not found in cache")
+
+    history_map = data_manager.fetch_race_history_by_id(race_id)
+    if not history_map:
+        raise HTTPException(status_code=404, detail="No history data found for this race")
+
+    race_obj = weekend_races[target_index]
+    entries_df = race_obj["entries"].copy()
+
+    updated_count = 0
+    for idx, row in entries_df.iterrows():
+        horse_id = force_str(row.get("Horse_ID"))
+        if horse_id in history_map:
+            hist = history_map[horse_id]
+            if hist.get("odds", "") != "":
+                entries_df.at[idx, "Odds"] = hist.get("odds", "")
+            if hist.get("fav", "") != "":
+                entries_df.at[idx, "Fav"] = hist.get("fav", "")
+            if hist.get("finish", "") != "":
+                entries_df.at[idx, "Finish"] = hist.get("finish", "")
+            updated_count += 1
+
+    race_obj["entries"] = entries_df
+    race_obj["info"]["history_refreshed"] = True
+    race_obj["info"]["history_refreshed_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+
+    save_cached_races(weekend_races)
+    return {"status": "success", "updated_entries": updated_count}
+
+@app.post("/api/races/upcoming/refresh")
+def refresh_upcoming_races():
+    weekend_races = load_cached_races()
+    if not weekend_races:
+        raise HTTPException(status_code=404, detail="No cached races found")
+
+    races_by_date = {}
+    for race in weekend_races:
+        info = race.get("info", {})
+        date_str = info.get("clean_date", "Unknown Date")
+        races_by_date.setdefault(date_str, []).append({"info": info, "entries": []})
+
+    upcoming_races_by_date, _ = split_races_by_day_completion(races_by_date)
+    upcoming_dates = set(upcoming_races_by_date.keys())
+
+    updated_races = 0
+    updated_rows = 0
+    failed_races = []
+
+    for race in weekend_races:
+        info = race.get("info", {})
+        date_str = info.get("clean_date", "Unknown Date")
+        if date_str not in upcoming_dates:
+            continue
+
+        race_id = str(info.get("race_id", "")).strip()
+        if not race_id:
+            continue
+
+        snap = data_manager.fetch_upcoming_race_snapshot(race_id)
+        if not snap:
+            failed_races.append(race_id)
+            continue
+
+        old_df = race.get("entries")
+        new_df = snap.get("entries")
+        if not isinstance(old_df, pd.DataFrame) or not isinstance(new_df, pd.DataFrame):
+            failed_races.append(race_id)
+            continue
+
+        new_map = {}
+        for _, n_row in new_df.iterrows():
+            h_id = force_str(n_row.get("Horse_ID"))
+            if h_id:
+                new_map[h_id] = n_row
+
+        row_updates_in_race = 0
+        for idx, o_row in old_df.iterrows():
+            h_id = force_str(o_row.get("Horse_ID"))
+            if h_id not in new_map:
+                continue
+
+            n_row = new_map[h_id]
+            for col in ["BK", "PP", "Odds", "Fav"]:
+                new_val = str(n_row.get(col, "")).strip()
+                if new_val and new_val.lower() != "nan":
+                    old_df.at[idx, col] = new_val
+            row_updates_in_race += 1
+
+        race["entries"] = old_df
+
+        fresh_info = snap.get("info", {})
+        for key in ["time", "sort_time", "clean_date", "race_name", "place", "date", "race_number"]:
+            if key in fresh_info and str(fresh_info.get(key, "")).strip() != "":
+                info[key] = fresh_info[key]
+        info["upcoming_refreshed_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+
+        updated_races += 1
+        updated_rows += row_updates_in_race
+
+    save_cached_races(weekend_races)
+    return {
+        "status": "success",
+        "updated_races": updated_races,
+        "updated_rows": updated_rows,
+        "failed_races": failed_races
+    }
+
+@app.post("/api/day/delete")
+async def delete_day_data(request: Request):
+    data = await request.json()
+    target_date = str(data.get("date", "")).strip()
+    scope = str(data.get("scope", "")).strip().lower()
+
+    if not target_date:
+        raise HTTPException(status_code=400, detail="Missing day/date")
+    if scope not in {"marks", "entries", "all"}:
+        raise HTTPException(status_code=400, detail="Invalid scope")
+
+    weekend_races = load_cached_races()
+    target_race_ids = set()
+    target_horse_ids = set()
+
+    for race in weekend_races:
+        info = race.get("info", {})
+        if str(info.get("clean_date", "")).strip() != target_date:
+            continue
+        target_race_ids.add(str(info.get("race_id", "")).strip())
+
+        entries = race.get("entries")
+        if isinstance(entries, pd.DataFrame):
+            for _, row in entries.iterrows():
+                h_id = force_str(row.get("Horse_ID"))
+                if h_id:
+                    target_horse_ids.add(h_id)
+
+    removed_races = 0
+    removed_marks = 0
+    removed_horses = 0
+
+    if scope in {"entries", "all"}:
+        filtered_races = [
+            race for race in weekend_races
+            if str(race.get("info", {}).get("clean_date", "")).strip() != target_date
+        ]
+        removed_races = len(weekend_races) - len(filtered_races)
+        save_cached_races(filtered_races)
+
+    if scope in {"marks", "all"} and target_race_ids:
+        marks = load_marks_data()
+        new_marks = {}
+        for key, val in marks.items():
+            race_prefix = key.split("_", 1)[0]
+            if race_prefix in target_race_ids:
+                removed_marks += 1
+                continue
+            new_marks[key] = val
+        save_marks_data(new_marks)
+
+    if scope == "all" and target_horse_ids:
+        horse_dict = load_horse_dict_data()
+        for h_id in target_horse_ids:
+            if h_id in horse_dict:
+                del horse_dict[h_id]
+                removed_horses += 1
+        save_horse_dict_data(horse_dict)
+
+    return {
+        "status": "success",
+        "date": target_date,
+        "scope": scope,
+        "removed_races": removed_races,
+        "removed_marks": removed_marks,
+        "removed_horse_entries": removed_horses,
+        "matched_races": len(target_race_ids)
     }
 
 @app.post("/api/server/shutdown")
