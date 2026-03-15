@@ -6,7 +6,7 @@
         "weekendWatchlist": true
     },
     "ui": {
-        "riskSlider": 64,
+        "riskSlider": 35,
         "raceTableColumns": [
             {
                 "key": "Fav",

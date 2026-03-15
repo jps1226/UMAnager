@@ -971,18 +971,31 @@ async function saveConfigToServer() {
 }
 
 // --- DYNAMIC MATH ENGINE ---
+function getFormulaWeights() {
+    const fw = appConfig.ui?.formulaWeights ?? {};
+    const parseFW = (val, def) => { const n = parseFloat(val); return isNaN(n) ? def : n; };
+    return {
+        oddsCap:              parseFW(fw.oddsCap,              100),
+        formMultiplier:       parseFW(fw.formMultiplier,       100),
+        freshnessBonus:       parseFW(fw.freshnessBonus,         3),
+        freshnessBreakeven:   parseFW(fw.freshnessBreakeven,    10),
+        pedigreeMultiplier:   parseFW(fw.pedigreeMultiplier,    30),
+    };
+}
+
 function calculatePowerScore(row, riskVal) {
+    const fw = getFormulaWeights();
     // Ensures risk is always exactly between 0.0 and 1.0
     const risk = Math.max(0, Math.min(100, riskVal)) / 100; 
     
-    // 1. Base Odds Score (Max ~100 pts)
+    // 1. Base Odds Score
     let baseOddsScore = 0;
     const odds = parseFloat(row.Odds);
     if (!isNaN(odds) && odds > 0) {
-        baseOddsScore = 100 / Math.max(1.0, odds); // Caps max at 100 to prevent infinity
+        baseOddsScore = fw.oddsCap / Math.max(1.0, odds); // Caps max at oddsCap to prevent infinity
     }
 
-    // 2. Base Form Score (Max ~100 pts)
+    // 2. Base Form Score
     let baseFormScore = 0;
     if (row.Record) {
         const nums = String(row.Record).match(/\d+/g);
@@ -992,15 +1005,15 @@ function calculatePowerScore(row, riskVal) {
             const starts = nums.length > 1 ? parseInt(nums[1]) : wins; 
             
             if (starts > 0) {
-                baseFormScore += (wins / starts) * 100; // Up to 100 pts for 100% win rate
+                baseFormScore += (wins / starts) * fw.formMultiplier;
             }
-            // Freshness bonus: rewards lightly raced horses, penalizes 10+ start veterans
-            baseFormScore += (10 - starts) * 3; 
+            // Freshness bonus: rewards lightly raced horses, penalizes over-raced veterans
+            baseFormScore += (fw.freshnessBreakeven - starts) * fw.freshnessBonus; 
         }
     }
 
     // 3. Base Pedigree Score (from Tracked Bloodlines)
-    const basePedScore = (parseFloat(row.Score) || 0) * 30;
+    const basePedScore = (parseFloat(row.Score) || 0) * fw.pedigreeMultiplier;
 
     // 4. THE SLIDER MIXER
     // At Risk 0: 100% Odds, 0% Form/Pedigree
@@ -2335,6 +2348,13 @@ function showSettingsModal() {
     document.getElementById('setting-weekendWatchlist').checked = appConfig.sidebarTabs?.weekendWatchlist ?? true;
     document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
     document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
+    // Populate formula weight inputs
+    const fw = getFormulaWeights();
+    document.getElementById('fw-oddsCap').value            = fw.oddsCap;
+    document.getElementById('fw-formMultiplier').value     = fw.formMultiplier;
+    document.getElementById('fw-freshnessBonus').value     = fw.freshnessBonus;
+    document.getElementById('fw-freshnessBreakeven').value = fw.freshnessBreakeven;
+    document.getElementById('fw-pedigreeMultiplier').value = fw.pedigreeMultiplier;
     renderRaceColumnSettings();
     
     document.getElementById('settings-modal').style.display = 'flex';
@@ -2342,6 +2362,15 @@ function showSettingsModal() {
 
 function closeSettingsModal() {
     document.getElementById('settings-modal').style.display = 'none';
+}
+
+function resetFormulaWeights() {
+    document.getElementById('fw-oddsCap').value            = 100;
+    document.getElementById('fw-formMultiplier').value     = 100;
+    document.getElementById('fw-freshnessBonus').value     = 3;
+    document.getElementById('fw-freshnessBreakeven').value = 10;
+    document.getElementById('fw-pedigreeMultiplier').value = 30;
+    updateSidebarSettings();
 }
 
 async function updateSidebarSettings() {
@@ -2352,10 +2381,18 @@ async function updateSidebarSettings() {
         autoPickStrategy: document.getElementById('setting-autoPickStrategy').checked,
         weekendWatchlist: document.getElementById('setting-weekendWatchlist').checked
     };
+    const parseFWInput = (id, def) => { const n = parseFloat(document.getElementById(id).value); return isNaN(n) ? def : n; };
     appConfig.ui = {
         ...appConfig.ui,
         betSafetyIndicator: document.getElementById('setting-betSafetyIndicator').checked,
-        voteSortingTop: document.getElementById('setting-voteSortingTop').checked
+        voteSortingTop: document.getElementById('setting-voteSortingTop').checked,
+        formulaWeights: {
+            oddsCap:            parseFWInput('fw-oddsCap',            100),
+            formMultiplier:     parseFWInput('fw-formMultiplier',     100),
+            freshnessBonus:     parseFWInput('fw-freshnessBonus',       3),
+            freshnessBreakeven: parseFWInput('fw-freshnessBreakeven',  10),
+            pedigreeMultiplier: parseFWInput('fw-pedigreeMultiplier',  30),
+        }
     };
     
     // Save to server

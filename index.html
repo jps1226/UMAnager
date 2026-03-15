@@ -203,6 +203,26 @@
                 </label>
             </div>
 
+            <h4 style="color: #1dd1a1; margin-top: 18px; margin-bottom: 8px;">⚗️ Auto-Pick Formula</h4>
+            <div style="font-size: 12px; color: #999; margin-bottom: 10px;">Tune the scoring engine weights. Changes affect new auto-picks and the Bet Safety indicator.</div>
+            <div style="display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; font-size: 13px;">
+                <label title="Max points a horse can earn from odds (formula: oddsCap ÷ odds). Higher = odds have bigger absolute impact.">Odds Cap</label>
+                <input type="number" id="fw-oddsCap" min="0" max="1000" step="10" onchange="updateSidebarSettings()" style="width: 70px; background: #1a1a2e; border: 1px solid #444; color: #eee; padding: 3px 6px; border-radius: 4px; text-align: right;">
+
+                <label title="Max points from win rate (wins÷starts × scale). Higher = race record matters more.">Win Rate Scale</label>
+                <input type="number" id="fw-formMultiplier" min="0" max="1000" step="10" onchange="updateSidebarSettings()" style="width: 70px; background: #1a1a2e; border: 1px solid #444; color: #eee; padding: 3px 6px; border-radius: 4px; text-align: right;">
+
+                <label title="Points awarded per start below the breakeven count. Set to 0 to disable the freshness bonus entirely.">Freshness Bonus</label>
+                <input type="number" id="fw-freshnessBonus" min="-20" max="20" step="1" onchange="updateSidebarSettings()" style="width: 70px; background: #1a1a2e; border: 1px solid #444; color: #eee; padding: 3px 6px; border-radius: 4px; text-align: right;">
+
+                <label title="Starts count where freshness is neutral (neither bonus nor penalty). Horses with fewer starts get the bonus; more get a penalty.">Freshness Breakeven</label>
+                <input type="number" id="fw-freshnessBreakeven" min="0" max="50" step="1" onchange="updateSidebarSettings()" style="width: 70px; background: #1a1a2e; border: 1px solid #444; color: #eee; padding: 3px 6px; border-radius: 4px; text-align: right;">
+
+                <label title="Multiplier on pedigree score from tracked bloodlines. Higher = pedigree matters more at higher risk settings.">Pedigree Scale</label>
+                <input type="number" id="fw-pedigreeMultiplier" min="0" max="500" step="5" onchange="updateSidebarSettings()" style="width: 70px; background: #1a1a2e; border: 1px solid #444; color: #eee; padding: 3px 6px; border-radius: 4px; text-align: right;">
+            </div>
+            <button onclick="resetFormulaWeights()" style="margin-top: 10px; font-size: 12px; background: #262730; border: 1px solid #555; color: #aaa; padding: 4px 10px; border-radius: 4px; cursor: pointer;">↺ Reset to Defaults</button>
+
             <h4 style="color: #1dd1a1; margin-top: 18px; margin-bottom: 12px;">Race Table Columns</h4>
             <div style="font-size: 12px; color: #999; margin-bottom: 8px;">Toggle visibility and move columns up/down. This applies globally.</div>
             <div id="setting-race-columns" class="setting-columns-wrap"></div>
