@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,6 +16,8 @@ import threading
 from pathlib import Path
 import pandas as pd
 import logging
+from typing import Any, Literal
+from pydantic import BaseModel
 import data_manager
 import config
 from dotenv import load_dotenv
@@ -47,6 +49,26 @@ scrape_logs_lock = threading.Lock()
 scrape_job_lock = asyncio.Lock()
 
 
+class ScrapeRequest(BaseModel):
+    mode: Literal["new", "all"] = "new"
+
+
+class ListsPayload(BaseModel):
+    favorites: str = ""
+    watchlist: str = ""
+
+
+class SnipeRequest(BaseModel):
+    url: str = ""
+    id: str = ""
+    list_type: Literal["favorites", "watchlist"] = "favorites"
+
+
+class DeleteDayPayload(BaseModel):
+    date: str
+    scope: Literal["marks", "entries", "all"]
+
+
 def atomic_write_json(path, payload):
     """Write JSON atomically to avoid partial/corrupt files on interruption."""
     target = Path(path)
@@ -63,6 +85,16 @@ def atomic_write_pickle(path, payload):
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("wb", delete=False, dir=target.parent) as tmp:
         pickle.dump(payload, tmp)
+        tmp_path = tmp.name
+    os.replace(tmp_path, target)
+
+
+def atomic_write_text(path, text):
+    """Write text atomically to avoid partial/corrupt files on interruption."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", dir=target.parent) as tmp:
+        tmp.write(text)
         tmp_path = tmp.name
     os.replace(tmp_path, target)
 
@@ -229,7 +261,7 @@ def read_root():
 
 # --- DATA MANAGEMENT ENDPOINTS ---
 @app.post("/api/scrape")
-async def run_scrape(request: Request):
+async def run_scrape(payload: ScrapeRequest):
     global scrape_logs
 
     if scrape_job_lock.locked():
@@ -238,8 +270,7 @@ async def run_scrape(request: Request):
     with scrape_logs_lock:
         scrape_logs = ["Initializing Netkeiba Scraper..."]
 
-    data = await request.json()
-    mode = data.get("mode", "new")
+    mode = payload.mode
 
     async with scrape_job_lock:
         # Run scraper in a worker thread so the server can keep serving logs.
@@ -306,24 +337,17 @@ def get_lists():
     }
 
 @app.post("/api/lists")
-async def save_lists(request: Request):
-    data = await request.json()
-    with open(TRACKING_FILE, "w", encoding="utf-8") as f: f.write(data.get("favorites", ""))
-    with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: f.write(data.get("watchlist", ""))
+async def save_lists(payload: ListsPayload):
+    atomic_write_text(TRACKING_FILE, payload.favorites)
+    atomic_write_text(WATCHLIST_FILE, payload.watchlist)
     return {"status": "success"}
 
 @app.post("/api/snipe")
-async def snipe_horse(request: Request):
+async def snipe_horse(payload: SnipeRequest):
     """Add a horse to favorites or watchlist."""
-    try:
-        data = await request.json()
-    except Exception as e:
-        logger.warning(f"Invalid JSON in snipe request: {e}")
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-    
-    url = data.get("url", "").strip()
-    direct_id = data.get("id", "").strip()
-    list_type = data.get("list_type", "favorites").strip()
+    url = payload.url.strip()
+    direct_id = payload.id.strip()
+    list_type = payload.list_type.strip()
     
     # Validate list_type
     if not validate_list_type(list_type):
@@ -391,8 +415,7 @@ def get_config():
     return load_config()
 
 @app.post("/api/config")
-async def update_config(request: Request):
-    config_data = await request.json()
+async def update_config(config_data: dict[str, Any]):
     save_config(config_data)
     return {"status": "success"}
 
@@ -402,8 +425,7 @@ def get_marks():
     return safe_read_json(MARKS_FILE, {})
 
 @app.post("/api/marks")
-async def save_marks(request: Request):
-    marks = await request.json()
+async def save_marks(marks: dict[str, str]):
     atomic_write_json(MARKS_FILE, marks)
     return {"status": "success"}
 
@@ -663,15 +685,12 @@ def refresh_upcoming_races():
     }
 
 @app.post("/api/day/delete")
-async def delete_day_data(request: Request):
-    data = await request.json()
-    target_date = str(data.get("date", "")).strip()
-    scope = str(data.get("scope", "")).strip().lower()
+async def delete_day_data(payload: DeleteDayPayload):
+    target_date = payload.date.strip()
+    scope = payload.scope
 
     if not target_date:
         raise HTTPException(status_code=400, detail="Missing day/date")
-    if scope not in {"marks", "entries", "all"}:
-        raise HTTPException(status_code=400, detail="Invalid scope")
 
     weekend_races = load_cached_races()
     target_race_ids = set()

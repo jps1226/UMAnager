@@ -15,6 +15,18 @@ let appConfig = {}; // NEW: Stores app configuration
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
 
 const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Sire", "Dam", "BMS", "Odds", "Fav", "Finish"];
+const SCORE_TRACKED_HORSE = 1.0;
+const SCORE_TRACKED_SIRE = 0.5;
+const SCORE_TRACKED_DAM = 0.5;
+const SCORE_TRACKED_BMS = 0.25;
+const SCORE_WATCHLIST_HORSE = 1.0;
+const SCORE_WATCHLIST_SIRE = 0.5;
+const SCORE_WATCHLIST_DAM = 0.5;
+const SCORE_WATCHLIST_BMS = 0.25;
+const SCORE_MAX = 1.0;
+const ICON_THRESHOLD_3STAR = 1.0;
+const ICON_THRESHOLD_2STAR = 0.5;
+
 const RACE_COLUMN_META = {
     Shirushi: { label: "Prediction", sortable: true, sortKey: "Shirushi", initialAsc: true },
     BK: { label: "BK", sortable: true, sortKey: "BK", initialAsc: true },
@@ -168,64 +180,54 @@ function parseListIds(text) {
     return ids;
 }
 
-function getTrackedStatus(horseId) {
+function getTrackedSets() {
+    return {
+        favorites: parseListIds(listsData?.favorites || ""),
+        watchlist: parseListIds(listsData?.watchlist || "")
+    };
+}
+
+function getTrackedStatus(horseId, trackedSets = null) {
     /**Check if a horse is tracked and on which lists. Returns {fav: bool, watch: bool}*/
-    if (!listsData || !listsData.favorites || !listsData.watchlist) {
-        return { fav: false, watch: false };
-    }
-    const tracked_ids = parseListIds(listsData.favorites);
-    const watchlist_ids = parseListIds(listsData.watchlist);
+    const sets = trackedSets || getTrackedSets();
     const cleanId = String(horseId).split('.')[0].trim();
     return {
-        fav: tracked_ids.has(cleanId),
-        watch: watchlist_ids.has(cleanId)
+        fav: sets.favorites.has(cleanId),
+        watch: sets.watchlist.has(cleanId)
     };
 }
 
 function calculateWeightedIntensity(horse, sire, dam, bms) {
-    /**Calculate weighted intensity based on family importance. Sire > Dam > BMS > Horse weight system*/
-    // Weights: Sire is most important (0.5), Dam second (0.35), BMS least (0.15)
-    let fav_weight = 0;
-    let watch_weight = 0;
-    
-    // Sire: 0.5 (highest parent weight)
-    if (sire.fav) fav_weight += 0.5;
-    if (sire.watch) watch_weight += 0.5;
-    
-    // Dam/Mare: 0.35 (second parent)
-    if (dam.fav) fav_weight += 0.35;
-    if (dam.watch) watch_weight += 0.35;
-    
-    // BMS: 0.15 (least important)
-    if (bms.fav) fav_weight += 0.15;
-    if (bms.watch) watch_weight += 0.15;
-    
-    // The horse itself is worth less than just having a quality parent
-    // (favoring pedigree over the horse being directly tracked)
-    if (horse.fav) fav_weight += 0.2;
-    if (horse.watch) watch_weight += 0.2;
-    
+    // Keep frontend highlight logic aligned with backend scoring rules.
+    let fav_weight = horse.fav ? SCORE_TRACKED_HORSE : (sire.fav ? SCORE_TRACKED_SIRE : 0.0);
+    fav_weight += (dam.fav ? SCORE_TRACKED_DAM : 0.0) + (bms.fav ? SCORE_TRACKED_BMS : 0.0);
+
+    let watch_weight = horse.watch ? SCORE_WATCHLIST_HORSE : (sire.watch ? SCORE_WATCHLIST_SIRE : 0.0);
+    watch_weight += (dam.watch ? SCORE_WATCHLIST_DAM : 0.0) + (bms.watch ? SCORE_WATCHLIST_BMS : 0.0);
+
+    fav_weight = Math.min(fav_weight, SCORE_MAX);
+    watch_weight = Math.min(watch_weight, SCORE_MAX);
+
     return { fav_weight, watch_weight, max: Math.max(fav_weight, watch_weight) };
 }
 
-function calculateFamilyTracking(horse_id, sire_id, dam_id, bms_id) {
+function calculateFamilyTracking(horse_id, sire_id, dam_id, bms_id, trackedSets = null) {
     /**Calculate which family members are tracked and weighted intensity level. Returns {horse, sire, dam, bms, intensity, isMixed, weights}*/
-    const horse = getTrackedStatus(horse_id);
-    const sire = getTrackedStatus(sire_id);
-    const dam = getTrackedStatus(dam_id);
-    const bms = getTrackedStatus(bms_id);
+    const horse = getTrackedStatus(horse_id, trackedSets);
+    const sire = getTrackedStatus(sire_id, trackedSets);
+    const dam = getTrackedStatus(dam_id, trackedSets);
+    const bms = getTrackedStatus(bms_id, trackedSets);
     
     const weights = calculateWeightedIntensity(horse, sire, dam, bms);
     
-    // Determine intensity level from weighted value (0-1.2 range -> 4 intensity levels)
+    // Determine intensity level from weighted value.
     let intensity = 0;
     const maxWeight = weights.max;
     if (maxWeight > 0) {
-        if (maxWeight <= 0.2) intensity = 0.25;      // Light: just the horse itself
-        else if (maxWeight <= 0.35) intensity = 0.33; // Light: just the BMS
-        else if (maxWeight <= 0.50) intensity = 0.50; // Medium: just the Dam or Sire+BMS
-        else if (maxWeight <= 0.70) intensity = 0.66; // Strong: Dam+BMS, or Sire alone
-        else intensity = 0.80;                        // Very Strong: Sire+Dam or higher
+        if (maxWeight <= 0.25) intensity = 0.25;
+        else if (maxWeight <= 0.50) intensity = 0.50;
+        else if (maxWeight <= 0.75) intensity = 0.66;
+        else intensity = 0.80;
     }
     
     // Check if mixed (both fav and watch)
@@ -236,8 +238,7 @@ function calculateFamilyTracking(horse_id, sire_id, dam_id, bms_id) {
 
 function updateRaceHighlighting() {
     /**Recalculate race scores and icons based on current listsData*/
-    const tracked_ids = parseListIds(listsData.favorites);
-    const watchlist_ids = parseListIds(listsData.watchlist);
+    const trackedSets = getTrackedSets();
     
     // Update each race's highlighting and icons
     Object.keys(globalRaceEntries).forEach(r_id => {
@@ -251,7 +252,7 @@ function updateRaceHighlighting() {
         // Recalculate scores for all entries in this race
         entries.forEach(row => {
             // Calculate family tracking with weighted importance (always recalculate)
-            row.familyTracking = calculateFamilyTracking(row.Horse_ID, row.Sire_ID, row.Dam_ID, row.BMS_ID);
+            row.familyTracking = calculateFamilyTracking(row.Horse_ID, row.Sire_ID, row.Dam_ID, row.BMS_ID, trackedSets);
             const tracking = row.familyTracking;
             const weights = tracking.weights;
             
@@ -267,12 +268,12 @@ function updateRaceHighlighting() {
             if (f_weight > 0) {
                 score = Math.min(f_weight, 1.0);
                 status = "FAV";
-                icon = f_weight >= 0.5 ? "⭐⭐⭐" : (f_weight >= 0.35 ? "⭐⭐" : "⭐");
+                icon = f_weight >= ICON_THRESHOLD_3STAR ? "⭐⭐⭐" : (f_weight >= ICON_THRESHOLD_2STAR ? "⭐⭐" : "⭐");
                 hasTracked = true;
             } else if (w_weight > 0) {
                 score = Math.min(w_weight, 1.0);
                 status = "WATCH";
-                icon = w_weight >= 0.5 ? "👁️👁️" : "👁️";
+                icon = w_weight >= ICON_THRESHOLD_3STAR ? "👁️👁️" : "👁️";
                 hasWatchlist = true;
             }
             
@@ -1881,7 +1882,7 @@ async function triggerScrape(mode) {
     // Reveal and prepare the console
     const consoleBox = document.getElementById('scrape-console');
     consoleBox.style.display = "block";
-    consoleBox.innerHTML = "Waking up scraper...";
+    consoleBox.textContent = "Waking up scraper...";
     
     // Start pinging the Python server for console text every 500 milliseconds
     logInterval = setInterval(fetchLogs, 500);
@@ -1906,8 +1907,8 @@ async function fetchLogs() {
         const data = await res.json();
         const consoleBox = document.getElementById('scrape-console');
         
-        // Update the text
-        consoleBox.innerHTML = data.logs.join('<br>');
+        // Keep scraper logs as text to avoid rendering arbitrary HTML from logs.
+        consoleBox.textContent = data.logs.join('\n');
         
         // Auto-scroll to the absolute bottom so you always see the latest action
         consoleBox.scrollTop = consoleBox.scrollHeight;
@@ -1971,7 +1972,8 @@ async function showExportModal() {
         html = "<p style='text-align:center; color:#888; margin-top:50px;'>No votes cast yet! Make your selections in the grid first.</p>";
     } else {
         dates.forEach(date => {
-            html += `<h2 style="color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px;">📅 ${date}</h2>`;
+            const safeDate = escapeHtml(String(date));
+            html += `<h2 style="color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px;">📅 ${safeDate}</h2>`;
             
             const tracks = Object.keys(summaryByDate[date]).sort();
             tracks.forEach(track => {
@@ -1980,8 +1982,9 @@ async function showExportModal() {
                 const safeTrackId = `${date}-${track}`.replace(/[^a-zA-Z0-9-]/g, '');
                 
                 // NEW: Make the Track Header clickable
-                html += `<div class="export-track-header" onclick="toggleExportTrack('${safeTrackId}')" title="Click to collapse/expand track">
-                            <span id="arrow-track-${safeTrackId}" style="display:inline-block; width:20px; font-size: 14px; vertical-align: middle;">▼</span>${track}
+                     const safeTrack = escapeHtml(String(track));
+                     html += `<div class="export-track-header" onclick="toggleExportTrack('${safeTrackId}')" title="Click to collapse/expand track">
+                                     <span id="arrow-track-${safeTrackId}" style="display:inline-block; width:20px; font-size: 14px; vertical-align: middle;">▼</span>${safeTrack}
                          </div>`;
                          
                 // NEW: Wrap the grid so the whole thing can vanish
@@ -2025,13 +2028,14 @@ async function showExportModal() {
 
                         const markBadge = `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:${symSize}; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:8px;">${m.symbol}</span>`;
 
-                        const favBadge = m.fav ? `Fav ${m.fav}` : "Fav -";
+                        const favBadge = m.fav ? `Fav ${escapeHtml(String(m.fav))}` : "Fav -";
+                        const safeHorseName = escapeHtml(String(m.horse || "Unknown Horse"));
 
                         html += `<div class="export-horse-line" style="margin-bottom: 8px;">
                             ${ppBadge}
                             ${markBadge}
                             <div class="export-horse-main" style="flex: 1; min-width: 0;">
-                                <span style="font-weight: 500;">${m.horse}</span>
+                                <span style="font-weight: 500;">${safeHorseName}</span>
                                 <span class="export-fav-badge">${favBadge}</span>
                             </div>
                         </div>`;
@@ -2071,15 +2075,18 @@ async function showExportModal() {
                     chrono_html += `</div>`; // Close previous date group
                 }
                 currentDate = m.date;
-                chrono_html += `<h2 style="color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px;">📅 ${m.date}</h2>`;
+                const safeChronoDate = escapeHtml(String(m.date));
+                chrono_html += `<h2 style="color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px;">📅 ${safeChronoDate}</h2>`;
                 chrono_html += `<div style="display: flex; flex-direction: column; gap: 12px;">`;
             }
 
             const safeId = `chrono-${m.r_id}`;
+            const safeChronoTrack = escapeHtml(String(m.track));
+            const safeChronoTime = escapeHtml(String(m.time));
             chrono_html += `<div class="export-race-card chrono-race-card" data-sort-ms="${m.sortTime.getTime()}" data-safe-id="${safeId}">
                 <div class="export-race-title" onclick="toggleExportRace('${safeId}')" title="Click to collapse/expand">
                     <span id="arrow-${safeId}" style="display:inline-block; width:15px; font-size: 10px; vertical-align: middle;">▼</span>
-                    ${m.track} R${m.raceNum} - ${m.time}
+                    ${safeChronoTrack} R${m.raceNum} - ${safeChronoTime}
                 </div>
                 <div id="content-${safeId}">`;
 
@@ -2097,13 +2104,14 @@ async function showExportModal() {
                 const ppBadge = mark.pp !== 99 ? `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:12px; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:6px;">${mark.pp}</span>` : `<span style="display:inline-block; width:22px; height:22px; margin-right:6px;"></span>`;
                 const markBadge = `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:${symSize}; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:8px;">${mark.symbol}</span>`;
 
-                const favBadge = mark.fav ? `Fav ${mark.fav}` : "Fav -";
+                const favBadge = mark.fav ? `Fav ${escapeHtml(String(mark.fav))}` : "Fav -";
+                const safeMarkHorse = escapeHtml(String(mark.horse || "Unknown Horse"));
 
                 chrono_html += `<div class="export-horse-line" style="margin-left: 15px;">
                     ${ppBadge}
                     ${markBadge}
                     <div class="export-horse-main" style="flex: 1; min-width: 0;">
-                        <span style="font-weight: 500;">${mark.horse}</span>
+                        <span style="font-weight: 500;">${safeMarkHorse}</span>
                         <span class="export-fav-badge">${favBadge}</span>
                     </div>
                 </div>`;
