@@ -5,7 +5,6 @@ import asyncio
 import pickle
 import json
 import os
-import re
 import datetime
 import subprocess
 import signal
@@ -14,11 +13,12 @@ import threading
 from pathlib import Path
 import pandas as pd
 import logging
-from typing import Any, Literal
+from typing import Literal
 from pydantic import BaseModel
 import data_manager
 import config
 from routers.maintenance import router as maintenance_router
+from routers.lists_config import router as lists_config_router
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(maintenance_router)
+app.include_router(lists_config_router)
 
 # Use paths from config
 CACHE_FILE = config.CACHE_FILE
@@ -49,17 +50,6 @@ scrape_job_lock = asyncio.Lock()
 
 class ScrapeRequest(BaseModel):
     mode: Literal["new", "all"] = "new"
-
-
-class ListsPayload(BaseModel):
-    favorites: str = ""
-    watchlist: str = ""
-
-
-class SnipeRequest(BaseModel):
-    url: str = ""
-    id: str = ""
-    list_type: Literal["favorites", "watchlist"] = "favorites"
 
 
 class DeleteDayPayload(BaseModel):
@@ -87,16 +77,6 @@ def atomic_write_pickle(path, payload):
     os.replace(tmp_path, target)
 
 
-def atomic_write_text(path, text):
-    """Write text atomically to avoid partial/corrupt files on interruption."""
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", dir=target.parent) as tmp:
-        tmp.write(text)
-        tmp_path = tmp.name
-    os.replace(tmp_path, target)
-
-
 def safe_read_json(path, default):
     """Load JSON with fallback to defaults when file is missing/corrupt."""
     target = Path(path)
@@ -116,29 +96,6 @@ def log_progress(msg):
         # Keep the console from using too much memory on massive scrapes
         if len(scrape_logs) > config.MAX_CONSOLE_LOGS:
             scrape_logs.pop(0)
-
-def validate_horse_id(horse_id):
-    """Validate that horse_id matches Netkeiba ID format (10 alphanumeric)."""
-    if not horse_id:
-        return False
-    horse_id_str = str(horse_id).strip()
-    return bool(re.match(config.HORSE_ID_PATTERN, horse_id_str))
-
-def validate_list_type(list_type):
-    """Validate that list_type is one of the allowed values."""
-    return list_type in ["favorites", "watchlist"]
-
-def validate_url(url_str):
-    """Extract and validate horse ID from a URL."""
-    if not url_str:
-        return None
-    # Allow users to paste a raw horse ID in the URL box as a convenience.
-    candidate = str(url_str).strip()
-    if validate_horse_id(candidate):
-        return candidate
-    # Look for Netkeiba horse ID pattern in URL
-    match = re.search(r'/([a-zA-Z0-9]{10})', candidate)
-    return match.group(1) if match else None
 
 def load_text_file(filepath):
     if os.path.exists(filepath):
@@ -287,74 +244,7 @@ def get_scrape_log():
     with scrape_logs_lock:
         return {"logs": list(scrape_logs)}
 
-# --- PEDIGREE LISTS & SNIPER ENDPOINTS ---
-@app.get("/api/lists")
-def get_lists():
-    return {
-        "favorites": load_text_file(TRACKING_FILE),
-        "watchlist": load_text_file(WATCHLIST_FILE)
-    }
-
-@app.post("/api/lists")
-async def save_lists(payload: ListsPayload):
-    atomic_write_text(TRACKING_FILE, payload.favorites)
-    atomic_write_text(WATCHLIST_FILE, payload.watchlist)
-    return {"status": "success"}
-
-@app.post("/api/snipe")
-async def snipe_horse(payload: SnipeRequest):
-    """Add a horse to favorites or watchlist."""
-    url = payload.url.strip()
-    direct_id = payload.id.strip()
-    list_type = payload.list_type.strip()
-    
-    # Validate list_type
-    if not validate_list_type(list_type):
-        logger.warning(f"Invalid list_type: {list_type}")
-        return {"status": "error", "message": "Invalid list type"}
-    
-    # Extract and validate horse ID
-    new_id = None
-    if direct_id:
-        if validate_horse_id(direct_id):
-            new_id = direct_id
-        else:
-            logger.warning(f"Invalid horse ID format: {direct_id}")
-            return {"status": "error", "message": "Invalid horse ID format"}
-    elif url:
-        new_id = validate_url(url)
-        if not new_id:
-            logger.warning(f"Could not extract horse ID from URL: {url}")
-            return {"status": "error", "message": "Invalid URL or horse ID format"}
-    else:
-        return {"status": "error", "message": "Either URL or ID must be provided"}
-    
-    # Check if horse is already tracked
-    current_favorites = load_text_file(TRACKING_FILE)
-    current_watchlist = load_text_file(WATCHLIST_FILE)
-    
-    if new_id in current_favorites or new_id in current_watchlist:
-        logger.info(f"Horse {new_id} already tracked")
-        return {"status": "error", "message": "ID already tracked."}
-    
-    # Add horse to list
-    target_f = TRACKING_FILE if list_type == "favorites" else WATCHLIST_FILE
-    current_c = load_text_file(target_f)
-    
-    try:
-        h_data = data_manager.get_horse_data(new_id, "Unknown")
-        h_name = h_data.get("name", "Unknown")
-        
-        prefix = "\n" if current_c and not current_c.endswith('\n') else ""
-        with open(target_f, "a", encoding="utf-8") as f:
-            f.write(f"{prefix}{new_id} # {h_name}\n")
-        logger.info(f"Added horse {h_name} ({new_id}) to {list_type}")
-        return {"status": "success", "message": f"Added {h_name}!"}
-    except Exception as e:
-        logger.error(f"Error adding horse: {e}")
-        return {"status": "error", "message": "Failed to add horse"}
-
-# --- CONFIG ENDPOINTS ---
+# --- CONFIG HELPERS ---
 CONFIG_FILE = "data/config.json"
 
 def load_config():
@@ -368,15 +258,6 @@ def load_config():
 def save_config(config_data):
     """Save config to file."""
     atomic_write_json(CONFIG_FILE, config_data)
-
-@app.get("/api/config")
-def get_config():
-    return load_config()
-
-@app.post("/api/config")
-async def update_config(config_data: dict[str, Any]):
-    save_config(config_data)
-    return {"status": "success"}
 
 # --- MARKS & SCHEDULE ENDPOINTS ---
 @app.get("/api/marks")
