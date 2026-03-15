@@ -1787,6 +1787,29 @@ async function createDataBackup() {
     }
 }
 
+async function restoreLatestBackup() {
+    const proceed = confirm(
+        "Restore the latest backup now?\n\nThis replaces current data/ contents.\nA safety backup will be created first only if data/ currently has files."
+    );
+    if (!proceed) return;
+
+    try {
+        const result = await postJson('/api/data/backup/restore', {
+            use_latest: true,
+            create_safety_backup: true
+        });
+
+        const safety = result.safety_backup
+            ? `Safety backup created: backups/${result.safety_backup}`
+            : 'No safety backup needed (data folder was empty).';
+
+        alert(`Restore complete from: backups/${result.restored_from}\nFiles restored: ${result.restored_files}\n${safety}`);
+        await refreshDataAndUI();
+    } catch (err) {
+        alert(`Restore failed: ${err.message}`);
+    }
+}
+
 async function refreshUpcomingRacesLite() {
     const btn = document.getElementById('btn-upcoming-refresh');
     if (btn) btn.disabled = true;

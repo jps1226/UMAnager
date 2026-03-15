@@ -132,8 +132,12 @@ def validate_url(url_str):
     """Extract and validate horse ID from a URL."""
     if not url_str:
         return None
+    # Allow users to paste a raw horse ID in the URL box as a convenience.
+    candidate = str(url_str).strip()
+    if validate_horse_id(candidate):
+        return candidate
     # Look for Netkeiba horse ID pattern in URL
-    match = re.search(r'/([a-zA-Z0-9]{10})', url_str)
+    match = re.search(r'/([a-zA-Z0-9]{10})', candidate)
     return match.group(1) if match else None
 
 def load_text_file(filepath):
