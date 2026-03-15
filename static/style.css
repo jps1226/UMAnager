@@ -88,6 +88,136 @@
         .tab-btn.active { color: white; border-bottom: 2px solid #ff4b4b; font-weight: bold; }
         .tab-content { display: none; padding-top: 20px; }
 	.tab-content.active { display: block; }
+        .race-calendar-panel {
+            background: linear-gradient(180deg, rgba(38, 39, 48, 0.95), rgba(20, 22, 29, 0.95));
+            border: 1px solid #333;
+            border-radius: 10px;
+            padding: 12px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .race-calendar-sidebar {
+            margin-bottom: 15px;
+            padding: 10px;
+        }
+        .race-calendar-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        .race-calendar-heading {
+            flex: 1;
+            text-align: center;
+        }
+        .race-calendar-title {
+            font-size: 14px;
+            font-weight: bold;
+            color: #fafafa;
+        }
+        .race-calendar-summary {
+            font-size: 10px;
+            color: #8f98aa;
+            margin-top: 2px;
+        }
+        .race-calendar-nav {
+            min-width: 30px;
+            height: 30px;
+            padding: 0;
+            font-size: 13px;
+            font-weight: bold;
+        }
+        .race-calendar-nav:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+        .race-calendar-weekdays,
+        .race-calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 4px;
+        }
+        .race-calendar-weekday {
+            text-align: center;
+            font-size: 9px;
+            color: #667085;
+            font-weight: bold;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding-bottom: 2px;
+        }
+        .race-calendar-cell,
+        .race-calendar-day {
+            min-height: 34px;
+            border-radius: 8px;
+        }
+        .race-calendar-cell {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid transparent;
+        }
+        .race-calendar-cell.is-empty {
+            background: transparent;
+        }
+        .race-calendar-day {
+            width: 100%;
+            border: 1px solid #2d3443;
+            background: #1a1f29;
+            color: #d5d9e2;
+            padding: 4px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            justify-content: space-between;
+            font-size: 11px;
+        }
+        .race-calendar-day:hover {
+            border-color: #556070;
+            background: #202733;
+        }
+        .race-calendar-day.is-selected {
+            border-color: #1dd1a1;
+            box-shadow: 0 0 0 1px rgba(29, 209, 161, 0.3) inset;
+            background: #17312f;
+            color: #f6fffd;
+        }
+        .race-calendar-day.timeline-upcoming {
+            background: #1a2430;
+        }
+        .race-calendar-day.timeline-past {
+            background: #15181e;
+            color: #8b93a3;
+            border-color: #252b36;
+        }
+        .race-calendar-day.timeline-past:hover {
+            background: #1a1f27;
+            border-color: #39414f;
+        }
+        .race-calendar-daynum {
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .race-calendar-meta {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 9px;
+            color: inherit;
+            opacity: 0.9;
+        }
+        .race-calendar-count {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 999px;
+            padding: 1px 5px;
+            font-weight: bold;
+        }
+        .race-calendar-empty-note {
+            font-size: 12px;
+            color: #888;
+            text-align: center;
+            padding: 12px 0 4px 0;
+        }
         
         /* --- TABLES --- */
         /* Removed overflow: hidden so tooltips can escape the table boundaries */

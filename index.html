@@ -17,6 +17,8 @@
             <button onclick="showSettingsModal()" title="Settings" style="background: #262730; border: 1px solid #444; color: #1dd1a1; cursor: pointer; font-size: 16px; width: 28px; height: 28px; padding: 0; border-radius: 4px;">⚙️</button>
         </div>
     </div>
+
+    <div id="race-calendar" class="race-calendar-panel race-calendar-sidebar"></div>
     
     <details class="sidebar-group" open>
         <summary>🔄 Race Database</summary>
@@ -33,6 +35,12 @@
                     <button class="btn-full btn-danger" style="font-size: 12px; padding: 6px;" onclick="triggerPost('/api/dict/wipe')">🚨 Reset Translation Memory</button>
                     <button class="btn-full" style="font-size: 12px; padding: 6px;" onclick="createDataBackup()">💾 Backup Data Folder</button>
                     <button class="btn-full" style="font-size: 12px; padding: 6px;" onclick="restoreLatestBackup()">♻️ Restore Latest Backup</button>
+
+                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #444; display: flex; flex-direction: column; gap: 6px;">
+                        <label style="font-size: 11px; color: #aaa; font-weight: bold;">Import Results For Day</label>
+                        <input type="date" id="import-day-date" style="font-size: 12px; padding: 6px;">
+                        <button class="btn-full" style="font-size: 12px; padding: 6px; margin-bottom: 0;" onclick="importDayResultsFromCalendar()">📅 Import Day Results</button>
+                    </div>
 
                     <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #444; display: flex; flex-direction: column; gap: 6px;">
                         <label style="font-size: 11px; color: #aaa; font-weight: bold;">Delete Selected Day Data</label>
@@ -120,27 +128,11 @@
         </div>
 
         <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #333; padding-bottom: 6px;">
-            <div style="display: flex; flex-direction: column; gap: 8px; min-width: 360px;">
-                <div id="timeline-tabs" class="tab-bar" style="border-bottom: none; margin-bottom: 0;"></div>
-                <div id="date-tabs" class="tab-bar" style="border-bottom: none; margin-bottom: 0;"></div>
-            </div>
             <div style="display: flex; align-items: center; gap: 10px;">
                 
                 <div class="search-container">
                     <input type="text" id="horse-search" placeholder="🔍 Search horse..." autocomplete="off" oninput="handleSearchInput()" onkeydown="handleSearchKey(event)">
                     <div id="search-suggestions" class="suggestions-box"></div>
-                </div>
-
-                <div style="display: flex; gap: 5px; align-items: center;">
-                    <select id="jump-day" onchange="updateJumpCourse()">
-                        <option value="">Day</option>
-                    </select>
-                    <select id="jump-course" onchange="updateJumpRace()">
-                        <option value="">Course</option>
-                    </select>
-                    <select id="jump-race" onchange="checkAndJump()">
-                        <option value="">Race</option>
-                    </select>
                 </div>
 
                 <button onclick="showExportModal()" style="padding: 6px 12px; background: #1dd1a1; color: black; font-weight: bold; border-color: #1dd1a1;">📋 Voting Cheat Sheet</button>

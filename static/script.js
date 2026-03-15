@@ -4,10 +4,12 @@ let raceLocks = {}; // Per-race lock state for mark interactions
 let upcomingRaces = []; // NEW: Stores our parsed race times
 let globalRaceEntries = {}; // NEW: Stores local row data for instant sorting
 let globalRaceInfo = {}; // NEW: Stores the Racetrack names and numbers
-let globalRacesByDate = {}; // Active timeline races organized by date for jump dropdowns
+let globalRacesByDate = {}; // All race days organized by date for navigation and jump dropdowns
 let globalAllRacesByDate = { upcoming: {}, past: {} }; // Full timeline buckets from API
-let globalRaceTimelineById = {}; // Maps race_id -> "upcoming" | "past"
+let globalDateTimelineByDate = {}; // Maps YYYY-MM-DD -> "upcoming" | "past"
 let currentTimelineTab = "upcoming";
+let currentActiveDate = null;
+let currentCalendarMonth = null;
 let raceSorts = {}; // NEW: Remembers which column is sorted for each race
 let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
@@ -450,9 +452,8 @@ function navigateToHorse(horseId) {
         return;
     }
     
-    // Switch to the correct timeline and date tab
-    const foundTimeline = globalRaceTimelineById[foundRaceId] || currentTimelineTab;
-    switchTimelineTab(foundTimeline, foundDate);
+    // Switch to the correct day in the calendar-backed schedule.
+    switchMainTab(foundDate);
     
     // Expand the specific race if it is collapsed then scroll to it
     setTimeout(() => {
@@ -1289,40 +1290,159 @@ function getTimelineLabel(timeline) {
     return timeline === 'past' ? 'Past Races' : 'Upcoming Races';
 }
 
-function renderTimelineTabs() {
-    const timelineBar = document.getElementById('timeline-tabs');
-    if (!timelineBar) return;
+function getSortedActiveDates() {
+    return Object.keys(globalRacesByDate).sort();
+}
 
-    const upcomingDays = Object.keys(globalAllRacesByDate.upcoming || {}).length;
-    const pastDays = Object.keys(globalAllRacesByDate.past || {}).length;
+function getMonthKey(dateStr) {
+    return dateStr ? String(dateStr).slice(0, 7) : null;
+}
 
-    timelineBar.innerHTML = `
-        <button class="tab-btn ${currentTimelineTab === 'past' ? 'active' : ''}" onclick="switchTimelineTab('past')">Past (${pastDays})</button>
-        <button class="tab-btn ${currentTimelineTab === 'upcoming' ? 'active' : ''}" onclick="switchTimelineTab('upcoming')">Upcoming (${upcomingDays})</button>
+function getAvailableCalendarMonths() {
+    return [...new Set(getSortedActiveDates().map(getMonthKey).filter(Boolean))].sort();
+}
+
+function formatCalendarMonth(monthKey) {
+    if (!monthKey) return '';
+    const [year, month] = monthKey.split('-').map(Number);
+    return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString('en-US', {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC'
+    });
+}
+
+function findNearestAvailableDate(targetDate, dates) {
+    if (!targetDate || !Array.isArray(dates) || dates.length === 0) return null;
+    if (dates.includes(targetDate)) return targetDate;
+
+    for (const date of dates) {
+        if (date >= targetDate) return date;
+    }
+
+    return dates[dates.length - 1];
+}
+
+function renderRaceCalendar() {
+    const calendar = document.getElementById('race-calendar');
+    if (!calendar) return;
+
+    const dates = getSortedActiveDates();
+    const months = getAvailableCalendarMonths();
+
+    if (!dates.length || !months.length) {
+        calendar.innerHTML = '<div class="race-calendar-empty-note">No race days loaded.</div>';
+        return;
+    }
+
+    const selectedDate = findNearestAvailableDate(currentActiveDate, dates) || dates[0];
+    const selectedTimeline = globalDateTimelineByDate[selectedDate] || 'upcoming';
+    currentActiveDate = selectedDate;
+    currentTimelineTab = selectedTimeline;
+
+    const selectedMonth = getMonthKey(selectedDate);
+    if (!currentCalendarMonth || !months.includes(currentCalendarMonth)) {
+        currentCalendarMonth = selectedMonth || months[0];
+    }
+
+    const monthIndex = months.indexOf(currentCalendarMonth);
+    const monthKey = monthIndex >= 0 ? months[monthIndex] : months[0];
+    currentCalendarMonth = monthKey;
+
+    const [year, month] = monthKey.split('-').map(Number);
+    const firstDay = new Date(Date.UTC(year, month - 1, 1));
+    const leadingBlanks = firstDay.getUTCDay();
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const cells = [];
+
+    for (let i = 0; i < leadingBlanks; i += 1) {
+        cells.push('<div class="race-calendar-cell is-empty"></div>');
+    }
+
+    for (let day = 1; day <= daysInMonth; day += 1) {
+        const dateStr = `${monthKey}-${String(day).padStart(2, '0')}`;
+        const races = globalRacesByDate[dateStr];
+
+        if (!races) {
+            cells.push(`<div class="race-calendar-cell"><div class="race-calendar-daynum" style="padding: 8px; color: #4b5565;">${day}</div></div>`);
+            continue;
+        }
+
+        const timeline = globalDateTimelineByDate[dateStr] || 'upcoming';
+        const activeClass = dateStr === currentActiveDate ? ' is-selected' : '';
+        const timelineLabel = timeline === 'past' ? 'Past' : 'Upcoming';
+        cells.push(`
+            <button type="button" class="race-calendar-day timeline-${timeline}${activeClass}" onclick="selectCalendarDate('${dateStr}')" title="${dateStr} • ${timelineLabel} • ${races.length} races">
+                <div class="race-calendar-daynum">${day}</div>
+                <div class="race-calendar-meta">
+                    <span>${timelineLabel}</span>
+                    <span class="race-calendar-count">${races.length}</span>
+                </div>
+            </button>
+        `);
+    }
+
+    calendar.innerHTML = `
+        <div class="race-calendar-header">
+            <button type="button" class="race-calendar-nav" onclick="changeCalendarMonth(-1)" ${monthIndex <= 0 ? 'disabled' : ''}>◀</button>
+            <div class="race-calendar-heading">
+                <div class="race-calendar-title">${formatCalendarMonth(monthKey)}</div>
+                <div class="race-calendar-summary">Selected: ${currentActiveDate} • ${getTimelineLabel(selectedTimeline)}</div>
+            </div>
+            <button type="button" class="race-calendar-nav" onclick="changeCalendarMonth(1)" ${monthIndex >= months.length - 1 ? 'disabled' : ''}>▶</button>
+        </div>
+        <div class="race-calendar-weekdays">${weekdays.map(day => `<div class="race-calendar-weekday">${day}</div>`).join('')}</div>
+        <div class="race-calendar-grid">${cells.join('')}</div>
     `;
+}
+
+function changeCalendarMonth(step) {
+    const months = getAvailableCalendarMonths();
+    if (!months.length) return;
+
+    const currentIndex = Math.max(0, months.indexOf(currentCalendarMonth));
+    const nextIndex = Math.min(months.length - 1, Math.max(0, currentIndex + step));
+    const nextMonth = months[nextIndex];
+    if (!nextMonth) return;
+
+    currentCalendarMonth = nextMonth;
+    const monthDates = getSortedActiveDates().filter(date => getMonthKey(date) === nextMonth);
+    if (monthDates.length) {
+        switchMainTab(monthDates[0]);
+    } else {
+        renderRaceCalendar();
+    }
+}
+
+function selectCalendarDate(date) {
+    switchMainTab(date);
 }
 
 function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = null, keepOpenRaceId = null) {
     const dates = Object.keys(globalRacesByDate).sort();
-    const tabsBar = document.getElementById('date-tabs');
     const scheds = document.getElementById('schedules-container');
-    tabsBar.innerHTML = "";
     scheds.innerHTML = "";
 
     if (dates.length === 0) {
-        scheds.innerHTML = `<div class="tab-content active"><div style="color:#888; font-size:14px; text-align:center; padding:30px 10px;">No ${getTimelineLabel(currentTimelineTab).toLowerCase()} available.</div></div>`;
+        currentActiveDate = null;
+        renderRaceCalendar();
+        scheds.innerHTML = `<div class="tab-content active"><div style="color:#888; font-size:14px; text-align:center; padding:30px 10px;">No race days available.</div></div>`;
         return;
     }
 
-    let activeDate = preferredDate && dates.includes(preferredDate) ? preferredDate : dates[0];
+    let activeDate = findNearestAvailableDate(preferredDate, dates)
+        || findNearestAvailableDate(currentActiveDate, dates)
+        || dates[0];
 
-    dates.forEach((date, i) => {
+    currentActiveDate = activeDate;
+    currentTimelineTab = globalDateTimelineByDate[activeDate] || currentTimelineTab;
+    currentCalendarMonth = getMonthKey(activeDate) || currentCalendarMonth;
+    renderRaceCalendar();
+
+    dates.forEach((date) => {
         const isActive = date === activeDate;
-        const btn = document.createElement('button');
-        btn.className = `tab-btn ${isActive ? 'active' : ''}`;
-        btn.innerText = date;
-        btn.onclick = () => switchMainTab(date);
-        tabsBar.appendChild(btn);
+        const dateTimeline = globalDateTimelineByDate[date] || 'upcoming';
 
         let html = `<div id="tab-${date}" class="tab-content ${isActive ? 'active' : ''}">`;
 
@@ -1331,7 +1451,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 
             let shouldCollapse = false;
             if (
-                currentTimelineTab === 'upcoming' &&
+                dateTimeline === 'upcoming' &&
                 isFirstLoad &&
                 collapseBeforeTime &&
                 race.info.time !== "TBA" &&
@@ -1401,7 +1521,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
             const clearStyle = countRaceMarks(r_id) > 0 ? "display: inline-block;" : "display: none;";
 
             const localName = localizeRaceName(race.info.race_name);
-            const historyBtnHtml = currentTimelineTab === 'past' && !raceHasHistoryData(race)
+            const historyBtnHtml = dateTimeline === 'past' && !raceHasHistoryData(race)
                 ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Fetch finish positions and result data for this race">📜 Update History</button>`
                 : "";
 
@@ -1434,14 +1554,6 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
     });
 }
 
-function switchTimelineTab(timeline, preferredDate = null) {
-    currentTimelineTab = timeline;
-    globalRacesByDate = globalAllRacesByDate[currentTimelineTab] || {};
-    renderTimelineTabs();
-    renderDayTabsAndSchedules(preferredDate);
-    updateJumpDay();
-}
-
 // --- RENDER DASHBOARD ---
 async function loadRaces() {
     const racesRes = await fetch('/api/races');
@@ -1453,7 +1565,8 @@ async function loadRaces() {
     searchableHorses = [];
     globalRaceEntries = {};
     globalRaceInfo = {};
-    globalRaceTimelineById = {};
+    globalRacesByDate = {};
+    globalDateTimelineByDate = {};
     globalAllRacesByDate = {
         upcoming: timelineData.upcoming || {},
         past: timelineData.past || {}
@@ -1461,6 +1574,9 @@ async function loadRaces() {
 
     ["upcoming", "past"].forEach(timeline => {
         Object.keys(globalAllRacesByDate[timeline]).forEach(date => {
+            globalRacesByDate[date] = globalAllRacesByDate[timeline][date];
+            globalDateTimelineByDate[date] = timeline;
+
             globalAllRacesByDate[timeline][date].forEach(race => {
                 const r_id = race.info.race_id;
 
@@ -1476,7 +1592,6 @@ async function loadRaces() {
                 }
 
                 globalRaceInfo[r_id] = { ...race.info, _timeline: timeline };
-                globalRaceTimelineById[r_id] = timeline;
 
                 race.entries.forEach(row => {
                     searchableHorses.push({
@@ -1550,16 +1665,26 @@ async function loadRaces() {
     }
 
     const hasUpcoming = Object.keys(globalAllRacesByDate.upcoming || {}).length > 0;
+    const upcomingDates = Object.keys(globalAllRacesByDate.upcoming || {}).sort();
+    const pastDates = Object.keys(globalAllRacesByDate.past || {}).sort();
+    const allDates = getSortedActiveDates();
+
     if (isFirstLoad) {
-        currentTimelineTab = hasUpcoming ? "upcoming" : "past";
-    } else if (!globalAllRacesByDate[currentTimelineTab] || Object.keys(globalAllRacesByDate[currentTimelineTab]).length === 0) {
-        currentTimelineTab = hasUpcoming ? "upcoming" : "past";
+        currentActiveDate = upcomingDates[0] || pastDates[pastDates.length - 1] || allDates[0] || null;
+    } else {
+        currentActiveDate = findNearestAvailableDate(currentActiveDate, allDates)
+            || upcomingDates[0]
+            || pastDates[pastDates.length - 1]
+            || allDates[0]
+            || null;
     }
 
-    globalRacesByDate = globalAllRacesByDate[currentTimelineTab] || {};
-    renderTimelineTabs();
-    renderDayTabsAndSchedules(null, collapseBeforeTime, keepOpenRaceId);
-    updateJumpDay();
+    currentTimelineTab = currentActiveDate
+        ? (globalDateTimelineByDate[currentActiveDate] || (hasUpcoming ? "upcoming" : "past"))
+        : (hasUpcoming ? "upcoming" : "past");
+    currentCalendarMonth = currentActiveDate ? getMonthKey(currentActiveDate) : getAvailableCalendarMonths()[0] || null;
+
+    renderDayTabsAndSchedules(currentActiveDate, collapseBeforeTime, keepOpenRaceId);
     updateAllRiskBadges();
 
     isFirstLoad = false;
@@ -1574,12 +1699,17 @@ function switchSidebarTab(tab) {
 }
 
 function switchMainTab(date) {
-    document.querySelectorAll('#date-tabs .tab-btn').forEach(b => {
-        b.classList.toggle('active', b.innerText === date);
-    });
+    const dates = getSortedActiveDates();
+    const nextDate = findNearestAvailableDate(date, dates);
+    if (!nextDate) return;
+
+    currentActiveDate = nextDate;
+    currentTimelineTab = globalDateTimelineByDate[nextDate] || currentTimelineTab;
+    currentCalendarMonth = getMonthKey(nextDate) || currentCalendarMonth;
     document.querySelectorAll('#schedules-container .tab-content').forEach(c => {
-        c.classList.toggle('active', c.id === `tab-${date}`);
+        c.classList.toggle('active', c.id === `tab-${nextDate}`);
     });
+    renderRaceCalendar();
 }
 
 // Creates the individual prediction buttons (◎, 〇, ▲, △)
@@ -1755,6 +1885,15 @@ async function toggleMark(r_id, h_id, symbol) {
 // --- API CALLS ---
 let logInterval = null;
 
+function appendConsoleLine(message) {
+    const consoleBox = document.getElementById('scrape-console');
+    if (!consoleBox) return;
+    consoleBox.style.display = 'block';
+    const prefix = consoleBox.textContent && consoleBox.textContent.trim() ? '\n' : '';
+    consoleBox.textContent += `${prefix}${message}`;
+    consoleBox.scrollTop = consoleBox.scrollHeight;
+}
+
 async function triggerPost(url) {
     try {
         const res = await fetch(url, { method: 'POST' });
@@ -1817,7 +1956,9 @@ async function refreshUpcomingRacesLite() {
     try {
         const data = await postJson('/api/races/upcoming/refresh', {});
         await refreshDataAndUI();
-        switchTimelineTab('upcoming');
+
+        const nextUpcomingDate = Object.keys(globalAllRacesByDate.upcoming || {}).sort()[0];
+        if (nextUpcomingDate) switchMainTab(nextUpcomingDate);
 
         const failedCount = Array.isArray(data.failed_races) ? data.failed_races.length : 0;
         alert(`Upcoming refresh complete. Races updated: ${data.updated_races || 0}, rows updated: ${data.updated_rows || 0}, failed races: ${failedCount}.`);
@@ -1825,6 +1966,41 @@ async function refreshUpcomingRacesLite() {
         alert(`Upcoming refresh failed: ${err.message}`);
     } finally {
         if (btn) btn.disabled = false;
+    }
+}
+
+async function importDayResultsFromCalendar() {
+    const dateInput = document.getElementById('import-day-date');
+    const targetDate = (dateInput?.value || '').trim();
+    if (!targetDate) {
+        alert('Pick a day first.');
+        return;
+    }
+
+    const proceed = confirm(`Import race results for ${targetDate}?\n\nThe app will prefer history data and fall back to result data.`);
+    if (!proceed) return;
+
+    appendConsoleLine(`[Import] Requested day import for ${targetDate}...`);
+
+    try {
+        const result = await postJson('/api/races/day/import-results', { date: targetDate });
+        await refreshDataAndUI();
+        switchMainTab(targetDate);
+        appendConsoleLine(
+            `[Import] Completed ${result.date}: races_found=${result.races_found}, imported=${result.races_imported}, ` +
+            `updated_entries=${result.updated_entries}, history=${result.sources?.history || 0}, ` +
+            `result=${result.sources?.result || 0}, result_direct=${result.sources?.result_direct || 0}`
+        );
+        alert(
+            `Import complete for ${result.date}.\n` +
+            `Races found: ${result.races_found}\n` +
+            `New races imported: ${result.races_imported}\n` +
+            `Entries updated: ${result.updated_entries}\n` +
+            `Source usage -> history: ${result.sources?.history || 0}, result: ${result.sources?.result || 0}, result_direct: ${result.sources?.result_direct || 0}`
+        );
+    } catch (err) {
+        appendConsoleLine(`[Import] Failed for ${targetDate}: ${err.message}`);
+        alert(`Import failed: ${err.message}`);
     }
 }
 
@@ -1851,7 +2027,7 @@ async function deleteDayData() {
         const result = await postJson('/api/day/delete', { date: targetDate, scope: scope });
         alert(`Done. Races removed: ${result.removed_races}, marks removed: ${result.removed_marks}, horse dict entries removed: ${result.removed_horse_entries}`);
         await refreshDataAndUI();
-        switchTimelineTab(currentTimelineTab, targetDate);
+        switchMainTab(targetDate);
     } catch (err) {
         alert(`Delete failed: ${err.message}`);
     }
@@ -1865,7 +2041,7 @@ async function refreshRaceHistory(event, r_id) {
     try {
         const result = await postJson(`/api/races/${encodeURIComponent(r_id)}/refresh-history`, {});
         await refreshDataAndUI();
-        switchTimelineTab('past', raceDate);
+        if (raceDate) switchMainTab(raceDate);
         alert(`History refreshed for ${result.updated_entries || 0} entries.`);
     } catch (err) {
         alert(`History refresh failed: ${err.message}`);
@@ -2648,9 +2824,7 @@ function jumpToHorse(date, r_id, h_id, timeline = null) {
     document.getElementById('search-suggestions').style.display = 'none';
     document.getElementById('horse-search').value = '';
 
-    // 1. Force the correct Timeline + Date tab open
-    const targetTimeline = timeline || globalRaceTimelineById[r_id] || currentTimelineTab;
-    switchTimelineTab(targetTimeline, date);
+    // 1. Activate the correct day in the calendar-backed schedule.
     switchMainTab(date);
 
     // 2. Expand the specific race if it is collapsed
@@ -2681,98 +2855,6 @@ function jumpToHorse(date, r_id, h_id, timeline = null) {
 // ==========================================
 // --- JUMP TO RACE FEATURE ---
 // ==========================================
-
-function updateJumpDay() {
-    const daySelect = document.getElementById('jump-day');
-    const days = Object.keys(globalRacesByDate).sort();
-    
-    daySelect.innerHTML = '<option value="">Day</option>';
-    days.forEach(day => {
-        const option = document.createElement('option');
-        option.value = day;
-        option.textContent = day;
-        daySelect.appendChild(option);
-    });
-    
-    // Reset other dropdowns
-    document.getElementById('jump-course').innerHTML = '<option value="">Course</option>';
-    document.getElementById('jump-race').innerHTML = '<option value="">Race</option>';
-}
-
-function updateJumpCourse() {
-    const daySelect = document.getElementById('jump-day');
-    const courseSelect = document.getElementById('jump-course');
-    const selectedDay = daySelect.value;
-    
-    if (!selectedDay || !globalRacesByDate[selectedDay]) {
-        courseSelect.innerHTML = '<option value="">Course</option>';
-        document.getElementById('jump-race').innerHTML = '<option value="">Race</option>';
-        return;
-    }
-    
-    const races = globalRacesByDate[selectedDay];
-    const courses = [...new Set(races.map(r => r.place))].sort();
-    
-    courseSelect.innerHTML = '<option value="">Course</option>';
-    courses.forEach(course => {
-        const option = document.createElement('option');
-        option.value = course;
-        option.textContent = course;
-        courseSelect.appendChild(option);
-    });
-    
-    // Reset race dropdown
-    document.getElementById('jump-race').innerHTML = '<option value="">Race</option>';
-}
-
-function updateJumpRace() {
-    const daySelect = document.getElementById('jump-day');
-    const courseSelect = document.getElementById('jump-course');
-    const raceSelect = document.getElementById('jump-race');
-    const selectedDay = daySelect.value;
-    const selectedCourse = courseSelect.value;
-    
-    if (!selectedDay || !selectedCourse || !globalRacesByDate[selectedDay]) {
-        raceSelect.innerHTML = '<option value="">Race</option>';
-        return;
-    }
-    
-    const races = globalRacesByDate[selectedDay].filter(r => r.place === selectedCourse).sort((a, b) => a.race_number - b.race_number);
-    
-    raceSelect.innerHTML = '<option value="">Race</option>';
-    races.forEach(race => {
-        const option = document.createElement('option');
-        option.value = race.race_id;
-        option.textContent = `R${race.race_number} ${race.time || 'TBA'}`;
-        raceSelect.appendChild(option);
-    });
-}
-
-function checkAndJump() {
-    const daySelect = document.getElementById('jump-day');
-    const courseSelect = document.getElementById('jump-course');
-    const raceSelect = document.getElementById('jump-race');
-    const selectedDay = daySelect.value;
-    const selectedRaceId = raceSelect.value;
-    
-    // Only jump if all 3 are selected
-    if (!selectedDay || !selectedRaceId) {
-        return;
-    }
-    
-    // Find the first horse in this race to highlight
-    const races = globalRaceEntries[selectedRaceId];
-    if (!races || races.length === 0) {
-        return;
-    }
-    
-    const firstHorseId = String(races[0].Horse_ID).split('.')[0];
-    jumpToHorse(selectedDay, selectedRaceId, firstHorseId, currentTimelineTab);
-}
-
-function performJump() {
-    checkAndJump();
-}
 
 // Hide search dropdown if the user clicks anywhere else on the screen
 document.addEventListener('click', function(e) {

@@ -57,6 +57,10 @@ class DeleteDayPayload(BaseModel):
     scope: Literal["marks", "entries", "all"]
 
 
+class DayResultsImportPayload(BaseModel):
+    date: str
+
+
 def atomic_write_json(path, payload):
     """Write JSON atomically to avoid partial/corrupt files on interruption."""
     target = Path(path)
@@ -522,6 +526,99 @@ def refresh_upcoming_races():
         "updated_races": updated_races,
         "updated_rows": updated_rows,
         "failed_races": failed_races
+    }
+
+
+@app.post("/api/races/day/import-results")
+def import_day_results(payload: DayResultsImportPayload):
+    try:
+        target_date = datetime.datetime.strptime(payload.date.strip(), "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    log_progress(f"[Import] Starting day results import for {target_date}...")
+
+    race_ids = data_manager.get_race_ids_for_date(target_date)
+    if not race_ids:
+        log_progress(f"[Import] No races found for {target_date}.")
+        raise HTTPException(status_code=404, detail="No races found for the selected day")
+
+    weekend_races = load_cached_races()
+    race_index = {
+        str(r.get("info", {}).get("race_id", "")): i
+        for i, r in enumerate(weekend_races)
+        if str(r.get("info", {}).get("race_id", "")).strip()
+    }
+
+    imported_races = 0
+    updated_entries = 0
+    source_counts = {"history": 0, "result": 0, "result_direct": 0, "none": 0}
+    failed_races = []
+
+    for race_id in race_ids:
+        race_key = str(race_id).strip()
+        if not race_key:
+            continue
+
+        if race_key in race_index:
+            race_obj = weekend_races[race_index[race_key]]
+        else:
+            snap = data_manager.fetch_upcoming_race_snapshot(race_key)
+            if not snap:
+                failed_races.append(race_key)
+                log_progress(f"[Import] Failed to fetch race snapshot for {race_key}.")
+                continue
+
+            race_obj = {
+                "info": snap.get("info", {}),
+                "entries": snap.get("entries", pd.DataFrame()),
+            }
+            weekend_races.append(race_obj)
+            race_index[race_key] = len(weekend_races) - 1
+            imported_races += 1
+            log_progress(f"[Import] Added race {race_key} to cache.")
+
+        entries_df = race_obj.get("entries")
+        if not isinstance(entries_df, pd.DataFrame) or entries_df.empty:
+            failed_races.append(race_key)
+            log_progress(f"[Import] Race {race_key} has no entry data to update.")
+            continue
+
+        history_map, source = data_manager.fetch_race_result_map_prefer_history(race_key)
+        source_key = "result_direct" if source == "result-direct" else source
+        source_counts[source_key] = source_counts.get(source_key, 0) + 1
+        if not history_map:
+            failed_races.append(race_key)
+            log_progress(f"[Import] No history/result rows found for race {race_key}.")
+            continue
+
+        entries_df, changed_rows = apply_history_map_to_race_entries(entries_df.copy(), history_map)
+        race_obj["entries"] = entries_df
+        race_obj.setdefault("info", {})["clean_date"] = str(target_date)
+        race_obj.setdefault("info", {})["history_refreshed"] = race_has_history_data(entries_df)
+        race_obj["info"]["history_refresh_reason"] = "calendar-import"
+        race_obj["info"]["history_refresh_source"] = source
+        race_obj["info"]["history_refreshed_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+        updated_entries += changed_rows
+        log_progress(f"[Import] Race {race_key} updated via {source_key}: {changed_rows} rows.")
+
+    if imported_races or updated_entries:
+        save_cached_races(weekend_races)
+
+    log_progress(
+        f"[Import] Completed {target_date}: found={len(race_ids)} imported={imported_races} "
+        f"updated_rows={updated_entries} history={source_counts.get('history', 0)} "
+        f"result={source_counts.get('result', 0)} result_direct={source_counts.get('result_direct', 0)}"
+    )
+
+    return {
+        "status": "success",
+        "date": str(target_date),
+        "races_found": len(race_ids),
+        "races_imported": imported_races,
+        "updated_entries": updated_entries,
+        "sources": source_counts,
+        "failed_races": failed_races,
     }
 
 @app.post("/api/day/delete")

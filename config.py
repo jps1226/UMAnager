@@ -18,6 +18,8 @@ HORSE_DICT_FILE = DATA_DIR / "horse_names.json"
 REQUEST_TIMEOUT = 5
 REQUEST_RETRIES = 2
 SCRAPE_DELAY = 0.3  # Delay between requests to avoid rate limiting
+UPCOMING_WEEKEND_WEEKS = 3  # Number of upcoming weekend pairs (Sat/Sun) to scan
+UPCOMING_LOOKAHEAD_DAYS = 28  # Rolling upcoming window used for race discovery
 
 # Validation rules
 HORSE_ID_PATTERN = r'^[a-zA-Z0-9]{10}$'  # Netkeiba horse IDs are 10 alphanumeric chars
