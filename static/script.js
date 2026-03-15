@@ -14,7 +14,7 @@ let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 let appConfig = {}; // NEW: Stores app configuration
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
 
-const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Sire", "Dam", "BMS", "Odds", "Fav"];
+const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Sire", "Dam", "BMS", "Odds", "Fav", "Finish"];
 const RACE_COLUMN_META = {
     Shirushi: { label: "Prediction", sortable: true, sortKey: "Shirushi", initialAsc: true },
     BK: { label: "BK", sortable: true, sortKey: "BK", initialAsc: true },
@@ -25,7 +25,8 @@ const RACE_COLUMN_META = {
     Dam: { label: "Dam", sortable: true, sortKey: "Dam", initialAsc: true },
     BMS: { label: "BMS", sortable: true, sortKey: "BMS", initialAsc: true },
     Odds: { label: "Odds", sortable: true, sortKey: "Odds", initialAsc: true },
-    Fav: { label: "Fav", sortable: true, sortKey: "Fav", initialAsc: true }
+    Fav: { label: "Fav", sortable: true, sortKey: "Fav", initialAsc: true },
+    Finish: { label: "Fin", sortable: true, sortKey: "Finish", initialAsc: true }
 };
 
 function normalizeRaceColumnsLayout(layout) {
@@ -60,6 +61,16 @@ function getVisibleRaceColumns() {
 
 function isVoteSortingEnabled() {
     return appConfig.ui?.voteSortingTop ?? true;
+}
+
+function isAutoFetchPastResultsEnabled() {
+    return appConfig.ui?.autoFetchPastResults ?? true;
+}
+
+function raceHasHistoryData(race) {
+    if (!race) return false;
+    if (race.info?.history_refreshed) return true;
+    return Array.isArray(race.entries) && race.entries.some(row => String(row.Finish || '').trim() !== '');
 }
 
 // --- SECURITY: HTML Escaping ---
@@ -796,6 +807,8 @@ function applySortLogic(r_id, col, asc) {
             comparison = comparePrimitiveValues(parseRaceNumber(a.Odds), parseRaceNumber(b.Odds), asc);
         } else if (col === 'Fav') {
             comparison = comparePrimitiveValues(parseRaceNumber(a.Fav), parseRaceNumber(b.Fav), asc);
+        } else if (col === 'Finish') {
+            comparison = comparePrimitiveValues(parseRaceNumber(a.Finish), parseRaceNumber(b.Finish), asc);
         }
 
         if (comparison !== 0) return comparison;
@@ -914,7 +927,8 @@ function buildTableBody(r_id, entries) {
             Dam: `<td>${damStr}</td>`,
             BMS: `<td>${bmsStr}</td>`,
             Odds: `<td>${row.Odds || ""}</td>`,
-            Fav: `<td>${row.Fav || ""}</td>`
+            Fav: `<td>${row.Fav || ""}</td>`,
+            Finish: `<td class="finish-pos finish-pos-${row.Finish || ''}">${row.Finish || ""}</td>`
         };
 
         const orderedCells = getVisibleRaceColumns().map(col => cellHtmlByCol[col] || "").join("");
@@ -1386,8 +1400,8 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
             const clearStyle = countRaceMarks(r_id) > 0 ? "display: inline-block;" : "display: none;";
 
             const localName = localizeRaceName(race.info.race_name);
-            const historyBtnHtml = currentTimelineTab === 'past'
-                ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Refresh this race using keibascraper history table">📜 Update History</button>`
+            const historyBtnHtml = currentTimelineTab === 'past' && !raceHasHistoryData(race)
+                ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Fetch finish positions and result data for this race">📜 Update History</button>`
                 : "";
 
             html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
@@ -2348,6 +2362,7 @@ function showSettingsModal() {
     document.getElementById('setting-weekendWatchlist').checked = appConfig.sidebarTabs?.weekendWatchlist ?? true;
     document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
     document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
+    document.getElementById('setting-autoFetchPastResults').checked = isAutoFetchPastResultsEnabled();
     // Populate formula weight inputs
     const fw = getFormulaWeights();
     document.getElementById('fw-oddsCap').value            = fw.oddsCap;
@@ -2374,6 +2389,7 @@ function resetFormulaWeights() {
 }
 
 async function updateSidebarSettings() {
+    const previousAutoFetchPastResults = isAutoFetchPastResultsEnabled();
     // Update config from checkbox values
     appConfig.sidebarTabs = {
         raceDatabase: document.getElementById('setting-raceDatabase').checked,
@@ -2386,6 +2402,7 @@ async function updateSidebarSettings() {
         ...appConfig.ui,
         betSafetyIndicator: document.getElementById('setting-betSafetyIndicator').checked,
         voteSortingTop: document.getElementById('setting-voteSortingTop').checked,
+        autoFetchPastResults: document.getElementById('setting-autoFetchPastResults').checked,
         formulaWeights: {
             oddsCap:            parseFWInput('fw-oddsCap',            100),
             formMultiplier:     parseFWInput('fw-formMultiplier',     100),
@@ -2406,6 +2423,10 @@ async function updateSidebarSettings() {
     applySidebarSettings();
     updateAllRiskBadges();
     applyRaceTableLayoutSettings();
+
+    if (!previousAutoFetchPastResults && isAutoFetchPastResultsEnabled()) {
+        await refreshDataAndUI();
+    }
 }
 
 function applyRaceTableLayoutSettings() {
@@ -2413,8 +2434,6 @@ function applyRaceTableLayoutSettings() {
         if (!raceSorts[r_id]) {
             raceSorts[r_id] = { col: 'Default', asc: true };
         }
-
-        applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
 
         const thead = document.getElementById(`thead-${r_id}`);
         if (thead) thead.innerHTML = buildTableHeaderRow(r_id);

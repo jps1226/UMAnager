@@ -1,0 +1,125 @@
+History fetch failed for race 202607010101: strptime() argument 1 must be str, not None
+WARNING:  StatReload detected changes in 'data_manager.py'. Reloading...
+History fetch failed for race 202607010101: No valid data found for result with ID 202607010101
+WARNING:  StatReload detected changes in 'debug_result.py'. Reloading...
+WARNING:  StatReload detected changes in 'data_manager.py'. Reloading...
+2026-03-15 07:40:54 WARNING data_manager: History fetch failed for race 202607010101: no result table found on page
+WARNING:  StatReload detected changes in 'data_manager.py'. Reloading...
+2026-03-15 07:45:36 WARNING data_manager: History fetch failed for race 202607010101: no result table found on page
+WARNING:  StatReload detected changes in 'data_manager.py'. Reloading...
+2026-03-15 07:47:33 INFO data_manager: History fetch start for race 202607010101; trying 2 result URLs
+2026-03-15 07:47:33 INFO data_manager: History fetch request for race 202607010101: https://race.netkeiba.com/race/result.html?race_id=202607010101
+2026-03-15 07:47:35 INFO data_manager: History fetch response for race 202607010101: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202607010101 bytes=74642
+2026-03-15 07:47:35 INFO data_manager: History fetch parse summary for race 202607010101: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u4e2d\u4eac1R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:47:35 INFO data_manager: History fetch table samples for race 202607010101: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:47:35 INFO data_manager: History fetch row count for race 202607010101: 10 rows
+2026-03-15 07:47:35 INFO data_manager: History fetch succeeded for race 202607010101: parsed 10 horses
+WARNING:  StatReload detected changes in 'server.py'. Reloading...
+WARNING:  StatReload detected changes in 'server.py'. Reloading...
+2026-03-15 07:59:11 INFO data_manager: History fetch start for race 202609010701; trying 2 result URLs
+2026-03-15 07:59:11 INFO data_manager: History fetch request for race 202609010701: https://race.netkeiba.com/race/result.html?race_id=202609010701
+2026-03-15 07:59:13 INFO data_manager: History fetch response for race 202609010701: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202609010701 bytes=78536
+2026-03-15 07:59:13 INFO data_manager: History fetch parse summary for race 202609010701: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u962a\u795e1R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:13 INFO data_manager: History fetch table samples for race 202609010701: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:13 INFO data_manager: History fetch row count for race 202609010701: 13 rows
+2026-03-15 07:59:13 INFO data_manager: History fetch succeeded for race 202609010701: parsed 13 horses
+2026-03-15 07:59:13 INFO data_manager: History fetch start for race 202606020501; trying 2 result URLs
+2026-03-15 07:59:13 INFO data_manager: History fetch request for race 202606020501: https://race.netkeiba.com/race/result.html?race_id=202606020501
+2026-03-15 07:59:14 INFO data_manager: History fetch response for race 202606020501: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202606020501 bytes=81200
+2026-03-15 07:59:14 INFO data_manager: History fetch parse summary for race 202606020501: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u4e2d\u5c711R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:14 INFO data_manager: History fetch table samples for race 202606020501: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:14 INFO data_manager: History fetch row count for race 202606020501: 15 rows
+2026-03-15 07:59:14 INFO data_manager: History fetch succeeded for race 202606020501: parsed 15 horses
+2026-03-15 07:59:14 INFO data_manager: History fetch start for race 202607010102; trying 2 result URLs
+2026-03-15 07:59:14 INFO data_manager: History fetch request for race 202607010102: https://race.netkeiba.com/race/result.html?race_id=202607010102
+2026-03-15 07:59:16 INFO data_manager: History fetch response for race 202607010102: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202607010102 bytes=82058
+2026-03-15 07:59:16 INFO data_manager: History fetch parse summary for race 202607010102: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u4e2d\u4eac2R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:16 INFO data_manager: History fetch table samples for race 202607010102: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:16 INFO data_manager: History fetch row count for race 202607010102: 16 rows
+2026-03-15 07:59:16 INFO data_manager: History fetch succeeded for race 202607010102: parsed 16 horses
+2026-03-15 07:59:16 INFO data_manager: History fetch start for race 202609010702; trying 2 result URLs
+2026-03-15 07:59:16 INFO data_manager: History fetch request for race 202609010702: https://race.netkeiba.com/race/result.html?race_id=202609010702
+2026-03-15 07:59:18 INFO data_manager: History fetch response for race 202609010702: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202609010702 bytes=82120
+2026-03-15 07:59:18 INFO data_manager: History fetch parse summary for race 202609010702: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u962a\u795e2R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:18 INFO data_manager: History fetch table samples for race 202609010702: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:18 INFO data_manager: History fetch row count for race 202609010702: 16 rows
+2026-03-15 07:59:18 INFO data_manager: History fetch succeeded for race 202609010702: parsed 16 horses
+2026-03-15 07:59:18 INFO data_manager: History fetch start for race 202606020502; trying 2 result URLs
+2026-03-15 07:59:18 INFO data_manager: History fetch request for race 202606020502: https://race.netkeiba.com/race/result.html?race_id=202606020502
+2026-03-15 07:59:20 INFO data_manager: History fetch response for race 202606020502: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202606020502 bytes=82502
+2026-03-15 07:59:20 INFO data_manager: History fetch parse summary for race 202606020502: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u4e2d\u5c712R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:20 INFO data_manager: History fetch table samples for race 202606020502: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:20 INFO data_manager: History fetch row count for race 202606020502: 16 rows
+2026-03-15 07:59:20 INFO data_manager: History fetch succeeded for race 202606020502: parsed 16 horses
+2026-03-15 07:59:20 INFO data_manager: History fetch start for race 202607010103; trying 2 result URLs
+2026-03-15 07:59:20 INFO data_manager: History fetch request for race 202607010103: https://race.netkeiba.com/race/result.html?race_id=202607010103
+2026-03-15 07:59:21 INFO data_manager: History fetch response for race 202607010103: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202607010103 bytes=78615
+2026-03-15 07:59:21 INFO data_manager: History fetch parse summary for race 202607010103: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u4e2d\u4eac3R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:21 INFO data_manager: History fetch table samples for race 202607010103: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:21 INFO data_manager: History fetch row count for race 202607010103: 13 rows
+2026-03-15 07:59:21 INFO data_manager: History fetch succeeded for race 202607010103: parsed 13 horses
+2026-03-15 07:59:21 INFO data_manager: History fetch start for race 202609010703; trying 2 result URLs
+2026-03-15 07:59:21 INFO data_manager: History fetch request for race 202609010703: https://race.netkeiba.com/race/result.html?race_id=202609010703
+2026-03-15 07:59:23 INFO data_manager: History fetch response for race 202609010703: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202609010703 bytes=78586
+2026-03-15 07:59:23 INFO data_manager: History fetch parse summary for race 202609010703: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u962a\u795e3R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:23 INFO data_manager: History fetch table samples for race 202609010703: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:23 INFO data_manager: History fetch row count for race 202609010703: 13 rows
+2026-03-15 07:59:23 INFO data_manager: History fetch succeeded for race 202609010703: parsed 13 horses
+2026-03-15 07:59:23 INFO data_manager: History fetch start for race 202606020503; trying 2 result URLs
+2026-03-15 07:59:23 INFO data_manager: History fetch request for race 202606020503: https://race.netkeiba.com/race/result.html?race_id=202606020503
+2026-03-15 07:59:25 INFO data_manager: History fetch response for race 202606020503: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202606020503 bytes=82060
+2026-03-15 07:59:25 INFO data_manager: History fetch parse summary for race 202606020503: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u4e2d\u5c713R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:25 INFO data_manager: History fetch table samples for race 202606020503: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:25 INFO data_manager: History fetch row count for race 202606020503: 16 rows
+2026-03-15 07:59:25 INFO data_manager: History fetch succeeded for race 202606020503: parsed 16 horses
+2026-03-15 07:59:25 INFO data_manager: History fetch start for race 202607010104; trying 2 result URLs
+2026-03-15 07:59:25 INFO data_manager: History fetch request for race 202607010104: https://race.netkeiba.com/race/result.html?race_id=202607010104
+2026-03-15 07:59:27 INFO data_manager: History fetch response for race 202607010104: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202607010104 bytes=82350
+2026-03-15 07:59:27 INFO data_manager: History fetch parse summary for race 202607010104: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u4e2d\u4eac4R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:27 INFO data_manager: History fetch table samples for race 202607010104: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:27 INFO data_manager: History fetch row count for race 202607010104: 16 rows
+2026-03-15 07:59:27 INFO data_manager: History fetch succeeded for race 202607010104: parsed 16 horses
+2026-03-15 07:59:27 INFO data_manager: History fetch start for race 202609010704; trying 2 result URLs
+2026-03-15 07:59:27 INFO data_manager: History fetch request for race 202609010704: https://race.netkeiba.com/race/result.html?race_id=202609010704
+2026-03-15 07:59:28 INFO data_manager: History fetch response for race 202609010704: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202609010704 bytes=84771
+2026-03-15 07:59:28 INFO data_manager: History fetch parse summary for race 202609010704: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u962a\u795e4R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:28 INFO data_manager: History fetch table samples for race 202609010704: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:28 INFO data_manager: History fetch row count for race 202609010704: 18 rows
+2026-03-15 07:59:28 INFO data_manager: History fetch succeeded for race 202609010704: parsed 18 horses
+2026-03-15 07:59:28 INFO data_manager: History fetch start for race 202606020504; trying 2 result URLs
+2026-03-15 07:59:28 INFO data_manager: History fetch request for race 202606020504: https://race.netkeiba.com/race/result.html?race_id=202606020504
+2026-03-15 07:59:30 INFO data_manager: History fetch response for race 202606020504: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202606020504 bytes=82421
+2026-03-15 07:59:30 INFO data_manager: History fetch parse summary for race 202606020504: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u4e2d\u5c714R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:30 INFO data_manager: History fetch table samples for race 202606020504: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:30 INFO data_manager: History fetch row count for race 202606020504: 16 rows
+2026-03-15 07:59:30 INFO data_manager: History fetch succeeded for race 202606020504: parsed 16 horses
+2026-03-15 07:59:30 INFO data_manager: History fetch start for race 202607010105; trying 2 result URLs
+2026-03-15 07:59:30 INFO data_manager: History fetch request for race 202607010105: https://race.netkeiba.com/race/result.html?race_id=202607010105
+2026-03-15 07:59:32 INFO data_manager: History fetch response for race 202607010105: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202607010105 bytes=85153
+2026-03-15 07:59:32 INFO data_manager: History fetch parse summary for race 202607010105: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u4e2d\u4eac5R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:32 INFO data_manager: History fetch table samples for race 202607010105: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:32 INFO data_manager: History fetch row count for race 202607010105: 18 rows
+2026-03-15 07:59:32 INFO data_manager: History fetch succeeded for race 202607010105: parsed 18 horses
+2026-03-15 07:59:32 INFO data_manager: History fetch start for race 202609010705; trying 2 result URLs
+2026-03-15 07:59:32 INFO data_manager: History fetch request for race 202609010705: https://race.netkeiba.com/race/result.html?race_id=202609010705
+2026-03-15 07:59:38 INFO data_manager: History fetch response for race 202609010705: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202609010705 bytes=84853
+2026-03-15 07:59:38 INFO data_manager: History fetch parse summary for race 202609010705: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u962a\u795e5R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:38 INFO data_manager: History fetch table samples for race 202609010705: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:38 INFO data_manager: History fetch row count for race 202609010705: 18 rows
+2026-03-15 07:59:38 INFO data_manager: History fetch succeeded for race 202609010705: parsed 18 horses
+2026-03-15 07:59:38 INFO data_manager: History fetch start for race 202606020505; trying 2 result URLs
+2026-03-15 07:59:38 INFO data_manager: History fetch request for race 202606020505: https://race.netkeiba.com/race/result.html?race_id=202606020505
+2026-03-15 07:59:40 INFO data_manager: History fetch response for race 202606020505: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202606020505 bytes=82279
+2026-03-15 07:59:40 INFO data_manager: History fetch parse summary for race 202606020505: title='\uff13\u6b73\u672a\u52dd\u5229 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u4e2d\u5c715R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:40 INFO data_manager: History fetch table samples for race 202606020505: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:40 INFO data_manager: History fetch row count for race 202606020505: 16 rows
+2026-03-15 07:59:40 INFO data_manager: History fetch succeeded for race 202606020505: parsed 16 horses
+2026-03-15 07:59:40 INFO data_manager: History fetch start for race 202607010106; trying 2 result URLs
+2026-03-15 07:59:40 INFO data_manager: History fetch request for race 202607010106: https://race.netkeiba.com/race/result.html?race_id=202607010106
+2026-03-15 07:59:42 INFO data_manager: History fetch response for race 202607010106: status=200 final_url=https://race.netkeiba.com/race/result.html?race_id=202607010106 bytes=82534
+2026-03-15 07:59:42 INFO data_manager: History fetch parse summary for race 202607010106: title='\uff13\u6b73\uff11\u52dd\u30af\u30e9\u30b9 \u7d50\u679c\u30fb\u6255\u623b | 2026\u5e743\u670814\u65e5 \u4e2d\u4eac6R \u30ec\u30fc\u30b9\u60c5\u5831(JRA) - netkeiba' tables=8 all_result=True race_table=True
+2026-03-15 07:59:42 INFO data_manager: History fetch table samples for race 202607010106: ['RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All', 'Payout_Detail_Table', 'Payout_Detail_Table', 'RaceCommon_Table.Corner_Num', '<no-class>']
+2026-03-15 07:59:42 INFO data_manager: History fetch row count for race 202607010106: 16 rows
+2026-03-15 07:59:42 INFO data_manager: History fetch succeeded for race 202607010106: parsed 16 horses
+2026-03-15 07:59:42 INFO data_manager: History fetch start for race 202609010706; trying 2 result URLs
+2026-03-15 07:59:42 INFO data_manager: History fetch request for race 202609010706: https://race.netkeiba.com/race/result.html?race_id=202609010706

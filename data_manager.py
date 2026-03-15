@@ -487,83 +487,101 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
     return weekend_races
 
 def fetch_race_history_by_id(race_id):
-    """Fetch finalized race history data and map it by horse_id."""
-    try:
-        result = keibascraper.load("result", race_id)
-    except Exception as e:
-        logger.warning(f"History fetch failed for race {race_id}: {e}")
-        return {}
+    """Fetch finalized race result data and map it by horse_id.
 
-    history_rows = None
-    if isinstance(result, tuple) and len(result) >= 2:
-        history_rows = result[1]
-    elif isinstance(result, list):
-        history_rows = result
-    elif isinstance(result, pd.DataFrame):
-        history_rows = result.to_dict(orient="records")
-
-    if not history_rows:
-        return {}
-
-    df = pd.DataFrame(history_rows)
-    if df.empty:
-        return {}
-
-    columns_by_lower = {str(c).strip().lower(): c for c in df.columns}
-
-    def pick_col(candidates):
-        for candidate in candidates:
-            key = candidate.strip().lower()
-            if key in columns_by_lower:
-                return columns_by_lower[key]
-        return None
-
-    horse_id_col = pick_col(["horse_id", "horseid", "horse id", "horseID"])
-    horse_url_col = pick_col(["horse_url", "horseurl", "horse_link", "url"])
-    odds_col = pick_col(["win_odds", "odds", "単勝オッズ", "tan_odds"])
-    fav_col = pick_col(["popularity", "pop", "fav", "人気", "ninki"])
-    finish_col = pick_col(["rank", "result", "finish", "order_of_finish", "着順"])
-
+    Scrapes the race.netkeiba.com result page directly because the keibascraper
+    parser/config no longer matches the live result page structure.
+    """
     history_map = {}
-    for _, row in df.iterrows():
-        horse_id = ""
 
-        if horse_id_col:
-            horse_id = str(row.get(horse_id_col, "")).replace(".0", "").strip()
+    def clean_text(node):
+        if node is None:
+            return ""
+        value = node.get_text(strip=True)
+        return "" if value.lower() == "nan" else value
 
-        if (not horse_id or horse_id.lower() == "nan") and horse_url_col:
-            url_val = str(row.get(horse_url_col, ""))
-            m = re.search(r"/([a-zA-Z0-9]{10})/?", url_val)
-            if m:
-                horse_id = m.group(1)
+    result_urls = [
+        f"https://race.netkeiba.com/race/result.html?race_id={race_id}",
+        f"https://race.netkeiba.com/race/result.html?race_id={race_id}&rf=race_list",
+    ]
 
-        if not horse_id or horse_id.lower() == "nan":
+    logger.info(f"History fetch start for race {race_id}; trying {len(result_urls)} result URLs")
+
+    for url in result_urls:
+        try:
+            logger.info(f"History fetch request for race {race_id}: {url}")
+            resp = safe_request(url, timeout=20, retries=2)
+            if resp is None:
+                logger.warning(f"History fetch request returned no response for race {race_id}: {url}")
+                continue
+            resp.encoding = resp.apparent_encoding
+            logger.info(
+                "History fetch response for race %s: status=%s final_url=%s bytes=%s",
+                race_id,
+                getattr(resp, "status_code", "?"),
+                getattr(resp, "url", url),
+                len(resp.text or "")
+            )
+        except Exception as e:
+            logger.warning(f"History fetch failed for race {race_id}: {e}")
             continue
 
-        odds_val = ""
-        fav_val = ""
-        finish_val = ""
+        soup = BeautifulSoup(resp.text, "html.parser")
+        page_title = soup.title.get_text(" ", strip=True) if soup.title else ""
+        all_tables = soup.find_all("table")
+        logger.info(
+            "History fetch parse summary for race %s: title=%r tables=%s all_result=%s race_table=%s",
+            race_id,
+            page_title,
+            len(all_tables),
+            bool(soup.select_one("table#All_Result_Table")),
+            bool(soup.select_one("table.RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All"))
+        )
+        if all_tables:
+            sample_classes = [".".join(tbl.get("class", [])) or "<no-class>" for tbl in all_tables[:5]]
+            logger.info(f"History fetch table samples for race {race_id}: {sample_classes}")
 
-        if odds_col:
-            odds_val = str(row.get(odds_col, "")).strip()
-            if odds_val.lower() == "nan":
-                odds_val = ""
+        result_table = soup.select_one("table#All_Result_Table")
+        if result_table is None:
+            result_table = soup.select_one("table.RaceTable01.RaceCommon_Table.ResultRefund.Table_Show_All")
+        if result_table is None:
+            body_preview = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))[:240]
+            logger.info(f"History fetch no matching result table for race {race_id}; page preview: {body_preview}")
+            continue
 
-        if fav_col:
-            fav_val = str(row.get(fav_col, "")).strip()
-            if fav_val.lower() == "nan":
-                fav_val = ""
+        rows = result_table.select("tbody tr.HorseList")
+        logger.info(f"History fetch row count for race {race_id}: {len(rows)} rows")
+        if not rows:
+            tbody_preview = re.sub(r"\s+", " ", result_table.get_text(" ", strip=True))[:240]
+            logger.info(f"History fetch found table but no HorseList rows for race {race_id}; table preview: {tbody_preview}")
+            continue
 
-        if finish_col:
-            finish_val = str(row.get(finish_col, "")).strip()
-            if finish_val.lower() == "nan":
-                finish_val = ""
+        for row in rows:
+            horse_link = row.select_one("td.Horse_Info a[href*='/horse/']")
+            if horse_link is None:
+                continue
 
-        history_map[horse_id] = {
-            "odds": odds_val,
-            "fav": fav_val,
-            "finish": finish_val
-        }
+            href = horse_link.get("href", "")
+            match = re.search(r"/horse/([a-zA-Z0-9]+)", href)
+            if not match:
+                continue
+
+            horse_id = match.group(1)
+            finish_val = clean_text(row.select_one("td.Result_Num .Rank"))
+            fav_val = clean_text(row.select_one("td.Odds.Txt_C .OddsPeople"))
+            odds_val = clean_text(row.select_one("td.Odds.Txt_R .Odds_Ninki, td.Odds.Txt_R span"))
+
+            history_map[horse_id] = {
+                "finish": finish_val,
+                "odds": odds_val,
+                "fav": fav_val,
+            }
+
+        if history_map:
+            logger.info(f"History fetch succeeded for race {race_id}: parsed {len(history_map)} horses")
+            return history_map
+
+    logger.warning(f"History fetch failed for race {race_id}: no result table found on race.netkeiba.com")
 
     return history_map
 

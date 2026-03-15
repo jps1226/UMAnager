@@ -9,6 +9,10 @@
         "riskSlider": 35,
         "raceTableColumns": [
             {
+                "key": "Finish",
+                "visible": true
+            },
+            {
                 "key": "Fav",
                 "visible": true
             },
@@ -49,6 +53,15 @@
                 "visible": true
             }
         ],
-        "betSafetyIndicator": true
+        "betSafetyIndicator": true,
+        "voteSortingTop": true,
+        "autoFetchPastResults": true,
+        "formulaWeights": {
+            "oddsCap": 100,
+            "formMultiplier": 100,
+            "freshnessBonus": 3,
+            "freshnessBreakeven": 10,
+            "pedigreeMultiplier": 30
+        }
     }
 }

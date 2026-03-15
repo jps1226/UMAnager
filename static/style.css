@@ -446,6 +446,12 @@ th.sortable:hover {
     color: #000;
 }
 
+/* --- FINISH POSITION COLUMN --- */
+td.finish-pos { text-align: center; font-weight: bold; min-width: 36px; }
+td.finish-pos-1 { color: #ffd700; }
+td.finish-pos-2 { color: #c0c0c0; }
+td.finish-pos-3 { color: #cd7f32; }
+
 .btn-history-refresh {
     background: transparent;
     border: 1px solid #1dd1a1;

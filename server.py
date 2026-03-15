@@ -22,6 +22,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level=logging.INFO,
+)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
@@ -373,7 +378,7 @@ def load_config():
     """Load config from file, return defaults if missing."""
     defaults = {
         "sidebarTabs": {"favorites": True, "watchlist": True, "weekendWatchlist": True},
-        "ui": {"riskSlider": 50}
+        "ui": {"riskSlider": 50, "autoFetchPastResults": True}
     }
     return safe_read_json(CONFIG_FILE, defaults)
 
@@ -411,8 +416,18 @@ def get_races():
             "upcoming_races_by_date": {},
             "past_races_by_date": {}
         }
-        
+
+    app_cfg = load_config()
     weekend_races = load_cached_races()
+    auto_history_enabled = app_cfg.get("ui", {}).get("autoFetchPastResults", True)
+    if auto_history_enabled:
+        auto_refreshed_races, auto_refreshed_entries = refresh_missing_past_race_history(weekend_races)
+        if auto_refreshed_races:
+            logger.info(
+                "Auto history refresh complete: refreshed %s races and %s entries",
+                auto_refreshed_races,
+                auto_refreshed_entries,
+            )
     tracked_ids = load_ids(TRACKING_FILE)
     watchlist_ids = load_ids(WATCHLIST_FILE)
     
@@ -462,12 +477,40 @@ def get_races():
         "past_races_by_date": past_races_by_date
     }
 
-@app.post("/api/races/{race_id}/refresh-history")
-def refresh_race_history(race_id: str):
-    weekend_races = load_cached_races()
-    if not weekend_races:
-        raise HTTPException(status_code=404, detail="No cached races found")
+def race_has_history_data(entries_df):
+    if entries_df is None or entries_df.empty or "Finish" not in entries_df.columns:
+        return False
+    return any(force_str(val) for val in entries_df["Finish"].tolist())
 
+def apply_history_map_to_race_entries(entries_df, history_map):
+    if "Finish" not in entries_df.columns:
+        entries_df["Finish"] = ""
+
+    updated_count = 0
+    for idx, row in entries_df.iterrows():
+        horse_id = force_str(row.get("Horse_ID"))
+        if horse_id not in history_map:
+            continue
+
+        hist = history_map[horse_id]
+        row_changed = False
+
+        if hist.get("odds", "") != "" and force_str(row.get("Odds")) != force_str(hist.get("odds", "")):
+            entries_df.at[idx, "Odds"] = hist.get("odds", "")
+            row_changed = True
+        if hist.get("fav", "") != "" and force_str(row.get("Fav")) != force_str(hist.get("fav", "")):
+            entries_df.at[idx, "Fav"] = hist.get("fav", "")
+            row_changed = True
+        if hist.get("finish", "") != "" and force_str(row.get("Finish")) != force_str(hist.get("finish", "")):
+            entries_df.at[idx, "Finish"] = hist.get("finish", "")
+            row_changed = True
+
+        if row_changed:
+            updated_count += 1
+
+    return entries_df, updated_count
+
+def refresh_cached_race_history(weekend_races, race_id: str, reason: str = "manual"):
     target_index = None
     for i, race in enumerate(weekend_races):
         if str(race.get("info", {}).get("race_id", "")) == str(race_id):
@@ -483,24 +526,61 @@ def refresh_race_history(race_id: str):
 
     race_obj = weekend_races[target_index]
     entries_df = race_obj["entries"].copy()
-
-    updated_count = 0
-    for idx, row in entries_df.iterrows():
-        horse_id = force_str(row.get("Horse_ID"))
-        if horse_id in history_map:
-            hist = history_map[horse_id]
-            if hist.get("odds", "") != "":
-                entries_df.at[idx, "Odds"] = hist.get("odds", "")
-            if hist.get("fav", "") != "":
-                entries_df.at[idx, "Fav"] = hist.get("fav", "")
-            if hist.get("finish", "") != "":
-                entries_df.at[idx, "Finish"] = hist.get("finish", "")
-            updated_count += 1
+    entries_df, updated_count = apply_history_map_to_race_entries(entries_df, history_map)
+    has_history_data = race_has_history_data(entries_df)
 
     race_obj["entries"] = entries_df
-    race_obj["info"]["history_refreshed"] = True
+    race_obj["info"]["history_refreshed"] = has_history_data
+    race_obj["info"]["history_refresh_reason"] = reason
     race_obj["info"]["history_refreshed_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+    return updated_count
 
+def refresh_missing_past_race_history(weekend_races):
+    races_by_date = {}
+    for race in weekend_races:
+        info = race.get("info", {})
+        date_str = info.get("clean_date", "Unknown Date")
+        races_by_date.setdefault(date_str, []).append({"info": info, "entries": []})
+
+    _, past_races_by_date = split_races_by_day_completion(races_by_date)
+    past_dates = set(past_races_by_date.keys())
+    refreshed_races = 0
+    refreshed_entries = 0
+    changed = False
+
+    for race in weekend_races:
+        info = race.get("info", {})
+        date_str = info.get("clean_date", "Unknown Date")
+        race_id = str(info.get("race_id", "")).strip()
+        entries_df = race.get("entries")
+
+        if date_str not in past_dates or not race_id or entries_df is None or entries_df.empty:
+            continue
+        if info.get("history_refreshed") or race_has_history_data(entries_df):
+            continue
+
+        try:
+            updated_count = refresh_cached_race_history(weekend_races, race_id, reason="auto")
+        except HTTPException as exc:
+            logger.info("Auto history refresh skipped for race %s: %s", race_id, exc.detail)
+            continue
+
+        refreshed_races += 1
+        refreshed_entries += updated_count
+        changed = True
+
+    if changed:
+        save_cached_races(weekend_races)
+
+    return refreshed_races, refreshed_entries
+
+@app.post("/api/races/{race_id}/refresh-history")
+def refresh_race_history(race_id: str):
+    weekend_races = load_cached_races()
+    if not weekend_races:
+        raise HTTPException(status_code=404, detail="No cached races found")
+
+    updated_count = refresh_cached_race_history(weekend_races, race_id, reason="manual")
     save_cached_races(weekend_races)
     return {"status": "success", "updated_entries": updated_count}
 
