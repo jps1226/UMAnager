@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import HTMLResponse
-from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import asyncio
 import pickle
@@ -10,7 +9,6 @@ import re
 import datetime
 import subprocess
 import signal
-import zipfile
 import tempfile
 import threading
 from pathlib import Path
@@ -20,6 +18,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 import data_manager
 import config
+from routers.maintenance import router as maintenance_router
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.include_router(maintenance_router)
 
 # Use paths from config
 CACHE_FILE = config.CACHE_FILE
@@ -40,8 +40,6 @@ MARKS_FILE = config.MARKS_FILE
 TRACKING_FILE = config.TRACKING_FILE
 WATCHLIST_FILE = config.WATCHLIST_FILE
 HORSE_DICT_FILE = config.HORSE_DICT_FILE
-DATA_DIR = config.DATA_DIR
-BACKUP_DIR = Path(__file__).parent / "backups"
 
 # --- NEW: CONSOLE LOGGING MEMORY ---
 scrape_logs = []
@@ -284,49 +282,6 @@ async def run_scrape(payload: ScrapeRequest):
 def get_scrape_log():
     with scrape_logs_lock:
         return {"logs": list(scrape_logs)}
-
-@app.post("/api/cache/clear")
-def clear_cache():
-    if os.path.exists(CACHE_FILE): os.remove(CACHE_FILE)
-    return {"status": "success"}
-
-@app.post("/api/dict/wipe")
-def wipe_dict():
-    if os.path.exists(HORSE_DICT_FILE): os.remove(HORSE_DICT_FILE)
-    return {"status": "success"}
-
-@app.post("/api/data/backup")
-def create_data_backup():
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = f"umanager_data_backup_{stamp}.zip"
-    backup_path = BACKUP_DIR / backup_name
-
-    with zipfile.ZipFile(backup_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for file_path in DATA_DIR.rglob("*"):
-            if not file_path.is_file():
-                continue
-            if file_path.parent == BACKUP_DIR:
-                continue
-            if file_path.name.lower() == "requirements.txt" and file_path.parent == DATA_DIR:
-                continue
-
-            arcname = file_path.relative_to(DATA_DIR.parent)
-            zf.write(file_path, arcname=arcname)
-
-    return {
-        "status": "success",
-        "filename": backup_name,
-        "download_url": f"/api/data/backup/{backup_name}"
-    }
-
-@app.get("/api/data/backup/{backup_name}")
-def download_data_backup(backup_name: str):
-    safe_name = Path(backup_name).name
-    target = BACKUP_DIR / safe_name
-    if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="Backup not found")
-    return FileResponse(path=str(target), filename=safe_name, media_type="application/zip")
 
 # --- PEDIGREE LISTS & SNIPER ENDPOINTS ---
 @app.get("/api/lists")
