@@ -2604,6 +2604,320 @@ function toggleVotingOrePro() {
     setVotingOreProCollapsed(!container.classList.contains('orepro-collapsed'));
 }
 
+let oreproCompanionWindow = null;
+const OREPRO_COMPANION_WINDOW_NAME = 'OreProCompanionWindow';
+
+function isOreProCompanionOpen() {
+    return !!(oreproCompanionWindow && !oreproCompanionWindow.closed);
+}
+
+function openOreProCompanion() {
+    const win = window.open(OREPRO_URL, OREPRO_COMPANION_WINDOW_NAME, 'width=1320,height=920,menubar=no,toolbar=no,location=yes,status=no');
+    if (!win) {
+        setOreProSessionStatus('Popup blocked. Allow popups for localhost, then retry Open OrePro.', 'warn');
+        return;
+    }
+    oreproCompanionWindow = win;
+    setOreProSessionStatus('OrePro companion opened. Place bets there, then use Sync Results here.', 'ok');
+}
+
+function focusOreProCompanion() {
+    if (isOreProCompanionOpen()) {
+        oreproCompanionWindow.focus();
+        setOreProSessionStatus('Focused OrePro companion window.', 'ok');
+        return;
+    }
+    openOreProCompanion();
+}
+
+function setOreProSessionStatus(message, mode = 'info') {
+    const statusEl = document.getElementById('orepro-session-status');
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.classList.remove('ok', 'warn', 'error');
+    if (mode === 'ok' || mode === 'warn' || mode === 'error') {
+        statusEl.classList.add(mode);
+    }
+}
+
+function renderOreProSyncPayload(payload) {
+    const out = document.getElementById('orepro-sync-results');
+    if (!out) return;
+
+    const lines = Array.isArray(payload?.summaryLines) ? payload.summaryLines : [];
+    const yenVals = Array.isArray(payload?.yenValues) ? payload.yenValues : [];
+    const fetchedAt = escapeHtml(payload?.fetchedAt || payload?.updatedAt || '');
+    const status = escapeHtml(payload?.status || 'idle');
+    const message = escapeHtml(payload?.message || 'No sync run yet.');
+    const loginLabel = payload?.loggedIn ? 'yes' : 'no';
+
+    out.innerHTML = `
+        <div class="orepro-sync-badges">
+            <span class="orepro-chip">status: ${status}</span>
+            <span class="orepro-chip">logged-in: ${loginLabel}</span>
+            <span class="orepro-chip">updated: ${fetchedAt || '-'}</span>
+        </div>
+        <div class="orepro-sync-message">${message}</div>
+        <div class="orepro-sync-columns">
+            <div>
+                <div class="orepro-sync-title">Detected money values</div>
+                <div class="orepro-sync-list">${yenVals.length ? yenVals.map(v => `<span class="orepro-money">${escapeHtml(v)}円</span>`).join(' ') : 'none'}</div>
+            </div>
+            <div>
+                <div class="orepro-sync-title">Summary lines</div>
+                <div class="orepro-sync-list">${lines.length ? lines.map(line => `<div>${escapeHtml(line)}</div>`).join('') : 'none'}</div>
+            </div>
+        </div>
+    `;
+}
+
+async function loadOreProSessionStatus() {
+    try {
+        const [sessionRes, lastRes] = await Promise.all([
+            fetch('/api/orepro/session'),
+            fetch('/api/orepro/results/last'),
+        ]);
+        const session = await sessionRes.json();
+        const last = await lastRes.json();
+
+        const meta = document.getElementById('orepro-sync-meta');
+        if (meta) {
+            if (session.configured) {
+                const stamp = session.updatedAt ? ` (updated ${escapeHtml(session.updatedAt)})` : '';
+                meta.textContent = `Cookie saved: ${session.masked || 'set'}${stamp}`;
+            } else {
+                meta.textContent = 'No cookie saved yet.';
+            }
+        }
+
+        renderOreProSyncPayload(last || {});
+    } catch (err) {
+        setOreProSessionStatus(`Failed loading OrePro sync state: ${err?.message || err}`, 'warn');
+    }
+}
+
+async function saveOreProSessionCookie() {
+    const input = document.getElementById('orepro-nkauth-input');
+    const value = String(input?.value || '').trim();
+    if (!value) {
+        setOreProSessionStatus('Paste your current nkauth cookie value first.', 'warn');
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/orepro/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nkauth: value }),
+        });
+        const data = await res.json();
+        if (data.status !== 'success') {
+            throw new Error(data.message || 'Failed to save cookie');
+        }
+        if (input) input.value = '';
+        setOreProSessionStatus('nkauth cookie saved. You can now sync post-race results.', 'ok');
+        await loadOreProSessionStatus();
+    } catch (err) {
+        setOreProSessionStatus(`Could not save nkauth cookie: ${err?.message || err}`, 'error');
+    }
+}
+
+async function clearOreProSessionCookie() {
+    try {
+        await fetch('/api/orepro/session/clear', { method: 'POST' });
+        setOreProSessionStatus('Stored nkauth cookie cleared.', 'warn');
+        await loadOreProSessionStatus();
+    } catch (err) {
+        setOreProSessionStatus(`Could not clear nkauth cookie: ${err?.message || err}`, 'error');
+    }
+}
+
+async function syncOreProResults() {
+    setOreProSessionStatus('Syncing OrePro results with saved nkauth cookie...', 'warn');
+    try {
+        const res = await fetch('/api/orepro/results/sync', { method: 'POST' });
+        const data = await res.json();
+        renderOreProSyncPayload(data);
+        if (data.status === 'success') {
+            setOreProSessionStatus('OrePro results synced.', 'ok');
+        } else {
+            setOreProSessionStatus(data.message || 'OrePro sync finished with warnings.', 'warn');
+        }
+    } catch (err) {
+        setOreProSessionStatus(`OrePro sync failed: ${err?.message || err}`, 'error');
+    }
+}
+
+let oreproDiagInitialized = false;
+let oreproDiagLines = [];
+let oreproLoginHelperPoll = null;
+let oreproFrameLoadTimes = [];
+let oreproLoopHandled = false;
+
+function logOreProDiagnostic(message, level = 'INFO') {
+    const stamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+    const line = `[${stamp}] [${level}] ${message}`;
+    oreproDiagLines.push(line);
+    if (oreproDiagLines.length > 400) {
+        oreproDiagLines = oreproDiagLines.slice(-400);
+    }
+
+    const wrap = document.getElementById('orepro-diagnostics-wrap');
+    const logEl = document.getElementById('orepro-diagnostics-log');
+    if (wrap) wrap.style.display = 'block';
+    if (logEl) {
+        logEl.textContent = oreproDiagLines.join('\n');
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+}
+
+function copyOreProDiagnostics() {
+    const fullLog = oreproDiagLines.join('\n');
+    if (!fullLog.trim()) return;
+
+    if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(fullLog).then(() => {
+            logOreProDiagnostic('Diagnostics copied to clipboard.', 'OK');
+        }).catch(err => {
+            logOreProDiagnostic(`Clipboard copy failed: ${err?.message || err}`, 'WARN');
+        });
+        return;
+    }
+
+    logOreProDiagnostic('Clipboard API not available in this browser context.', 'WARN');
+}
+
+async function runOreProDiagnostics() {
+    const frame = document.getElementById('live-orepro-iframe');
+    const statusEl = document.getElementById('orepro-session-status');
+
+    logOreProDiagnostic('Starting OrePro diagnostics run...');
+    logOreProDiagnostic(`UserAgent: ${navigator.userAgent}`);
+    logOreProDiagnostic(`navigator.cookieEnabled: ${navigator.cookieEnabled}`);
+    logOreProDiagnostic(`document.requestStorageAccessFor available: ${typeof document.requestStorageAccessFor === 'function'}`);
+    logOreProDiagnostic(`document.requestStorageAccess available: ${typeof document.requestStorageAccess === 'function'}`);
+    logOreProDiagnostic(`document.hasStorageAccess available: ${typeof document.hasStorageAccess === 'function'}`);
+
+    try {
+        document.cookie = 'umanager_orepro_diag=1; path=/; max-age=300; SameSite=Lax';
+        const cookieReadable = document.cookie.includes('umanager_orepro_diag=1');
+        logOreProDiagnostic(`First-party test cookie readable: ${cookieReadable}`);
+    } catch (err) {
+        logOreProDiagnostic(`First-party test cookie write/read failed: ${err?.message || err}`, 'WARN');
+    }
+
+    if (typeof document.hasStorageAccess === 'function') {
+        try {
+            const hasAccess = await document.hasStorageAccess();
+            logOreProDiagnostic(`document.hasStorageAccess(): ${hasAccess}`);
+        } catch (err) {
+            logOreProDiagnostic(`document.hasStorageAccess() error: ${err?.message || err}`, 'WARN');
+        }
+    }
+
+    if (frame) {
+        logOreProDiagnostic(`iframe src: ${frame.src || '<empty>'}`);
+        try {
+            const href = frame.contentWindow?.location?.href;
+            logOreProDiagnostic(`iframe contentWindow.location.href readable: ${!!href}`);
+        } catch (err) {
+            logOreProDiagnostic('iframe document is cross-origin (expected): cannot inspect login DOM from parent.', 'WARN');
+        }
+    }
+
+    if (statusEl) {
+        statusEl.textContent = 'Diagnostics complete. Use Copy Log and share it if you want deeper troubleshooting.';
+        statusEl.classList.remove('ok', 'warn', 'error');
+    }
+}
+
+function openOreProLoginHelper() {
+    const helper = window.open(OREPRO_URL, 'OreProLoginHelper', 'width=1200,height=850,menubar=no,toolbar=no,location=yes,status=no');
+    if (!helper) {
+        logOreProDiagnostic('Login helper popup blocked by browser.', 'WARN');
+        const statusEl = document.getElementById('orepro-session-status');
+        if (statusEl) {
+            statusEl.textContent = 'Popup blocked. Allow popups for this site, then click Login Helper again.';
+            statusEl.classList.remove('ok', 'warn', 'error');
+            statusEl.classList.add('warn');
+        }
+        return;
+    }
+
+    logOreProDiagnostic('Opened OrePro login helper window. Complete login there, then close it.', 'INFO');
+    const statusEl = document.getElementById('orepro-session-status');
+    if (statusEl) {
+        statusEl.textContent = 'Login helper opened. After login, close that window and this panel will reload OrePro.';
+        statusEl.classList.remove('ok', 'warn', 'error');
+    }
+
+    // Reset load history so post-login reload doesn't re-trigger loop detection
+    oreproFrameLoadTimes = [];
+
+    if (oreproLoginHelperPoll) {
+        clearInterval(oreproLoginHelperPoll);
+    }
+    oreproLoginHelperPoll = setInterval(() => {
+        if (!helper.closed) return;
+        clearInterval(oreproLoginHelperPoll);
+        oreproLoginHelperPoll = null;
+        oreproLoopHandled = false;  // allow re-detection if login failed
+        const frame = document.getElementById('live-orepro-iframe');
+        if (frame && frame.src && frame.src !== 'about:blank') {
+            frame.src = OREPRO_URL;
+        }
+        logOreProDiagnostic('Login helper closed; reloaded embedded OrePro frame.', 'INFO');
+    }, 800);
+}
+
+async function runOreProAuthRescueFlow() {
+    logOreProDiagnostic('Starting auth rescue flow (storage request + popup login helper)...', 'INFO');
+    await requestOreProSessionAccess();
+    openOreProLoginHelper();
+}
+
+function setupOreProDiagnostics() {
+    if (oreproDiagInitialized) return;
+    oreproDiagInitialized = true;
+
+    const frame = document.getElementById('live-orepro-iframe');
+    if (!frame) return;
+
+    frame.addEventListener('load', () => {
+        logOreProDiagnostic('Iframe load event fired.');
+        const now = Date.now();
+        oreproFrameLoadTimes.push(now);
+        oreproFrameLoadTimes = oreproFrameLoadTimes.filter(ts => now - ts <= 30000);
+        const recentFast = oreproFrameLoadTimes.filter(ts => now - ts <= 8000);
+        const isLoginLoop = recentFast.length >= 2 || oreproFrameLoadTimes.length >= 3;
+        if (isLoginLoop && !oreproLoopHandled && !oreproLoginHelperPoll) {
+            oreproLoopHandled = true;
+            logOreProDiagnostic('Login loop detected — auto-opening login helper popup.', 'WARN');
+            const statusEl = document.getElementById('orepro-session-status');
+            if (statusEl) {
+                statusEl.textContent = 'Login loop detected — opening login helper. Log in, then close the popup.';
+                statusEl.classList.remove('ok', 'warn', 'error');
+                statusEl.classList.add('warn');
+            }
+            openOreProLoginHelper();
+        }
+        try {
+            const href = frame.contentWindow?.location?.href;
+            if (href) {
+                logOreProDiagnostic(`Iframe URL (same-origin readable): ${href}`);
+            }
+        } catch (err) {
+            logOreProDiagnostic('Cross-origin frame loaded; browser blocks parent inspection (normal).', 'INFO');
+        }
+    });
+
+    frame.addEventListener('error', () => {
+        logOreProDiagnostic('Iframe error event fired while loading OrePro.', 'ERROR');
+    });
+
+    logOreProDiagnostic('OrePro diagnostics listeners initialized.');
+}
+
 async function requestOreProSessionAccess() {
     const statusEl = document.getElementById('orepro-session-status');
     const frame = document.getElementById('live-orepro-iframe');
@@ -2617,9 +2931,11 @@ async function requestOreProSessionAccess() {
 
     try {
         setStatus('Requesting browser storage access for embedded OrePro login...', 'info');
+        logOreProDiagnostic('Attempting storage access request...');
 
         if (typeof document.requestStorageAccessFor === 'function') {
             await document.requestStorageAccessFor('https://orepro.netkeiba.com');
+            logOreProDiagnostic('document.requestStorageAccessFor succeeded.', 'OK');
             setStatus('Storage access granted. Reloading OrePro frame...', 'ok');
             if (frame && frame.src && frame.src !== 'about:blank') {
                 frame.src = OREPRO_URL;
@@ -2629,6 +2945,7 @@ async function requestOreProSessionAccess() {
 
         if (window.top !== window && typeof document.requestStorageAccess === 'function') {
             await document.requestStorageAccess();
+            logOreProDiagnostic('document.requestStorageAccess succeeded.', 'OK');
             setStatus('Storage access granted. Reloading OrePro frame...', 'ok');
             if (frame && frame.src && frame.src !== 'about:blank') {
                 frame.src = OREPRO_URL;
@@ -2636,10 +2953,12 @@ async function requestOreProSessionAccess() {
             return;
         }
 
-        setStatus('This browser does not expose storage-access APIs here. If embedded login still fails, allow third-party cookies for this site.', 'warn');
+        logOreProDiagnostic('No usable storage-access API in this browsing context.', 'WARN');
+        setStatus('Storage-access API unavailable here. If login fails, allow third-party cookies for localhost and [*.]netkeiba.com, then run Auth Rescue.', 'warn');
     } catch (err) {
         const msg = err?.message ? String(err.message) : 'request denied';
-        setStatus(`Could not enable embedded login access (${msg}). Try allowing third-party cookies for localhost and netkeiba, or use Open External.`, 'error');
+        logOreProDiagnostic(`Storage access request failed: ${msg}`, 'ERROR');
+        setStatus(`Could not enable embedded login access (${msg}). Allow third-party cookies for localhost and [*.]netkeiba.com, then run Auth Rescue.`, 'error');
     }
 }
 
@@ -2648,14 +2967,13 @@ function renderLiveViewPanel() {
     const sidebarDisplay = document.getElementById('voting-sidebar-display');
     const mainTitle = document.getElementById('voting-main-title');
     const recapPanel = document.getElementById('voting-recap-panel');
-    const oreproFrame = document.getElementById('live-orepro-iframe');
-    if (!sidebarTitle || !sidebarDisplay || !mainTitle || !recapPanel || !oreproFrame) return;
+    if (!sidebarTitle || !sidebarDisplay || !mainTitle || !recapPanel) return;
 
     const date = String(currentActiveDate || '').trim();
     const timeline = globalDateTimelineByDate[date] || '';
     sidebarTitle.textContent = `By Racecourse · ${date || 'No day selected'}`;
     sidebarDisplay.innerHTML = buildRacecourseCheatHtml(date);
-    mainTitle.textContent = `OrePro · ${date || 'No day selected'}`;
+    mainTitle.textContent = `OrePro Companion · ${date || 'No day selected'}`;
 
     if (winningVotesFocusEnabled) {
         applyWinningVotesFocusToVotingSidebar(getDayOverallHitSummary(date));
@@ -2669,9 +2987,7 @@ function renderLiveViewPanel() {
         recapPanel.innerHTML = '';
     }
 
-    if (!oreproFrame.src || oreproFrame.src === 'about:blank') {
-        oreproFrame.src = OREPRO_URL;
-    }
+    loadOreProSessionStatus();
 }
 
 function switchMainView(view) {

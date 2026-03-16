@@ -178,14 +178,28 @@
         <div class="voting-main-head">
             <h3 id="voting-main-title">Voting Workspace</h3>
             <div class="voting-main-head-actions">
-                <button id="btn-orepro-session-access" onclick="requestOreProSessionAccess()" class="toolbar-btn toolbar-btn-muted">🔐 Enable OrePro Login</button>
+                <button id="btn-orepro-open" onclick="openOreProCompanion()" class="toolbar-btn toolbar-btn-muted">🌐 Open OrePro</button>
+                <button id="btn-orepro-focus" onclick="focusOreProCompanion()" class="toolbar-btn toolbar-btn-muted">🎯 Focus OrePro</button>
+                <button id="btn-orepro-sync" onclick="syncOreProResults()" class="toolbar-btn toolbar-btn-muted">📥 Sync Results</button>
                 <button id="btn-voting-orepro-toggle" onclick="toggleVotingOrePro()" class="toolbar-btn toolbar-btn-muted">🧾 Collapse OrePro</button>
                 <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" rel="noopener noreferrer" class="modal-link-btn modal-link-btn-muted">↗ Open External</a>
             </div>
         </div>
-        <div id="orepro-session-status" class="orepro-session-status">Embedded login depends on your browser's third-party cookie/storage policy.</div>
+        <div id="orepro-session-status" class="orepro-session-status">Use Open OrePro to place bets in a dedicated window, then Sync Results here afterward.</div>
+        <div id="orepro-companion-panel" class="orepro-companion-panel">
+            <div class="orepro-companion-help">
+                Companion window mode avoids iframe cookie restrictions in Brave/Chrome.
+            </div>
+            <div class="orepro-session-row">
+                <label for="orepro-nkauth-input">nkauth cookie</label>
+                <input id="orepro-nkauth-input" type="password" autocomplete="off" placeholder="Paste your current nkauth cookie value">
+                <button onclick="saveOreProSessionCookie()" class="toolbar-btn toolbar-btn-muted">💾 Save</button>
+                <button onclick="clearOreProSessionCookie()" class="toolbar-btn toolbar-btn-muted">🗑️ Clear</button>
+            </div>
+            <div id="orepro-sync-meta" class="orepro-sync-meta">No cookie saved yet.</div>
+            <div id="orepro-sync-results" class="orepro-sync-results">No results synced yet.</div>
+        </div>
         <div id="voting-recap-panel" class="voting-recap-panel" style="display:none;"></div>
-        <iframe id="live-orepro-iframe" class="live-orepro-iframe" src="about:blank" title="OrePro Voting Workspace" allow="storage-access-api; clipboard-read; clipboard-write"></iframe>
     </div>
 </div>
 <div id="export-modal" class="modal-overlay" style="display: none;">

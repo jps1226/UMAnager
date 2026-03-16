@@ -194,6 +194,132 @@
             background: #3a1f25;
             border-color: #9e4656;
         }
+        .orepro-companion-panel {
+            border: 1px solid #333;
+            border-top: none;
+            background: #10141f;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .orepro-companion-help {
+            font-size: 12px;
+            color: #95a3c4;
+        }
+        .orepro-session-row {
+            display: grid;
+            grid-template-columns: 130px 1fr auto auto;
+            gap: 8px;
+            align-items: center;
+        }
+        .orepro-session-row label {
+            font-size: 12px;
+            color: #c3d0ee;
+            font-weight: 600;
+        }
+        .orepro-session-row input {
+            background: #0c1119;
+            color: #d8e1f5;
+            border: 1px solid #2f3b52;
+            border-radius: 6px;
+            padding: 7px 9px;
+            font-size: 12px;
+            min-width: 0;
+        }
+        .orepro-sync-meta {
+            font-size: 12px;
+            color: #9fabc6;
+        }
+        .orepro-sync-results {
+            border: 1px solid #2f3b52;
+            border-radius: 8px;
+            background: #0c1119;
+            padding: 10px;
+            color: #d6dff3;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .orepro-sync-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        .orepro-chip {
+            border: 1px solid #394663;
+            background: #1a2336;
+            color: #bfd2f8;
+            border-radius: 999px;
+            padding: 2px 8px;
+            font-size: 11px;
+        }
+        .orepro-sync-message {
+            margin-bottom: 8px;
+            color: #dfe7fb;
+        }
+        .orepro-sync-columns {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .orepro-sync-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #8ea0c6;
+            margin-bottom: 4px;
+        }
+        .orepro-sync-list {
+            color: #c2cee9;
+            font-size: 12px;
+            max-height: 130px;
+            overflow: auto;
+        }
+        .orepro-money {
+            display: inline-block;
+            margin: 0 6px 6px 0;
+            border: 1px solid #375e4f;
+            background: #17342b;
+            color: #c5ffe3;
+            border-radius: 4px;
+            padding: 2px 6px;
+        }
+        @media (max-width: 980px) {
+            .orepro-session-row {
+                grid-template-columns: 1fr;
+            }
+            .orepro-sync-columns {
+                grid-template-columns: 1fr;
+            }
+        }
+        .orepro-diagnostics-wrap {
+            border: 1px solid #333;
+            border-top: none;
+            background: #10141f;
+        }
+        .orepro-diagnostics-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 8px 10px;
+            border-bottom: 1px solid #2b3243;
+            color: #d8e1f5;
+            font-size: 12px;
+        }
+        .orepro-diagnostics-log {
+            margin: 0;
+            padding: 8px 10px;
+            max-height: 140px;
+            overflow: auto;
+            font-size: 11px;
+            line-height: 1.35;
+            color: #9fd8bb;
+            background: #0c1119;
+            font-family: Consolas, "Courier New", monospace;
+            white-space: pre-wrap;
+        }
         .voting-recap-panel {
             border: 1px solid #333;
             border-top: none;
@@ -225,16 +351,7 @@
             font-size: 12px;
             color: #aab6d3;
         }
-        .live-orepro-iframe {
-            flex: 1;
-            width: 100%;
-            border: 1px solid #333;
-            border-top: none;
-            border-radius: 0 0 10px 10px;
-            background: #0d1117;
-            min-height: 0;
-        }
-        .voting-main-shell.orepro-collapsed .live-orepro-iframe {
+        .voting-main-shell.orepro-collapsed .orepro-companion-panel {
             display: none;
         }
         .voting-main-shell.orepro-collapsed .voting-recap-panel {
