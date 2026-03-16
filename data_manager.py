@@ -197,13 +197,88 @@ def get_horse_data(horse_id, jp_name):
     HORSE_CACHE[str_id] = data
     return data
 
-def get_next_weekend_dates():
-    today = datetime.date.today()
-    days_ahead_sat = (5 - today.weekday()) % 7
-    if days_ahead_sat == 0: days_ahead_sat = 7
-    next_sat = today + datetime.timedelta(days=days_ahead_sat)
-    next_sun = next_sat + datetime.timedelta(days=1)
-    return next_sat, next_sun
+def get_upcoming_weekend_dates(weeks_ahead=None):
+    """Return upcoming Sat/Sun dates starting from the next available Saturday."""
+    if weeks_ahead is None:
+        weeks_ahead = max(1, int(getattr(config, "UPCOMING_WEEKEND_WEEKS", 3)))
+
+    today = datetime.datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    days_until_sat = (5 - today.weekday()) % 7
+    first_sat = today + datetime.timedelta(days=days_until_sat)
+
+    target_dates = set()
+    for week_offset in range(weeks_ahead):
+        sat = first_sat + datetime.timedelta(days=7 * week_offset)
+        sun = sat + datetime.timedelta(days=1)
+        target_dates.add(sat)
+        target_dates.add(sun)
+
+    return target_dates
+
+
+def extract_race_date(race_info):
+    date_str = race_info.get('date', race_info.get('race_date', ''))
+    if not date_str:
+        return None
+    clean_date_str = str(date_str).split(' ')[0]
+    try:
+        return pd.to_datetime(clean_date_str).date()
+    except Exception:
+        return None
+
+
+def _get_month_race_ids(year: int, month: int):
+    try:
+        return [str(rid) for rid in keibascraper.race_list(year, month)]
+    except Exception as e:
+        # Future month calendars are often unavailable until closer to race days.
+        logger.info(f"Race list unavailable for {year}-{month:02d}: {e}")
+        return []
+
+
+def _get_race_ids_from_daily_list(target_date):
+    """Fallback race-id discovery from Netkeiba daily race list page."""
+    if isinstance(target_date, datetime.datetime):
+        target_date = target_date.date()
+    if isinstance(target_date, str):
+        target_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
+
+    kaisai_date = target_date.strftime("%Y%m%d")
+    url = f"https://race.netkeiba.com/top/race_list_sub.html?kaisai_date={kaisai_date}"
+    resp = safe_request(url, timeout=15, retries=2)
+    if not resp or not resp.text:
+        return []
+
+    ids = sorted(set(re.findall(r"race_id=(\d{12})", resp.text)))
+    return ids
+
+
+def get_race_ids_for_date(target_date):
+    """Find all race IDs whose entry metadata matches the given date."""
+    if isinstance(target_date, str):
+        target_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
+
+    race_ids = set(_get_race_ids_from_daily_list(target_date))
+
+    if race_ids:
+        return sorted(race_ids)
+
+    all_race_ids = _get_month_race_ids(target_date.year, target_date.month)
+
+    for race_id in all_race_ids:
+        try:
+            result = keibascraper.load("entry", race_id)
+        except Exception:
+            continue
+        if not (isinstance(result, tuple) and len(result) == 2 and result[0]):
+            continue
+
+        race_info = result[0][0]
+        race_date = extract_race_date(race_info)
+        if race_date == target_date:
+            race_ids.add(str(race_id))
+
+    return sorted(race_ids)
 
 def fetch_real_post_time(race_id):
     url = f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
@@ -375,8 +450,13 @@ def format_entry_data(entry_list, predictions=None):
     return formatted
 
 def fetch_weekend_timeline(mode="load", progress_callback=None):
-    next_sat, next_sun = get_next_weekend_dates()
-    target_year, target_month = next_sat.year, next_sat.month
+    today = datetime.datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    lookahead_days = max(1, int(getattr(config, "UPCOMING_LOOKAHEAD_DAYS", 28)))
+    end_date = today + datetime.timedelta(days=lookahead_days)
+    target_year_months = sorted({
+        (today.year, today.month),
+        (end_date.year, end_date.month),
+    })
     
     cached_races = []
     if mode in ["load", "new"] and os.path.exists(CACHE_FILE):
@@ -386,7 +466,20 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
     if mode == "load" and cached_races: return cached_races
 
     print(f"\n--- SCRAPE MODE: {mode.upper()} ---")
-    all_race_ids = keibascraper.race_list(target_year, target_month)
+    all_race_ids = []
+    for year_val, month_val in target_year_months:
+        all_race_ids.extend(_get_month_race_ids(year_val, month_val))
+
+    # Calendar fallback: discover upcoming weekend race IDs from daily race list pages.
+    weekend_dates = sorted(
+        d for d in get_upcoming_weekend_dates()
+        if today <= d <= end_date
+    )
+    for weekend_date in weekend_dates:
+        all_race_ids.extend(_get_race_ids_from_daily_list(weekend_date))
+
+    # Preserve order while dropping duplicates when scanning multiple months.
+    all_race_ids = list(dict.fromkeys(all_race_ids))
     total_races = len(all_race_ids)
     
     existing_ids = [r["info"]["race_id"] for r in cached_races] if mode == "new" else []
@@ -425,12 +518,12 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
                 race_info = result[0][0]
                 entry_list = result[1]
                 date_str = race_info.get('date', race_info.get('race_date', ''))
-                
+
                 if date_str:
-                    clean_date_str = date_str.split(' ')[0] 
+                    clean_date_str = str(date_str).split(' ')[0]
                     race_date = pd.to_datetime(clean_date_str).date()
-                    
-                    if race_date in [next_sat, next_sun]:
+
+                    if today <= race_date <= end_date:
                         place = race_info.get('place', race_info.get('course', ''))
                         race_info['place'] = config.TRACK_TRANSLATIONS.get(place, place)
                         race_info['race_name'] = romanize(race_info.get('race_name', ''))
@@ -467,7 +560,8 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
                             "entries": formatted_entries
                         })
                         save_horse_dict() 
-                    else: skip_prefixes.add(prefix) 
+                    else:
+                        skip_prefixes.add(prefix)
         except Exception as e:
             print(f"Failed to parse. Error: {e}")
             continue
@@ -584,6 +678,98 @@ def fetch_race_history_by_id(race_id):
     logger.warning(f"History fetch failed for race {race_id}: no result table found on race.netkeiba.com")
 
     return history_map
+
+
+def fetch_history_table_map_by_race_id(race_id):
+    """Best-effort placeholder for history-source support (not exposed by keibascraper API)."""
+    # keibascraper currently does not expose a 'history' data_type in load().
+    # Keep this as a no-op so the call chain can prefer official APIs first.
+    return {}
+
+
+def fetch_result_table_map_by_race_id(race_id):
+    """Read finalized race data from keibascraper result loader."""
+    try:
+        raw = keibascraper.load("result", race_id)
+    except Exception as e:
+        logger.info(f"Result table fetch unavailable for race {race_id}: {e}")
+        return {}
+
+    if raw is None:
+        return {}
+
+    if isinstance(raw, pd.DataFrame):
+        df = raw
+    elif isinstance(raw, tuple):
+        frames = [item for item in raw if isinstance(item, pd.DataFrame)]
+        df = frames[0] if frames else None
+    elif isinstance(raw, list) and raw and isinstance(raw[0], dict):
+        df = pd.DataFrame(raw)
+    else:
+        df = None
+
+    if df is None or df.empty:
+        return {}
+
+    possible_horse_cols = ["horse_id", "Horse_ID", "id"]
+    possible_rank_cols = ["rank", "Rank", "finish", "Finish"]
+    possible_odds_cols = ["win_odds", "odds", "Odds"]
+    possible_fav_cols = ["popularity", "fav", "Fav"]
+
+    horse_col = next((c for c in possible_horse_cols if c in df.columns), None)
+    rank_col = next((c for c in possible_rank_cols if c in df.columns), None)
+    odds_col = next((c for c in possible_odds_cols if c in df.columns), None)
+    fav_col = next((c for c in possible_fav_cols if c in df.columns), None)
+
+    if horse_col is None or rank_col is None:
+        return {}
+
+    result_map = {}
+    for _, row in df.iterrows():
+        horse_id = str(row.get(horse_col, "")).split(".")[0].strip()
+        if not horse_id or horse_id.lower() == "nan":
+            continue
+
+        finish_val = str(row.get(rank_col, "")).strip()
+        if finish_val.lower() == "nan":
+            finish_val = ""
+
+        odds_val = ""
+        if odds_col is not None:
+            odds_val = str(row.get(odds_col, "")).strip()
+            if odds_val.lower() == "nan":
+                odds_val = ""
+
+        fav_val = ""
+        if fav_col is not None:
+            fav_val = str(row.get(fav_col, "")).strip()
+            if fav_val.lower() == "nan":
+                fav_val = ""
+
+        result_map[horse_id] = {
+            "finish": finish_val,
+            "odds": odds_val,
+            "fav": fav_val,
+        }
+
+    return result_map
+
+
+def fetch_race_result_map_prefer_history(race_id):
+    """Prefer 'history' source and fall back to result-page scraping."""
+    history_map = fetch_history_table_map_by_race_id(race_id)
+    if history_map:
+        return history_map, "history"
+
+    result_map = fetch_result_table_map_by_race_id(race_id)
+    if result_map:
+        return result_map, "result"
+
+    direct_map = fetch_race_history_by_id(race_id)
+    if direct_map:
+        return direct_map, "result-direct"
+
+    return {}, "none"
 
 def fetch_upcoming_race_snapshot(race_id):
     """Fetch latest entry snapshot for an upcoming race (posts/brackets/odds/fav/time)."""

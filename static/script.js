@@ -4,10 +4,12 @@ let raceLocks = {}; // Per-race lock state for mark interactions
 let upcomingRaces = []; // NEW: Stores our parsed race times
 let globalRaceEntries = {}; // NEW: Stores local row data for instant sorting
 let globalRaceInfo = {}; // NEW: Stores the Racetrack names and numbers
-let globalRacesByDate = {}; // Active timeline races organized by date for jump dropdowns
+let globalRacesByDate = {}; // All race days organized by date for navigation and jump dropdowns
 let globalAllRacesByDate = { upcoming: {}, past: {} }; // Full timeline buckets from API
-let globalRaceTimelineById = {}; // Maps race_id -> "upcoming" | "past"
+let globalDateTimelineByDate = {}; // Maps YYYY-MM-DD -> "upcoming" | "past"
 let currentTimelineTab = "upcoming";
+let currentActiveDate = null;
+let currentCalendarMonth = null;
 let raceSorts = {}; // NEW: Remembers which column is sorted for each race
 let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
@@ -15,6 +17,18 @@ let appConfig = {}; // NEW: Stores app configuration
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
 
 const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Sire", "Dam", "BMS", "Odds", "Fav", "Finish"];
+const SCORE_TRACKED_HORSE = 1.0;
+const SCORE_TRACKED_SIRE = 0.5;
+const SCORE_TRACKED_DAM = 0.5;
+const SCORE_TRACKED_BMS = 0.25;
+const SCORE_WATCHLIST_HORSE = 1.0;
+const SCORE_WATCHLIST_SIRE = 0.5;
+const SCORE_WATCHLIST_DAM = 0.5;
+const SCORE_WATCHLIST_BMS = 0.25;
+const SCORE_MAX = 1.0;
+const ICON_THRESHOLD_3STAR = 1.0;
+const ICON_THRESHOLD_2STAR = 0.5;
+
 const RACE_COLUMN_META = {
     Shirushi: { label: "Prediction", sortable: true, sortKey: "Shirushi", initialAsc: true },
     BK: { label: "BK", sortable: true, sortKey: "BK", initialAsc: true },
@@ -168,64 +182,54 @@ function parseListIds(text) {
     return ids;
 }
 
-function getTrackedStatus(horseId) {
+function getTrackedSets() {
+    return {
+        favorites: parseListIds(listsData?.favorites || ""),
+        watchlist: parseListIds(listsData?.watchlist || "")
+    };
+}
+
+function getTrackedStatus(horseId, trackedSets = null) {
     /**Check if a horse is tracked and on which lists. Returns {fav: bool, watch: bool}*/
-    if (!listsData || !listsData.favorites || !listsData.watchlist) {
-        return { fav: false, watch: false };
-    }
-    const tracked_ids = parseListIds(listsData.favorites);
-    const watchlist_ids = parseListIds(listsData.watchlist);
+    const sets = trackedSets || getTrackedSets();
     const cleanId = String(horseId).split('.')[0].trim();
     return {
-        fav: tracked_ids.has(cleanId),
-        watch: watchlist_ids.has(cleanId)
+        fav: sets.favorites.has(cleanId),
+        watch: sets.watchlist.has(cleanId)
     };
 }
 
 function calculateWeightedIntensity(horse, sire, dam, bms) {
-    /**Calculate weighted intensity based on family importance. Sire > Dam > BMS > Horse weight system*/
-    // Weights: Sire is most important (0.5), Dam second (0.35), BMS least (0.15)
-    let fav_weight = 0;
-    let watch_weight = 0;
-    
-    // Sire: 0.5 (highest parent weight)
-    if (sire.fav) fav_weight += 0.5;
-    if (sire.watch) watch_weight += 0.5;
-    
-    // Dam/Mare: 0.35 (second parent)
-    if (dam.fav) fav_weight += 0.35;
-    if (dam.watch) watch_weight += 0.35;
-    
-    // BMS: 0.15 (least important)
-    if (bms.fav) fav_weight += 0.15;
-    if (bms.watch) watch_weight += 0.15;
-    
-    // The horse itself is worth less than just having a quality parent
-    // (favoring pedigree over the horse being directly tracked)
-    if (horse.fav) fav_weight += 0.2;
-    if (horse.watch) watch_weight += 0.2;
-    
+    // Keep frontend highlight logic aligned with backend scoring rules.
+    let fav_weight = horse.fav ? SCORE_TRACKED_HORSE : (sire.fav ? SCORE_TRACKED_SIRE : 0.0);
+    fav_weight += (dam.fav ? SCORE_TRACKED_DAM : 0.0) + (bms.fav ? SCORE_TRACKED_BMS : 0.0);
+
+    let watch_weight = horse.watch ? SCORE_WATCHLIST_HORSE : (sire.watch ? SCORE_WATCHLIST_SIRE : 0.0);
+    watch_weight += (dam.watch ? SCORE_WATCHLIST_DAM : 0.0) + (bms.watch ? SCORE_WATCHLIST_BMS : 0.0);
+
+    fav_weight = Math.min(fav_weight, SCORE_MAX);
+    watch_weight = Math.min(watch_weight, SCORE_MAX);
+
     return { fav_weight, watch_weight, max: Math.max(fav_weight, watch_weight) };
 }
 
-function calculateFamilyTracking(horse_id, sire_id, dam_id, bms_id) {
+function calculateFamilyTracking(horse_id, sire_id, dam_id, bms_id, trackedSets = null) {
     /**Calculate which family members are tracked and weighted intensity level. Returns {horse, sire, dam, bms, intensity, isMixed, weights}*/
-    const horse = getTrackedStatus(horse_id);
-    const sire = getTrackedStatus(sire_id);
-    const dam = getTrackedStatus(dam_id);
-    const bms = getTrackedStatus(bms_id);
+    const horse = getTrackedStatus(horse_id, trackedSets);
+    const sire = getTrackedStatus(sire_id, trackedSets);
+    const dam = getTrackedStatus(dam_id, trackedSets);
+    const bms = getTrackedStatus(bms_id, trackedSets);
     
     const weights = calculateWeightedIntensity(horse, sire, dam, bms);
     
-    // Determine intensity level from weighted value (0-1.2 range -> 4 intensity levels)
+    // Determine intensity level from weighted value.
     let intensity = 0;
     const maxWeight = weights.max;
     if (maxWeight > 0) {
-        if (maxWeight <= 0.2) intensity = 0.25;      // Light: just the horse itself
-        else if (maxWeight <= 0.35) intensity = 0.33; // Light: just the BMS
-        else if (maxWeight <= 0.50) intensity = 0.50; // Medium: just the Dam or Sire+BMS
-        else if (maxWeight <= 0.70) intensity = 0.66; // Strong: Dam+BMS, or Sire alone
-        else intensity = 0.80;                        // Very Strong: Sire+Dam or higher
+        if (maxWeight <= 0.25) intensity = 0.25;
+        else if (maxWeight <= 0.50) intensity = 0.50;
+        else if (maxWeight <= 0.75) intensity = 0.66;
+        else intensity = 0.80;
     }
     
     // Check if mixed (both fav and watch)
@@ -236,8 +240,7 @@ function calculateFamilyTracking(horse_id, sire_id, dam_id, bms_id) {
 
 function updateRaceHighlighting() {
     /**Recalculate race scores and icons based on current listsData*/
-    const tracked_ids = parseListIds(listsData.favorites);
-    const watchlist_ids = parseListIds(listsData.watchlist);
+    const trackedSets = getTrackedSets();
     
     // Update each race's highlighting and icons
     Object.keys(globalRaceEntries).forEach(r_id => {
@@ -251,7 +254,7 @@ function updateRaceHighlighting() {
         // Recalculate scores for all entries in this race
         entries.forEach(row => {
             // Calculate family tracking with weighted importance (always recalculate)
-            row.familyTracking = calculateFamilyTracking(row.Horse_ID, row.Sire_ID, row.Dam_ID, row.BMS_ID);
+            row.familyTracking = calculateFamilyTracking(row.Horse_ID, row.Sire_ID, row.Dam_ID, row.BMS_ID, trackedSets);
             const tracking = row.familyTracking;
             const weights = tracking.weights;
             
@@ -267,12 +270,12 @@ function updateRaceHighlighting() {
             if (f_weight > 0) {
                 score = Math.min(f_weight, 1.0);
                 status = "FAV";
-                icon = f_weight >= 0.5 ? "⭐⭐⭐" : (f_weight >= 0.35 ? "⭐⭐" : "⭐");
+                icon = f_weight >= ICON_THRESHOLD_3STAR ? "⭐⭐⭐" : (f_weight >= ICON_THRESHOLD_2STAR ? "⭐⭐" : "⭐");
                 hasTracked = true;
             } else if (w_weight > 0) {
                 score = Math.min(w_weight, 1.0);
                 status = "WATCH";
-                icon = w_weight >= 0.5 ? "👁️👁️" : "👁️";
+                icon = w_weight >= ICON_THRESHOLD_3STAR ? "👁️👁️" : "👁️";
                 hasWatchlist = true;
             }
             
@@ -449,9 +452,8 @@ function navigateToHorse(horseId) {
         return;
     }
     
-    // Switch to the correct timeline and date tab
-    const foundTimeline = globalRaceTimelineById[foundRaceId] || currentTimelineTab;
-    switchTimelineTab(foundTimeline, foundDate);
+    // Switch to the correct day in the calendar-backed schedule.
+    switchMainTab(foundDate);
     
     // Expand the specific race if it is collapsed then scroll to it
     setTimeout(() => {
@@ -1095,7 +1097,7 @@ async function autoPick(event, r_id, riskOverride = null) {
     }
 
     // 4. Save and Update UI
-    fetch('/api/marks', { method: 'POST', body: JSON.stringify(globalMarks) });
+    saveMarksToServer();
 
     raceSorts[r_id] = { col: 'Default', asc: true };
     applySortLogic(r_id, 'Default', true);
@@ -1150,7 +1152,7 @@ async function reorderPicks(event, r_id) {
     }
 
     // 5. Save and instantly snap the UI into the new order
-    fetch('/api/marks', { method: 'POST', body: JSON.stringify(globalMarks) });
+    saveMarksToServer();
 
     raceSorts[r_id] = { col: 'Default', asc: true };
     applySortLogic(r_id, 'Default', true);
@@ -1284,44 +1286,207 @@ function normalizeRacesPayload(data) {
     };
 }
 
-function getTimelineLabel(timeline) {
-    return timeline === 'past' ? 'Past Races' : 'Upcoming Races';
+function getSortedActiveDates() {
+    return Object.keys(globalRacesByDate).sort();
 }
 
-function renderTimelineTabs() {
-    const timelineBar = document.getElementById('timeline-tabs');
-    if (!timelineBar) return;
+function getMonthKey(dateStr) {
+    return dateStr ? String(dateStr).slice(0, 7) : null;
+}
 
-    const upcomingDays = Object.keys(globalAllRacesByDate.upcoming || {}).length;
-    const pastDays = Object.keys(globalAllRacesByDate.past || {}).length;
+function getAvailableCalendarMonths() {
+    return [...new Set(getSortedActiveDates().map(getMonthKey).filter(Boolean))].sort();
+}
 
-    timelineBar.innerHTML = `
-        <button class="tab-btn ${currentTimelineTab === 'past' ? 'active' : ''}" onclick="switchTimelineTab('past')">Past (${pastDays})</button>
-        <button class="tab-btn ${currentTimelineTab === 'upcoming' ? 'active' : ''}" onclick="switchTimelineTab('upcoming')">Upcoming (${upcomingDays})</button>
+function formatCalendarMonth(monthKey) {
+    if (!monthKey) return '';
+    const [year, month] = monthKey.split('-').map(Number);
+    return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString('en-US', {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'UTC'
+    });
+}
+
+function formatActiveDateLabel(dateStr) {
+    if (!dateStr) return 'No day selected';
+    const [year, month, day] = String(dateStr).split('-').map(Number);
+    if (!year || !month || !day) return dateStr;
+    return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        timeZone: 'UTC'
+    });
+}
+
+function updateActiveDateNavigator() {
+    const dates = getSortedActiveDates();
+    const labelEl = document.getElementById('active-date-label');
+    const metaEl = document.getElementById('active-date-meta');
+    const prevBtn = document.getElementById('active-date-prev');
+    const nextBtn = document.getElementById('active-date-next');
+    if (!labelEl || !metaEl || !prevBtn || !nextBtn) return;
+
+    if (!dates.length || !currentActiveDate) {
+        labelEl.textContent = 'No day selected';
+        metaEl.textContent = '0 races';
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+        return;
+    }
+
+    const currentIndex = dates.indexOf(currentActiveDate);
+    const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+    const raceCount = globalRacesByDate[currentActiveDate]?.length || 0;
+    labelEl.textContent = formatActiveDateLabel(currentActiveDate);
+    metaEl.textContent = `${raceCount} race${raceCount === 1 ? '' : 's'}`;
+    prevBtn.disabled = safeIndex <= 0;
+    nextBtn.disabled = safeIndex >= dates.length - 1;
+}
+
+function shiftActiveDate(step) {
+    const dates = getSortedActiveDates();
+    if (!dates.length || !currentActiveDate) return;
+    const currentIndex = dates.indexOf(currentActiveDate);
+    const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = Math.min(dates.length - 1, Math.max(0, safeIndex + step));
+    if (nextIndex === safeIndex) return;
+    switchMainTab(dates[nextIndex]);
+}
+
+function findNearestAvailableDate(targetDate, dates) {
+    if (!targetDate || !Array.isArray(dates) || dates.length === 0) return null;
+    if (dates.includes(targetDate)) return targetDate;
+
+    for (const date of dates) {
+        if (date >= targetDate) return date;
+    }
+
+    return dates[dates.length - 1];
+}
+
+function renderRaceCalendar() {
+    const calendar = document.getElementById('race-calendar');
+    if (!calendar) return;
+
+    const dates = getSortedActiveDates();
+    const months = getAvailableCalendarMonths();
+
+    if (!dates.length || !months.length) {
+        calendar.innerHTML = '<div class="race-calendar-empty-note">No race days loaded.</div>';
+        updateActiveDateNavigator();
+        return;
+    }
+
+    const selectedDate = findNearestAvailableDate(currentActiveDate, dates) || dates[0];
+    currentActiveDate = selectedDate;
+    currentTimelineTab = globalDateTimelineByDate[selectedDate] || 'upcoming';
+
+    const selectedMonth = getMonthKey(selectedDate);
+    if (!currentCalendarMonth || !months.includes(currentCalendarMonth)) {
+        currentCalendarMonth = selectedMonth || months[0];
+    }
+
+    const monthIndex = months.indexOf(currentCalendarMonth);
+    const monthKey = monthIndex >= 0 ? months[monthIndex] : months[0];
+    currentCalendarMonth = monthKey;
+
+    const [year, month] = monthKey.split('-').map(Number);
+    const firstDay = new Date(Date.UTC(year, month - 1, 1));
+    const leadingBlanks = firstDay.getUTCDay();
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const cells = [];
+
+    for (let i = 0; i < leadingBlanks; i += 1) {
+        cells.push('<div class="race-calendar-cell is-empty"></div>');
+    }
+
+    for (let day = 1; day <= daysInMonth; day += 1) {
+        const dateStr = `${monthKey}-${String(day).padStart(2, '0')}`;
+        const races = globalRacesByDate[dateStr];
+
+        if (!races) {
+            cells.push(`<div class="race-calendar-cell"><div class="race-calendar-daynum" style="padding: 8px; color: #4b5565;">${day}</div></div>`);
+            continue;
+        }
+
+        const timeline = globalDateTimelineByDate[dateStr] || 'upcoming';
+        const activeClass = dateStr === currentActiveDate ? ' is-selected' : '';
+        cells.push(`
+            <button type="button" class="race-calendar-day timeline-${timeline}${activeClass}" onclick="selectCalendarDate('${dateStr}')" title="${dateStr} • ${races.length} races">
+                <div class="race-calendar-daynum">${day}</div>
+                <div class="race-calendar-meta">
+                    <span class="race-calendar-count">${races.length}</span>
+                </div>
+            </button>
+        `);
+    }
+
+    const selectedCount = globalRacesByDate[currentActiveDate]?.length || 0;
+
+    calendar.innerHTML = `
+        <div class="race-calendar-header">
+            <button type="button" class="race-calendar-nav" onclick="changeCalendarMonth(-1)" ${monthIndex <= 0 ? 'disabled' : ''}>◀</button>
+            <div class="race-calendar-heading">
+                <div class="race-calendar-title">${formatCalendarMonth(monthKey)}</div>
+                <div class="race-calendar-summary">Selected: ${currentActiveDate} • ${selectedCount} race${selectedCount === 1 ? '' : 's'}</div>
+            </div>
+            <button type="button" class="race-calendar-nav" onclick="changeCalendarMonth(1)" ${monthIndex >= months.length - 1 ? 'disabled' : ''}>▶</button>
+        </div>
+        <div class="race-calendar-weekdays">${weekdays.map(day => `<div class="race-calendar-weekday">${day}</div>`).join('')}</div>
+        <div class="race-calendar-grid">${cells.join('')}</div>
     `;
+    updateActiveDateNavigator();
+}
+
+function changeCalendarMonth(step) {
+    const months = getAvailableCalendarMonths();
+    if (!months.length) return;
+
+    const currentIndex = Math.max(0, months.indexOf(currentCalendarMonth));
+    const nextIndex = Math.min(months.length - 1, Math.max(0, currentIndex + step));
+    const nextMonth = months[nextIndex];
+    if (!nextMonth) return;
+
+    currentCalendarMonth = nextMonth;
+    const monthDates = getSortedActiveDates().filter(date => getMonthKey(date) === nextMonth);
+    if (monthDates.length) {
+        switchMainTab(monthDates[0]);
+    } else {
+        renderRaceCalendar();
+    }
+}
+
+function selectCalendarDate(date) {
+    switchMainTab(date);
 }
 
 function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = null, keepOpenRaceId = null) {
     const dates = Object.keys(globalRacesByDate).sort();
-    const tabsBar = document.getElementById('date-tabs');
     const scheds = document.getElementById('schedules-container');
-    tabsBar.innerHTML = "";
     scheds.innerHTML = "";
 
     if (dates.length === 0) {
-        scheds.innerHTML = `<div class="tab-content active"><div style="color:#888; font-size:14px; text-align:center; padding:30px 10px;">No ${getTimelineLabel(currentTimelineTab).toLowerCase()} available.</div></div>`;
+        currentActiveDate = null;
+        renderRaceCalendar();
+        scheds.innerHTML = `<div class="tab-content active"><div style="color:#888; font-size:14px; text-align:center; padding:30px 10px;">No race days available.</div></div>`;
         return;
     }
 
-    let activeDate = preferredDate && dates.includes(preferredDate) ? preferredDate : dates[0];
+    let activeDate = findNearestAvailableDate(preferredDate, dates)
+        || findNearestAvailableDate(currentActiveDate, dates)
+        || dates[0];
 
-    dates.forEach((date, i) => {
+    currentActiveDate = activeDate;
+    currentTimelineTab = globalDateTimelineByDate[activeDate] || currentTimelineTab;
+    currentCalendarMonth = getMonthKey(activeDate) || currentCalendarMonth;
+    renderRaceCalendar();
+
+    dates.forEach((date) => {
         const isActive = date === activeDate;
-        const btn = document.createElement('button');
-        btn.className = `tab-btn ${isActive ? 'active' : ''}`;
-        btn.innerText = date;
-        btn.onclick = () => switchMainTab(date);
-        tabsBar.appendChild(btn);
+        const dateTimeline = globalDateTimelineByDate[date] || 'upcoming';
 
         let html = `<div id="tab-${date}" class="tab-content ${isActive ? 'active' : ''}">`;
 
@@ -1330,7 +1495,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 
             let shouldCollapse = false;
             if (
-                currentTimelineTab === 'upcoming' &&
+                dateTimeline === 'upcoming' &&
                 isFirstLoad &&
                 collapseBeforeTime &&
                 race.info.time !== "TBA" &&
@@ -1400,7 +1565,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
             const clearStyle = countRaceMarks(r_id) > 0 ? "display: inline-block;" : "display: none;";
 
             const localName = localizeRaceName(race.info.race_name);
-            const historyBtnHtml = currentTimelineTab === 'past' && !raceHasHistoryData(race)
+            const historyBtnHtml = dateTimeline === 'past' && !raceHasHistoryData(race)
                 ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Fetch finish positions and result data for this race">📜 Update History</button>`
                 : "";
 
@@ -1433,14 +1598,6 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
     });
 }
 
-function switchTimelineTab(timeline, preferredDate = null) {
-    currentTimelineTab = timeline;
-    globalRacesByDate = globalAllRacesByDate[currentTimelineTab] || {};
-    renderTimelineTabs();
-    renderDayTabsAndSchedules(preferredDate);
-    updateJumpDay();
-}
-
 // --- RENDER DASHBOARD ---
 async function loadRaces() {
     const racesRes = await fetch('/api/races');
@@ -1452,7 +1609,8 @@ async function loadRaces() {
     searchableHorses = [];
     globalRaceEntries = {};
     globalRaceInfo = {};
-    globalRaceTimelineById = {};
+    globalRacesByDate = {};
+    globalDateTimelineByDate = {};
     globalAllRacesByDate = {
         upcoming: timelineData.upcoming || {},
         past: timelineData.past || {}
@@ -1460,6 +1618,9 @@ async function loadRaces() {
 
     ["upcoming", "past"].forEach(timeline => {
         Object.keys(globalAllRacesByDate[timeline]).forEach(date => {
+            globalRacesByDate[date] = globalAllRacesByDate[timeline][date];
+            globalDateTimelineByDate[date] = timeline;
+
             globalAllRacesByDate[timeline][date].forEach(race => {
                 const r_id = race.info.race_id;
 
@@ -1475,7 +1636,6 @@ async function loadRaces() {
                 }
 
                 globalRaceInfo[r_id] = { ...race.info, _timeline: timeline };
-                globalRaceTimelineById[r_id] = timeline;
 
                 race.entries.forEach(row => {
                     searchableHorses.push({
@@ -1549,16 +1709,26 @@ async function loadRaces() {
     }
 
     const hasUpcoming = Object.keys(globalAllRacesByDate.upcoming || {}).length > 0;
+    const upcomingDates = Object.keys(globalAllRacesByDate.upcoming || {}).sort();
+    const pastDates = Object.keys(globalAllRacesByDate.past || {}).sort();
+    const allDates = getSortedActiveDates();
+
     if (isFirstLoad) {
-        currentTimelineTab = hasUpcoming ? "upcoming" : "past";
-    } else if (!globalAllRacesByDate[currentTimelineTab] || Object.keys(globalAllRacesByDate[currentTimelineTab]).length === 0) {
-        currentTimelineTab = hasUpcoming ? "upcoming" : "past";
+        currentActiveDate = upcomingDates[0] || pastDates[pastDates.length - 1] || allDates[0] || null;
+    } else {
+        currentActiveDate = findNearestAvailableDate(currentActiveDate, allDates)
+            || upcomingDates[0]
+            || pastDates[pastDates.length - 1]
+            || allDates[0]
+            || null;
     }
 
-    globalRacesByDate = globalAllRacesByDate[currentTimelineTab] || {};
-    renderTimelineTabs();
-    renderDayTabsAndSchedules(null, collapseBeforeTime, keepOpenRaceId);
-    updateJumpDay();
+    currentTimelineTab = currentActiveDate
+        ? (globalDateTimelineByDate[currentActiveDate] || (hasUpcoming ? "upcoming" : "past"))
+        : (hasUpcoming ? "upcoming" : "past");
+    currentCalendarMonth = currentActiveDate ? getMonthKey(currentActiveDate) : getAvailableCalendarMonths()[0] || null;
+
+    renderDayTabsAndSchedules(currentActiveDate, collapseBeforeTime, keepOpenRaceId);
     updateAllRiskBadges();
 
     isFirstLoad = false;
@@ -1573,12 +1743,17 @@ function switchSidebarTab(tab) {
 }
 
 function switchMainTab(date) {
-    document.querySelectorAll('#date-tabs .tab-btn').forEach(b => {
-        b.classList.toggle('active', b.innerText === date);
-    });
+    const dates = getSortedActiveDates();
+    const nextDate = findNearestAvailableDate(date, dates);
+    if (!nextDate) return;
+
+    currentActiveDate = nextDate;
+    currentTimelineTab = globalDateTimelineByDate[nextDate] || currentTimelineTab;
+    currentCalendarMonth = getMonthKey(nextDate) || currentCalendarMonth;
     document.querySelectorAll('#schedules-container .tab-content').forEach(c => {
-        c.classList.toggle('active', c.id === `tab-${date}`);
+        c.classList.toggle('active', c.id === `tab-${nextDate}`);
     });
+    renderRaceCalendar();
 }
 
 // Creates the individual prediction buttons (◎, 〇, ▲, △)
@@ -1675,7 +1850,7 @@ async function clearRaceBets(event, r_id) {
 
     if (!changed) return;
 
-    fetch('/api/marks', { method: 'POST', body: JSON.stringify(globalMarks) });
+    saveMarksToServer();
 
     applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
     const tbody = document.getElementById(`tbody-${r_id}`);
@@ -1742,7 +1917,7 @@ async function toggleMark(r_id, h_id, symbol) {
     }
 
     // Silently sync the new state to the Python backend
-    fetch('/api/marks', { method: 'POST', body: JSON.stringify(globalMarks) });
+    saveMarksToServer();
 
     // NEW: Instantly re-sort and re-render the table so voted horses snap to the top!
     applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
@@ -1753,6 +1928,26 @@ async function toggleMark(r_id, h_id, symbol) {
 
 // --- API CALLS ---
 let logInterval = null;
+
+function saveMarksToServer() {
+    const cleanMarks = Object.fromEntries(
+        Object.entries(globalMarks).filter(([, v]) => v !== null && v !== undefined && v !== '')
+    );
+    fetch('/api/marks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(cleanMarks)
+    });
+}
+
+function appendConsoleLine(message) {
+    const consoleBox = document.getElementById('scrape-console');
+    if (!consoleBox) return;
+    if (appConfig?.ui?.showConsole ?? true) consoleBox.style.display = 'block';
+    const prefix = consoleBox.textContent && consoleBox.textContent.trim() ? '\n' : '';
+    consoleBox.textContent += `${prefix}${message}`;
+    consoleBox.scrollTop = consoleBox.scrollHeight;
+}
 
 async function triggerPost(url) {
     try {
@@ -1786,6 +1981,29 @@ async function createDataBackup() {
     }
 }
 
+async function restoreLatestBackup() {
+    const proceed = confirm(
+        "Restore the latest backup now?\n\nThis replaces current data/ contents.\nA safety backup will be created first only if data/ currently has files."
+    );
+    if (!proceed) return;
+
+    try {
+        const result = await postJson('/api/data/backup/restore', {
+            use_latest: true,
+            create_safety_backup: true
+        });
+
+        const safety = result.safety_backup
+            ? `Safety backup created: backups/${result.safety_backup}`
+            : 'No safety backup needed (data folder was empty).';
+
+        alert(`Restore complete from: backups/${result.restored_from}\nFiles restored: ${result.restored_files}\n${safety}`);
+        await refreshDataAndUI();
+    } catch (err) {
+        alert(`Restore failed: ${err.message}`);
+    }
+}
+
 async function refreshUpcomingRacesLite() {
     const btn = document.getElementById('btn-upcoming-refresh');
     if (btn) btn.disabled = true;
@@ -1793,7 +2011,9 @@ async function refreshUpcomingRacesLite() {
     try {
         const data = await postJson('/api/races/upcoming/refresh', {});
         await refreshDataAndUI();
-        switchTimelineTab('upcoming');
+
+        const nextUpcomingDate = Object.keys(globalAllRacesByDate.upcoming || {}).sort()[0];
+        if (nextUpcomingDate) switchMainTab(nextUpcomingDate);
 
         const failedCount = Array.isArray(data.failed_races) ? data.failed_races.length : 0;
         alert(`Upcoming refresh complete. Races updated: ${data.updated_races || 0}, rows updated: ${data.updated_rows || 0}, failed races: ${failedCount}.`);
@@ -1801,6 +2021,41 @@ async function refreshUpcomingRacesLite() {
         alert(`Upcoming refresh failed: ${err.message}`);
     } finally {
         if (btn) btn.disabled = false;
+    }
+}
+
+async function importDayResultsFromCalendar() {
+    const dateInput = document.getElementById('import-day-date');
+    const targetDate = (dateInput?.value || '').trim();
+    if (!targetDate) {
+        alert('Pick a day first.');
+        return;
+    }
+
+    const proceed = confirm(`Import race results for ${targetDate}?\n\nThe app will prefer history data and fall back to result data.`);
+    if (!proceed) return;
+
+    appendConsoleLine(`[Import] Requested day import for ${targetDate}...`);
+
+    try {
+        const result = await postJson('/api/races/day/import-results', { date: targetDate });
+        await refreshDataAndUI();
+        switchMainTab(targetDate);
+        appendConsoleLine(
+            `[Import] Completed ${result.date}: races_found=${result.races_found}, imported=${result.races_imported}, ` +
+            `updated_entries=${result.updated_entries}, history=${result.sources?.history || 0}, ` +
+            `result=${result.sources?.result || 0}, result_direct=${result.sources?.result_direct || 0}`
+        );
+        alert(
+            `Import complete for ${result.date}.\n` +
+            `Races found: ${result.races_found}\n` +
+            `New races imported: ${result.races_imported}\n` +
+            `Entries updated: ${result.updated_entries}\n` +
+            `Source usage -> history: ${result.sources?.history || 0}, result: ${result.sources?.result || 0}, result_direct: ${result.sources?.result_direct || 0}`
+        );
+    } catch (err) {
+        appendConsoleLine(`[Import] Failed for ${targetDate}: ${err.message}`);
+        alert(`Import failed: ${err.message}`);
     }
 }
 
@@ -1827,7 +2082,7 @@ async function deleteDayData() {
         const result = await postJson('/api/day/delete', { date: targetDate, scope: scope });
         alert(`Done. Races removed: ${result.removed_races}, marks removed: ${result.removed_marks}, horse dict entries removed: ${result.removed_horse_entries}`);
         await refreshDataAndUI();
-        switchTimelineTab(currentTimelineTab, targetDate);
+        switchMainTab(targetDate);
     } catch (err) {
         alert(`Delete failed: ${err.message}`);
     }
@@ -1841,7 +2096,7 @@ async function refreshRaceHistory(event, r_id) {
     try {
         const result = await postJson(`/api/races/${encodeURIComponent(r_id)}/refresh-history`, {});
         await refreshDataAndUI();
-        switchTimelineTab('past', raceDate);
+        if (raceDate) switchMainTab(raceDate);
         alert(`History refreshed for ${result.updated_entries || 0} entries.`);
     } catch (err) {
         alert(`History refresh failed: ${err.message}`);
@@ -1880,8 +2135,8 @@ async function triggerScrape(mode) {
     
     // Reveal and prepare the console
     const consoleBox = document.getElementById('scrape-console');
-    consoleBox.style.display = "block";
-    consoleBox.innerHTML = "Waking up scraper...";
+    if (appConfig?.ui?.showConsole ?? true) consoleBox.style.display = 'block';
+    consoleBox.textContent = "Waking up scraper...";
     
     // Start pinging the Python server for console text every 500 milliseconds
     logInterval = setInterval(fetchLogs, 500);
@@ -1906,8 +2161,8 @@ async function fetchLogs() {
         const data = await res.json();
         const consoleBox = document.getElementById('scrape-console');
         
-        // Update the text
-        consoleBox.innerHTML = data.logs.join('<br>');
+        // Keep scraper logs as text to avoid rendering arbitrary HTML from logs.
+        consoleBox.textContent = data.logs.join('\n');
         
         // Auto-scroll to the absolute bottom so you always see the latest action
         consoleBox.scrollTop = consoleBox.scrollHeight;
@@ -1971,7 +2226,8 @@ async function showExportModal() {
         html = "<p style='text-align:center; color:#888; margin-top:50px;'>No votes cast yet! Make your selections in the grid first.</p>";
     } else {
         dates.forEach(date => {
-            html += `<h2 style="color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px;">📅 ${date}</h2>`;
+            const safeDate = escapeHtml(String(date));
+            html += `<h2 style="color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px;">📅 ${safeDate}</h2>`;
             
             const tracks = Object.keys(summaryByDate[date]).sort();
             tracks.forEach(track => {
@@ -1980,8 +2236,9 @@ async function showExportModal() {
                 const safeTrackId = `${date}-${track}`.replace(/[^a-zA-Z0-9-]/g, '');
                 
                 // NEW: Make the Track Header clickable
-                html += `<div class="export-track-header" onclick="toggleExportTrack('${safeTrackId}')" title="Click to collapse/expand track">
-                            <span id="arrow-track-${safeTrackId}" style="display:inline-block; width:20px; font-size: 14px; vertical-align: middle;">▼</span>${track}
+                     const safeTrack = escapeHtml(String(track));
+                     html += `<div class="export-track-header" onclick="toggleExportTrack('${safeTrackId}')" title="Click to collapse/expand track">
+                                     <span id="arrow-track-${safeTrackId}" style="display:inline-block; width:20px; font-size: 14px; vertical-align: middle;">▼</span>${safeTrack}
                          </div>`;
                          
                 // NEW: Wrap the grid so the whole thing can vanish
@@ -2025,13 +2282,14 @@ async function showExportModal() {
 
                         const markBadge = `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:${symSize}; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:8px;">${m.symbol}</span>`;
 
-                        const favBadge = m.fav ? `Fav ${m.fav}` : "Fav -";
+                        const favBadge = m.fav ? `Fav ${escapeHtml(String(m.fav))}` : "Fav -";
+                        const safeHorseName = escapeHtml(String(m.horse || "Unknown Horse"));
 
                         html += `<div class="export-horse-line" style="margin-bottom: 8px;">
                             ${ppBadge}
                             ${markBadge}
                             <div class="export-horse-main" style="flex: 1; min-width: 0;">
-                                <span style="font-weight: 500;">${m.horse}</span>
+                                <span style="font-weight: 500;">${safeHorseName}</span>
                                 <span class="export-fav-badge">${favBadge}</span>
                             </div>
                         </div>`;
@@ -2071,15 +2329,18 @@ async function showExportModal() {
                     chrono_html += `</div>`; // Close previous date group
                 }
                 currentDate = m.date;
-                chrono_html += `<h2 style="color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px;">📅 ${m.date}</h2>`;
+                const safeChronoDate = escapeHtml(String(m.date));
+                chrono_html += `<h2 style="color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px;">📅 ${safeChronoDate}</h2>`;
                 chrono_html += `<div style="display: flex; flex-direction: column; gap: 12px;">`;
             }
 
             const safeId = `chrono-${m.r_id}`;
+            const safeChronoTrack = escapeHtml(String(m.track));
+            const safeChronoTime = escapeHtml(String(m.time));
             chrono_html += `<div class="export-race-card chrono-race-card" data-sort-ms="${m.sortTime.getTime()}" data-safe-id="${safeId}">
                 <div class="export-race-title" onclick="toggleExportRace('${safeId}')" title="Click to collapse/expand">
                     <span id="arrow-${safeId}" style="display:inline-block; width:15px; font-size: 10px; vertical-align: middle;">▼</span>
-                    ${m.track} R${m.raceNum} - ${m.time}
+                    ${safeChronoTrack} R${m.raceNum} - ${safeChronoTime}
                 </div>
                 <div id="content-${safeId}">`;
 
@@ -2097,13 +2358,14 @@ async function showExportModal() {
                 const ppBadge = mark.pp !== 99 ? `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:12px; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:6px;">${mark.pp}</span>` : `<span style="display:inline-block; width:22px; height:22px; margin-right:6px;"></span>`;
                 const markBadge = `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:${symSize}; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:8px;">${mark.symbol}</span>`;
 
-                const favBadge = mark.fav ? `Fav ${mark.fav}` : "Fav -";
+                const favBadge = mark.fav ? `Fav ${escapeHtml(String(mark.fav))}` : "Fav -";
+                const safeMarkHorse = escapeHtml(String(mark.horse || "Unknown Horse"));
 
                 chrono_html += `<div class="export-horse-line" style="margin-left: 15px;">
                     ${ppBadge}
                     ${markBadge}
                     <div class="export-horse-main" style="flex: 1; min-width: 0;">
-                        <span style="font-weight: 500;">${mark.horse}</span>
+                        <span style="font-weight: 500;">${safeMarkHorse}</span>
                         <span class="export-fav-badge">${favBadge}</span>
                     </div>
                 </div>`;
@@ -2363,6 +2625,7 @@ function showSettingsModal() {
     document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
     document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
     document.getElementById('setting-autoFetchPastResults').checked = isAutoFetchPastResultsEnabled();
+        document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     // Populate formula weight inputs
     const fw = getFormulaWeights();
     document.getElementById('fw-oddsCap').value            = fw.oddsCap;
@@ -2403,6 +2666,7 @@ async function updateSidebarSettings() {
         betSafetyIndicator: document.getElementById('setting-betSafetyIndicator').checked,
         voteSortingTop: document.getElementById('setting-voteSortingTop').checked,
         autoFetchPastResults: document.getElementById('setting-autoFetchPastResults').checked,
+            showConsole: document.getElementById('setting-showConsole').checked,
         formulaWeights: {
             oddsCap:            parseFWInput('fw-oddsCap',            100),
             formMultiplier:     parseFWInput('fw-formMultiplier',     100),
@@ -2505,15 +2769,19 @@ async function toggleRaceColumnVisibility(colKey, visible) {
 }
 
 function applySidebarSettings() {
-    // Get all details elements in the sidebar (they have class "sidebar-group")
-    const sidebarGroups = document.querySelectorAll('.sidebar .sidebar-group');
-    
-    if (sidebarGroups.length >= 4) {
-        // Order: Race Database, Pedigree Lists, Auto-Pick Strategy, Weekend Watchlist
-        sidebarGroups[0].open = appConfig.sidebarTabs?.raceDatabase ?? true;
-        sidebarGroups[1].open = appConfig.sidebarTabs?.pedigreeLists ?? true;
-        sidebarGroups[2].open = appConfig.sidebarTabs?.autoPickStrategy ?? true;
-        sidebarGroups[3].open = appConfig.sidebarTabs?.weekendWatchlist ?? true;
+    const raceDatabaseGroup = document.getElementById('race-database-group');
+    const pedigreeListsGroup = document.getElementById('pedigree-lists-group');
+    const autoPickGroup = document.getElementById('auto-pick-group');
+    const weekendWatchlistGroup = document.getElementById('weekend-watchlist-group');
+
+    if (raceDatabaseGroup) raceDatabaseGroup.open = appConfig.sidebarTabs?.raceDatabase ?? true;
+    if (pedigreeListsGroup) pedigreeListsGroup.open = appConfig.sidebarTabs?.pedigreeLists ?? true;
+    if (autoPickGroup) autoPickGroup.open = appConfig.sidebarTabs?.autoPickStrategy ?? true;
+    if (weekendWatchlistGroup) weekendWatchlistGroup.open = appConfig.sidebarTabs?.weekendWatchlist ?? true;
+
+    const consoleEl = document.getElementById('scrape-console');
+    if (consoleEl) {
+        consoleEl.style.display = (appConfig.ui?.showConsole ?? true) ? 'block' : 'none';
     }
 }
 
@@ -2617,9 +2885,7 @@ function jumpToHorse(date, r_id, h_id, timeline = null) {
     document.getElementById('search-suggestions').style.display = 'none';
     document.getElementById('horse-search').value = '';
 
-    // 1. Force the correct Timeline + Date tab open
-    const targetTimeline = timeline || globalRaceTimelineById[r_id] || currentTimelineTab;
-    switchTimelineTab(targetTimeline, date);
+    // 1. Activate the correct day in the calendar-backed schedule.
     switchMainTab(date);
 
     // 2. Expand the specific race if it is collapsed
@@ -2650,98 +2916,6 @@ function jumpToHorse(date, r_id, h_id, timeline = null) {
 // ==========================================
 // --- JUMP TO RACE FEATURE ---
 // ==========================================
-
-function updateJumpDay() {
-    const daySelect = document.getElementById('jump-day');
-    const days = Object.keys(globalRacesByDate).sort();
-    
-    daySelect.innerHTML = '<option value="">Day</option>';
-    days.forEach(day => {
-        const option = document.createElement('option');
-        option.value = day;
-        option.textContent = day;
-        daySelect.appendChild(option);
-    });
-    
-    // Reset other dropdowns
-    document.getElementById('jump-course').innerHTML = '<option value="">Course</option>';
-    document.getElementById('jump-race').innerHTML = '<option value="">Race</option>';
-}
-
-function updateJumpCourse() {
-    const daySelect = document.getElementById('jump-day');
-    const courseSelect = document.getElementById('jump-course');
-    const selectedDay = daySelect.value;
-    
-    if (!selectedDay || !globalRacesByDate[selectedDay]) {
-        courseSelect.innerHTML = '<option value="">Course</option>';
-        document.getElementById('jump-race').innerHTML = '<option value="">Race</option>';
-        return;
-    }
-    
-    const races = globalRacesByDate[selectedDay];
-    const courses = [...new Set(races.map(r => r.place))].sort();
-    
-    courseSelect.innerHTML = '<option value="">Course</option>';
-    courses.forEach(course => {
-        const option = document.createElement('option');
-        option.value = course;
-        option.textContent = course;
-        courseSelect.appendChild(option);
-    });
-    
-    // Reset race dropdown
-    document.getElementById('jump-race').innerHTML = '<option value="">Race</option>';
-}
-
-function updateJumpRace() {
-    const daySelect = document.getElementById('jump-day');
-    const courseSelect = document.getElementById('jump-course');
-    const raceSelect = document.getElementById('jump-race');
-    const selectedDay = daySelect.value;
-    const selectedCourse = courseSelect.value;
-    
-    if (!selectedDay || !selectedCourse || !globalRacesByDate[selectedDay]) {
-        raceSelect.innerHTML = '<option value="">Race</option>';
-        return;
-    }
-    
-    const races = globalRacesByDate[selectedDay].filter(r => r.place === selectedCourse).sort((a, b) => a.race_number - b.race_number);
-    
-    raceSelect.innerHTML = '<option value="">Race</option>';
-    races.forEach(race => {
-        const option = document.createElement('option');
-        option.value = race.race_id;
-        option.textContent = `R${race.race_number} ${race.time || 'TBA'}`;
-        raceSelect.appendChild(option);
-    });
-}
-
-function checkAndJump() {
-    const daySelect = document.getElementById('jump-day');
-    const courseSelect = document.getElementById('jump-course');
-    const raceSelect = document.getElementById('jump-race');
-    const selectedDay = daySelect.value;
-    const selectedRaceId = raceSelect.value;
-    
-    // Only jump if all 3 are selected
-    if (!selectedDay || !selectedRaceId) {
-        return;
-    }
-    
-    // Find the first horse in this race to highlight
-    const races = globalRaceEntries[selectedRaceId];
-    if (!races || races.length === 0) {
-        return;
-    }
-    
-    const firstHorseId = String(races[0].Horse_ID).split('.')[0];
-    jumpToHorse(selectedDay, selectedRaceId, firstHorseId, currentTimelineTab);
-}
-
-function performJump() {
-    checkAndJump();
-}
 
 // Hide search dropdown if the user clicks anywhere else on the screen
 document.addEventListener('click', function(e) {
