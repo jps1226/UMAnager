@@ -19,6 +19,29 @@
 
         .sidebar { width: 380px; background-color: #1a1c23; padding: 20px; overflow-y: auto; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 0; }
         .sidebar-footer { margin-top: auto; padding-top: 10px; position: sticky; bottom: 0; background: linear-gradient(180deg, rgba(26, 28, 35, 0), rgba(26, 28, 35, 0.92) 16px, rgba(26, 28, 35, 1) 100%); }
+        .sidebar-brand-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 15px; }
+        .sidebar-brand-title { margin: 0; color: #1dd1a1; }
+        .sidebar-brand-actions { display: flex; align-items: center; gap: 8px; }
+        .app-version-badge { font-size: 10px; color: #666; font-weight: bold; letter-spacing: 1px; }
+        .settings-icon-btn { background: #262730; border: 1px solid #444; color: #1dd1a1; font-size: 16px; width: 28px; height: 28px; padding: 0; border-radius: 4px; }
+        .btn-primary-prominent { background: #1dd1a1; color: #000; font-weight: bold; border-color: #1dd1a1; font-size: 15px; padding: 10px; }
+        .btn-compact { font-size: 12px; padding: 8px; }
+        .btn-micro { font-size: 12px; padding: 6px; }
+        .btn-no-margin { margin-bottom: 0; }
+        .advanced-tools-panel { margin-top: 10px; margin-bottom: 5px; }
+        .advanced-tools-summary { font-size: 12px; color: #888; cursor: pointer; user-select: none; }
+        .advanced-tools-body { margin-top: 10px; padding-top: 10px; border-top: 1px dotted #444; }
+        .tool-block { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #444; display: flex; flex-direction: column; gap: 6px; }
+        .tool-block-label { font-size: 11px; color: #aaa; font-weight: bold; }
+        .tool-input-compact { font-size: 12px; padding: 6px; }
+        .sidebar-label { font-size: 14px; }
+        .sidebar-select-full { background: #262730; color: white; border: 1px solid #444; padding: 5px; margin-bottom: 5px; width: 100%; }
+        .inline-input-row { display: flex; gap: 5px; margin-bottom: 15px; }
+        .tab-bar-spaced { margin-bottom: 10px; }
+        .strategy-panel-content { padding: 10px 15px; }
+        .strategy-mode-label { font-size: 11px; color: #888; margin-bottom: 8px; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px; text-align: center; }
+        .risk-label-value { color: #ff9f43; }
+        .strategy-scale-labels { display: flex; justify-content: space-between; font-size: 10px; color: #666; margin-top: 5px; font-weight: bold; }
         
 /* --- SIDEBAR GROUPS --- */
 .sidebar-group {
@@ -74,6 +97,8 @@
         .clock-box { text-align: center; }
         .clock-label { font-size: 12px; color: #888; letter-spacing: 1px; }
         .clock-time { font-size: 24px; font-weight: bold; }
+        .main-toolbar { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #333; padding-bottom: 6px; }
+        .main-toolbar-left { display: flex; align-items: center; gap: 10px; }
         .active-date-nav {
             display: flex;
             align-items: center;
@@ -111,6 +136,9 @@
             opacity: 0.35;
             cursor: not-allowed;
         }
+        .toolbar-btn { padding: 6px 12px; }
+        .toolbar-btn-primary { background: #1dd1a1; color: #000; font-weight: bold; border-color: #1dd1a1; }
+        .toolbar-btn-muted { background: #333; border-color: #555; }
 
         /* --- BUTTONS & INPUTS --- */
         button { background: #262730; color: white; border: 1px solid #444; padding: 8px 12px; border-radius: 4px; cursor: pointer; transition: 0.2s; font-size: 14px; }
@@ -649,9 +677,51 @@ td.finish-pos-3 { color: #cd7f32; }
     width: 450px; max-width: 90vw; padding: 20px;
     box-shadow: 0 10px 25px rgba(0,0,0,0.8);
 }
+.modal-content-wide { width: 800px; max-width: 95vw; }
+.modal-content-settings { width: 400px; max-width: 95vw; }
 .modal-header {
     display: flex; justify-content: space-between; align-items: center;
     border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 15px;
+}
+.modal-title { margin: 0; }
+.modal-header-actions { display: flex; align-items: center; gap: 15px; }
+.modal-link-btn {
+    background: #1dd1a1;
+    color: #000;
+    padding: 6px 12px;
+    text-decoration: none;
+    border-radius: 4px;
+    font-weight: bold;
+    font-size: 14px;
+}
+.modal-close-btn { background: #333; color: white; }
+.settings-body { padding: 20px; }
+.settings-section-title { color: #1dd1a1; margin-top: 18px; margin-bottom: 12px; }
+.settings-section-title-first { margin-top: 0; }
+.settings-section-title-tight { margin-bottom: 8px; }
+.settings-option-list { display: flex; flex-direction: column; gap: 10px; }
+.settings-option-row { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
+.settings-helper-text { font-size: 12px; color: #999; margin-bottom: 10px; }
+.settings-helper-text-tight { margin-bottom: 8px; }
+.settings-formula-grid { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; font-size: 13px; }
+.settings-number-input {
+    width: 70px;
+    background: #1a1a2e;
+    border: 1px solid #444;
+    color: #eee;
+    padding: 3px 6px;
+    border-radius: 4px;
+    text-align: right;
+}
+.settings-reset-btn {
+    margin-top: 10px;
+    font-size: 12px;
+    background: #262730;
+    border: 1px solid #555;
+    color: #aaa;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
 }
 .close-btn { 
     background: transparent; border: none; color: #aaa; 

@@ -1,19 +1,14 @@
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-import asyncio
 import os
 import subprocess
 import signal
-import threading
 import logging
-from typing import Literal
-from pydantic import BaseModel
-import data_manager
-import config
 from routers.maintenance import router as maintenance_router
 from routers.lists_config import router as lists_config_router
 from routers.races import router as races_router, set_progress_logger
+from routers.scrape import router as scrape_router, log_progress
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,24 +25,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(maintenance_router)
 app.include_router(lists_config_router)
 app.include_router(races_router)
-
-# --- NEW: CONSOLE LOGGING MEMORY ---
-scrape_logs = []
-scrape_logs_lock = threading.Lock()
-scrape_job_lock = asyncio.Lock()
-
-
-class ScrapeRequest(BaseModel):
-    mode: Literal["new", "all"] = "new"
-
-
-def log_progress(msg):
-    """Pushes new messages to the frontend console."""
-    with scrape_logs_lock:
-        scrape_logs.append(msg)
-        # Keep the console from using too much memory on massive scrapes
-        if len(scrape_logs) > config.MAX_CONSOLE_LOGS:
-            scrape_logs.pop(0)
+app.include_router(scrape_router)
 
 
 set_progress_logger(log_progress)
@@ -89,32 +67,6 @@ def shutdown_server_instances(port=8000):
 def read_root():
     with open("index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
-
-# --- DATA MANAGEMENT ENDPOINTS ---
-@app.post("/api/scrape")
-async def run_scrape(payload: ScrapeRequest):
-    global scrape_logs
-
-    if scrape_job_lock.locked():
-        return {"status": "busy", "message": "A scrape job is already running."}
-
-    with scrape_logs_lock:
-        scrape_logs = ["Initializing Netkeiba Scraper..."]
-
-    mode = payload.mode
-
-    async with scrape_job_lock:
-        # Run scraper in a worker thread so the server can keep serving logs.
-        await asyncio.to_thread(data_manager.fetch_weekend_timeline, mode=mode, progress_callback=log_progress)
-
-    with scrape_logs_lock:
-        scrape_logs.append("Done! Refreshing schedule...")
-    return {"status": "success"}
-
-@app.get("/api/scrape/log")
-def get_scrape_log():
-    with scrape_logs_lock:
-        return {"logs": list(scrape_logs)}
 
 @app.post("/api/server/shutdown")
 def shutdown_server(background_tasks: BackgroundTasks):

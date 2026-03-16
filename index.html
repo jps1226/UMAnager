@@ -8,11 +8,11 @@
 <body>
 
 <div class="sidebar">
-    <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 15px;">
-        <h2 style="margin: 0; color: #1dd1a1;">🐎 UMAnager</h2>
-        <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 10px; color: #666; font-weight: bold; letter-spacing: 1px;">V1.0</span>
-            <button onclick="showSettingsModal()" title="Settings" style="background: #262730; border: 1px solid #444; color: #1dd1a1; cursor: pointer; font-size: 16px; width: 28px; height: 28px; padding: 0; border-radius: 4px;">⚙️</button>
+    <div class="sidebar-brand-row">
+        <h2 class="sidebar-brand-title">🐎 UMAnager</h2>
+        <div class="sidebar-brand-actions">
+            <span class="app-version-badge">V1.0</span>
+            <button onclick="showSettingsModal()" title="Settings" class="settings-icon-btn">⚙️</button>
         </div>
     </div>
 
@@ -27,33 +27,33 @@
         <summary>🔄 Race Database</summary>
         <div class="sidebar-group-content">
             
-            <button class="btn-full" onclick="triggerScrape('new')" id="btn-new-race" style="background: #1dd1a1; color: black; font-weight: bold; border-color: #1dd1a1; font-size: 15px; padding: 10px;">🔍 Fetch Upcoming Races</button>
-            <button class="btn-full" style="font-size: 12px; padding: 8px;" onclick="refreshUpcomingRacesLite()" id="btn-upcoming-refresh">🛰️ Update Upcoming Cards</button>
+            <button class="btn-full btn-primary-prominent" onclick="triggerScrape('new')" id="btn-new-race">🔍 Fetch Upcoming Races</button>
+            <button class="btn-full btn-compact" onclick="refreshUpcomingRacesLite()" id="btn-upcoming-refresh">🛰️ Update Upcoming Cards</button>
             
-            <details style="margin-top: 10px; margin-bottom: 5px;">
-                <summary style="font-size: 12px; color: #888; cursor: pointer; user-select: none;">⚙️ Advanced Tools</summary>
-                <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dotted #444;">
-                    <button class="btn-full" style="font-size: 12px; padding: 6px;" onclick="triggerScrape('all')" id="btn-all-race">🔄 Force Full Re-Scrape</button>
-                    <button class="btn-full" style="font-size: 12px; padding: 6px;" onclick="triggerPost('/api/cache/clear')">🗑️ Clear Cached Races</button>
-                    <button class="btn-full btn-danger" style="font-size: 12px; padding: 6px;" onclick="triggerPost('/api/dict/wipe')">🚨 Reset Translation Memory</button>
-                    <button class="btn-full" style="font-size: 12px; padding: 6px;" onclick="createDataBackup()">💾 Backup Data Folder</button>
-                    <button class="btn-full" style="font-size: 12px; padding: 6px;" onclick="restoreLatestBackup()">♻️ Restore Latest Backup</button>
+            <details class="advanced-tools-panel">
+                <summary class="advanced-tools-summary">⚙️ Advanced Tools</summary>
+                <div class="advanced-tools-body">
+                    <button class="btn-full btn-micro" onclick="triggerScrape('all')" id="btn-all-race">🔄 Force Full Re-Scrape</button>
+                    <button class="btn-full btn-micro" onclick="triggerPost('/api/cache/clear')">🗑️ Clear Cached Races</button>
+                    <button class="btn-full btn-danger btn-micro" onclick="triggerPost('/api/dict/wipe')">🚨 Reset Translation Memory</button>
+                    <button class="btn-full btn-micro" onclick="createDataBackup()">💾 Backup Data Folder</button>
+                    <button class="btn-full btn-micro" onclick="restoreLatestBackup()">♻️ Restore Latest Backup</button>
 
-                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #444; display: flex; flex-direction: column; gap: 6px;">
-                        <label style="font-size: 11px; color: #aaa; font-weight: bold;">Import Results For Day</label>
-                        <input type="date" id="import-day-date" style="font-size: 12px; padding: 6px;">
-                        <button class="btn-full" style="font-size: 12px; padding: 6px; margin-bottom: 0;" onclick="importDayResultsFromCalendar()">📅 Import Day Results</button>
+                    <div class="tool-block">
+                        <label class="tool-block-label">Import Results For Day</label>
+                        <input type="date" id="import-day-date" class="tool-input-compact">
+                        <button class="btn-full btn-micro btn-no-margin" onclick="importDayResultsFromCalendar()">📅 Import Day Results</button>
                     </div>
 
-                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #444; display: flex; flex-direction: column; gap: 6px;">
-                        <label style="font-size: 11px; color: #aaa; font-weight: bold;">Delete Selected Day Data</label>
-                        <input type="date" id="delete-day-date" style="font-size: 12px; padding: 6px;">
-                        <select id="delete-day-scope" style="font-size: 12px; padding: 6px;">
+                    <div class="tool-block">
+                        <label class="tool-block-label">Delete Selected Day Data</label>
+                        <input type="date" id="delete-day-date" class="tool-input-compact">
+                        <select id="delete-day-scope" class="tool-input-compact">
                             <option value="marks">Delete Marks Only</option>
                             <option value="entries">Delete Horse Entries Only</option>
                             <option value="all">Delete All Day Data</option>
                         </select>
-                        <button class="btn-full btn-danger" style="font-size: 12px; padding: 6px; margin-bottom: 0;" onclick="deleteDayData()">🧹 Delete This Day</button>
+                        <button class="btn-full btn-danger btn-micro btn-no-margin" onclick="deleteDayData()">🧹 Delete This Day</button>
                     </div>
                 </div>
             </details>
@@ -64,17 +64,17 @@
     <details id="pedigree-lists-group" class="sidebar-group" open>
         <summary>🎯 Pedigree Lists</summary>
         <div class="sidebar-group-content">
-            <label style="font-size: 14px;">Add to list:</label>
-            <select id="snipe-type" style="background:#262730; color:white; border:1px solid #444; padding:5px; margin-bottom: 5px; width: 100%;">
+            <label class="sidebar-label">Add to list:</label>
+            <select id="snipe-type" class="sidebar-select-full">
                 <option value="favorites">⭐ Favorites</option>
                 <option value="watchlist">👁️ Watchlist</option>
             </select>
-            <div style="display: flex; gap: 5px; margin-bottom: 15px;">
+            <div class="inline-input-row">
                 <input type="text" id="snipe-url" placeholder="https://db.netkeiba.com/...">
                 <button onclick="snipeHorse()">Add</button>
             </div>
             
-            <div class="tab-bar" style="margin-bottom: 10px;">
+            <div class="tab-bar tab-bar-spaced">
                 <button class="tab-btn active" onclick="switchSidebarTab('fav')">Favorites</button>
                 <button class="tab-btn" onclick="switchSidebarTab('watch')">Watchlist</button>
             </div>
@@ -90,12 +90,12 @@
 
     <details id="auto-pick-group" class="sidebar-group" open>
             <summary>⚙️ Auto-Pick Strategy</summary>
-            <div class="sidebar-group-content" style="padding: 10px 15px;">
-                <div style="font-size: 11px; color: #888; margin-bottom: 8px; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px; text-align: center;">
-                    Mode: <span id="risk-label" style="color:#ff9f43;">Balanced (50)</span>
+            <div class="sidebar-group-content strategy-panel-content">
+                <div class="strategy-mode-label">
+                    Mode: <span id="risk-label" class="risk-label-value">Balanced (50)</span>
                 </div>
                 <input type="range" id="risk-slider" min="0" max="100" value="50" oninput="updateRiskLabel(this.value)">
-                <div style="display: flex; justify-content: space-between; font-size: 10px; color: #666; margin-top: 5px; font-weight: bold;">
+                <div class="strategy-scale-labels">
                     <span>SAFE / CHALK</span>
                     <span>CHAOS / VALUE</span>
                 </div>
@@ -136,8 +136,8 @@
             <div id="scrape-console" class="console-box console-top-bar"></div>
         </div>
 
-        <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #333; padding-bottom: 6px;">
-            <div style="display: flex; align-items: center; gap: 10px;">
+        <div class="main-toolbar">
+            <div class="main-toolbar-left">
                 <div class="active-date-nav">
                     <button type="button" id="active-date-prev" class="active-date-nav-btn" onclick="shiftActiveDate(-1)">◀</button>
                     <div class="active-date-display">
@@ -152,9 +152,9 @@
                     <div id="search-suggestions" class="suggestions-box"></div>
                 </div>
 
-                <button onclick="showExportModal()" style="padding: 6px 12px; background: #1dd1a1; color: black; font-weight: bold; border-color: #1dd1a1;">📋 Voting Cheat Sheet</button>
-                <button onclick="collapseVotedRaces()" style="padding: 6px 12px; background: #333; border-color: #555;">✅ Collapse Voted</button>
-                <button onclick="toggleAllRaces()" style="padding: 6px 12px; background: #333; border-color: #555;">↕️ Toggle All Races</button>
+                <button onclick="showExportModal()" class="toolbar-btn toolbar-btn-primary">📋 Voting Cheat Sheet</button>
+                <button onclick="collapseVotedRaces()" class="toolbar-btn toolbar-btn-muted">✅ Collapse Voted</button>
+                <button onclick="toggleAllRaces()" class="toolbar-btn toolbar-btn-muted">↕️ Toggle All Races</button>
             </div>
         </div>
     </div>
@@ -162,90 +162,90 @@
     <div id="schedules-container" class="scrollable-races"></div>
 </div>
 <div id="export-modal" class="modal-overlay" style="display: none;">
-    <div class="modal-content" style="width: 800px; max-width: 95vw;">
+    <div class="modal-content modal-content-wide">
         <div class="modal-header">
-            <h3 style="margin: 0;">📋 Voting Cheat Sheet</h3>
-            <div style="display: flex; align-items: center; gap: 15px;">
-                <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" style="background: #1dd1a1; color: black; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">🔗 Open OrePro</a>
+            <h3 class="modal-title">📋 Voting Cheat Sheet</h3>
+            <div class="modal-header-actions">
+                <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" class="modal-link-btn">🔗 Open OrePro</a>
                 <button onclick="closeExportModal()" class="close-btn">✖</button>
             </div>
         </div>
         <div id="export-display"></div>
-        <button onclick="closeExportModal()" class="btn-full" style="background: #333; color: white; margin-top: 15px;">Close</button>
+        <button onclick="closeExportModal()" class="btn-full modal-close-btn">Close</button>
     </div>
 </div>
 
 <div id="settings-modal" class="modal-overlay" style="display: none;">
-    <div class="modal-content" style="width: 400px; max-width: 95vw;">
+    <div class="modal-content modal-content-settings">
         <div class="modal-header">
-            <h3 style="margin: 0;">⚙️ Settings</h3>
+            <h3 class="modal-title">⚙️ Settings</h3>
             <button onclick="closeSettingsModal()" class="close-btn">✖</button>
         </div>
-        <div style="padding: 20px;">
-            <h4 style="color: #1dd1a1; margin-top: 0; margin-bottom: 12px;">Default Sidebar Sections</h4>
-            <div style="display: flex; flex-direction: column; gap: 10px;">
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+        <div class="settings-body">
+            <h4 class="settings-section-title settings-section-title-first">Default Sidebar Sections</h4>
+            <div class="settings-option-list">
+                <label class="settings-option-row">
                     <input type="checkbox" id="setting-raceDatabase" onchange="updateSidebarSettings()">
                     <span>🔄 Race Database</span>
                 </label>
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                <label class="settings-option-row">
                     <input type="checkbox" id="setting-pedigreeLists" onchange="updateSidebarSettings()">
                     <span>🎯 Pedigree Lists</span>
                 </label>
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                <label class="settings-option-row">
                     <input type="checkbox" id="setting-autoPickStrategy" onchange="updateSidebarSettings()">
                     <span>⚙️ Auto-Pick Strategy</span>
                 </label>
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                <label class="settings-option-row">
                     <input type="checkbox" id="setting-weekendWatchlist" onchange="updateSidebarSettings()">
                     <span>🏆 Weekend Watchlist</span>
                 </label>
             </div>
-            <h4 style="color: #1dd1a1; margin-top: 18px; margin-bottom: 12px;">Display Options</h4>
-            <div style="display: flex; flex-direction: column; gap: 10px;">
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+            <h4 class="settings-section-title">Display Options</h4>
+            <div class="settings-option-list">
+                <label class="settings-option-row">
                     <input type="checkbox" id="setting-betSafetyIndicator" onchange="updateSidebarSettings()">
                     <span>⚡ Bet Safety Indicator</span>
                 </label>
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                <label class="settings-option-row">
                     <input type="checkbox" id="setting-voteSortingTop" onchange="updateSidebarSettings()">
                     <span>🗳️ Float Votes To Top</span>
                 </label>
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                <label class="settings-option-row">
                     <input type="checkbox" id="setting-autoFetchPastResults" onchange="updateSidebarSettings()">
                     <span>🏁 Auto-Fetch Past Results</span>
                 </label>
-                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                <label class="settings-option-row">
                     <input type="checkbox" id="setting-showConsole" onchange="updateSidebarSettings()">
                     <span>🖥️ Show Console Log</span>
                 </label>
             </div>
 
-            <h4 style="color: #1dd1a1; margin-top: 18px; margin-bottom: 8px;">⚗️ Auto-Pick Formula</h4>
-            <div style="font-size: 12px; color: #999; margin-bottom: 10px;">Tune the scoring engine weights. Changes affect new auto-picks and the Bet Safety indicator.</div>
-            <div style="display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; font-size: 13px;">
+            <h4 class="settings-section-title settings-section-title-tight">⚗️ Auto-Pick Formula</h4>
+            <div class="settings-helper-text">Tune the scoring engine weights. Changes affect new auto-picks and the Bet Safety indicator.</div>
+            <div class="settings-formula-grid">
                 <label title="Max points a horse can earn from odds (formula: oddsCap ÷ odds). Higher = odds have bigger absolute impact.">Odds Cap</label>
-                <input type="number" id="fw-oddsCap" min="0" max="1000" step="10" onchange="updateSidebarSettings()" style="width: 70px; background: #1a1a2e; border: 1px solid #444; color: #eee; padding: 3px 6px; border-radius: 4px; text-align: right;">
+                <input type="number" id="fw-oddsCap" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
 
                 <label title="Max points from win rate (wins÷starts × scale). Higher = race record matters more.">Win Rate Scale</label>
-                <input type="number" id="fw-formMultiplier" min="0" max="1000" step="10" onchange="updateSidebarSettings()" style="width: 70px; background: #1a1a2e; border: 1px solid #444; color: #eee; padding: 3px 6px; border-radius: 4px; text-align: right;">
+                <input type="number" id="fw-formMultiplier" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
 
                 <label title="Points awarded per start below the breakeven count. Set to 0 to disable the freshness bonus entirely.">Freshness Bonus</label>
-                <input type="number" id="fw-freshnessBonus" min="-20" max="20" step="1" onchange="updateSidebarSettings()" style="width: 70px; background: #1a1a2e; border: 1px solid #444; color: #eee; padding: 3px 6px; border-radius: 4px; text-align: right;">
+                <input type="number" id="fw-freshnessBonus" min="-20" max="20" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
 
                 <label title="Starts count where freshness is neutral (neither bonus nor penalty). Horses with fewer starts get the bonus; more get a penalty.">Freshness Breakeven</label>
-                <input type="number" id="fw-freshnessBreakeven" min="0" max="50" step="1" onchange="updateSidebarSettings()" style="width: 70px; background: #1a1a2e; border: 1px solid #444; color: #eee; padding: 3px 6px; border-radius: 4px; text-align: right;">
+                <input type="number" id="fw-freshnessBreakeven" min="0" max="50" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
 
                 <label title="Multiplier on pedigree score from tracked bloodlines. Higher = pedigree matters more at higher risk settings.">Pedigree Scale</label>
-                <input type="number" id="fw-pedigreeMultiplier" min="0" max="500" step="5" onchange="updateSidebarSettings()" style="width: 70px; background: #1a1a2e; border: 1px solid #444; color: #eee; padding: 3px 6px; border-radius: 4px; text-align: right;">
+                <input type="number" id="fw-pedigreeMultiplier" min="0" max="500" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
             </div>
-            <button onclick="resetFormulaWeights()" style="margin-top: 10px; font-size: 12px; background: #262730; border: 1px solid #555; color: #aaa; padding: 4px 10px; border-radius: 4px; cursor: pointer;">↺ Reset to Defaults</button>
+            <button onclick="resetFormulaWeights()" class="settings-reset-btn">↺ Reset to Defaults</button>
 
-            <h4 style="color: #1dd1a1; margin-top: 18px; margin-bottom: 12px;">Race Table Columns</h4>
-            <div style="font-size: 12px; color: #999; margin-bottom: 8px;">Toggle visibility and move columns up/down. This applies globally.</div>
+            <h4 class="settings-section-title">Race Table Columns</h4>
+            <div class="settings-helper-text settings-helper-text-tight">Toggle visibility and move columns up/down. This applies globally.</div>
             <div id="setting-race-columns" class="setting-columns-wrap"></div>
         </div>
-        <button onclick="closeSettingsModal()" class="btn-full" style="background: #333; color: white;">Close</button>
+        <button onclick="closeSettingsModal()" class="btn-full modal-close-btn">Close</button>
     </div>
 </div>
 </div>
