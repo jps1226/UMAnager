@@ -284,7 +284,7 @@ def get_marks():
 
 
 @router.post("/api/marks")
-async def save_marks(marks: dict[str, str]):
+async def save_marks(marks: dict):
     atomic_write_json(MARKS_FILE, marks)
     return {"status": "success"}
 

@@ -2,10 +2,7 @@
         body { font-family: sans-serif; background-color: #0e1117; color: #fafafa; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
 
 .global-close-server-btn {
-    position: fixed;
-    top: 10px;
-    right: 12px;
-    z-index: 3000;
+    position: static;
     background: #4a1919;
     border: 1px solid #ff4b4b;
     color: #fff;
@@ -13,13 +10,15 @@
     font-weight: bold;
     padding: 6px 10px;
     border-radius: 6px;
+    width: 100%;
 }
 .global-close-server-btn:hover {
     background: #ff4b4b;
     color: #000;
 }
 
-        .sidebar { width: 380px; background-color: #1a1c23; padding: 20px; overflow-y: auto; border-right: 1px solid #333; }
+        .sidebar { width: 380px; background-color: #1a1c23; padding: 20px; overflow-y: auto; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 0; }
+        .sidebar-footer { margin-top: auto; padding-top: 10px; position: sticky; bottom: 0; background: linear-gradient(180deg, rgba(26, 28, 35, 0), rgba(26, 28, 35, 0.92) 16px, rgba(26, 28, 35, 1) 100%); }
         
 /* --- SIDEBAR GROUPS --- */
 .sidebar-group {
@@ -43,6 +42,7 @@
 }
 .sidebar-group summary:hover { color: #ff4b4b; }
 .sidebar-group-content { padding: 0 10px 10px 10px; }
+.calendar-group .sidebar-group-content { padding-top: 2px; }
 
 /* --- MINI CONSOLE --- */
 .console-box {
@@ -66,12 +66,51 @@
         .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; background-color: #0e1117; }
         .top-sticky-bar { padding: 20px 40px 0 40px; flex-shrink: 0; position: relative; z-index: 100; }
         .scrollable-races { flex: 1; overflow-y: auto; padding: 0 40px 20px 40px; }
-        
-        /* --- CLOCK --- */
-        .clock-container { display: flex; justify-content: center; gap: 40px; background-color: rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 10px; margin-bottom: 20px; }
+
+        /* --- CLOCK ROW (clocks + inline console) --- */
+        .top-bar-clock-row { display: flex; align-items: stretch; gap: 16px; margin-bottom: 20px; }
+        .clock-container { display: flex; justify-content: center; gap: 40px; background-color: rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 10px; flex-shrink: 0; margin-bottom: 0; }
+        .console-top-bar { flex: 1; min-width: 200px; height: auto; min-height: 72px; margin-top: 0; border-radius: 10px; font-size: 11px; display: none; }
         .clock-box { text-align: center; }
         .clock-label { font-size: 12px; color: #888; letter-spacing: 1px; }
         .clock-time { font-size: 24px; font-weight: bold; }
+        .active-date-nav {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid #333;
+            border-radius: 10px;
+            padding: 6px 8px;
+            min-width: 230px;
+        }
+        .active-date-display {
+            min-width: 150px;
+            text-align: center;
+        }
+        .active-date-label {
+            font-size: 13px;
+            font-weight: bold;
+            color: #f3f6fb;
+            line-height: 1.2;
+        }
+        .active-date-meta {
+            font-size: 10px;
+            color: #8f98aa;
+            margin-top: 2px;
+        }
+        .active-date-nav-btn {
+            width: 30px;
+            min-width: 30px;
+            height: 30px;
+            padding: 0;
+            font-size: 13px;
+            font-weight: bold;
+        }
+        .active-date-nav-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
 
         /* --- BUTTONS & INPUTS --- */
         button { background: #262730; color: white; border: 1px solid #444; padding: 8px 12px; border-radius: 4px; cursor: pointer; transition: 0.2s; font-size: 14px; }

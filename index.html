@@ -7,8 +7,6 @@
 </head>
 <body>
 
-<button id="global-close-server-btn" class="global-close-server-btn" onclick="closeServerInstances()" title="Close all running UMAnager server instances">⏻ Close Server</button>
-
 <div class="sidebar">
     <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 15px;">
         <h2 style="margin: 0; color: #1dd1a1;">🐎 UMAnager</h2>
@@ -18,9 +16,14 @@
         </div>
     </div>
 
-    <div id="race-calendar" class="race-calendar-panel race-calendar-sidebar"></div>
+    <details id="calendar-group" class="sidebar-group calendar-group" open>
+        <summary>🗓️ Race Calendar</summary>
+        <div class="sidebar-group-content">
+            <div id="race-calendar" class="race-calendar-panel race-calendar-sidebar"></div>
+        </div>
+    </details>
     
-    <details class="sidebar-group" open>
+    <details id="race-database-group" class="sidebar-group" open>
         <summary>🔄 Race Database</summary>
         <div class="sidebar-group-content">
             
@@ -55,11 +58,10 @@
                 </div>
             </details>
             
-            <div id="scrape-console" class="console-box" style="border-radius: 6px;"></div>
         </div>
     </details>
 
-    <details class="sidebar-group" open>
+    <details id="pedigree-lists-group" class="sidebar-group" open>
         <summary>🎯 Pedigree Lists</summary>
         <div class="sidebar-group-content">
             <label style="font-size: 14px;">Add to list:</label>
@@ -86,7 +88,7 @@
         </div>
     </details>
 
-    <details class="sidebar-group" open>
+    <details id="auto-pick-group" class="sidebar-group" open>
             <summary>⚙️ Auto-Pick Strategy</summary>
             <div class="sidebar-group-content" style="padding: 10px 15px;">
                 <div style="font-size: 11px; color: #888; margin-bottom: 8px; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px; text-align: center;">
@@ -100,35 +102,50 @@
             </div>
         </details>
         
-    <details class="sidebar-group" open>
+    <details id="weekend-watchlist-group" class="sidebar-group" open>
             <summary>🏆 Weekend Watchlist</summary>
             <div class="sidebar-group-content" id="sidebar-weekend-watchlist">
                 </div>
         </details>
+
+    <div class="sidebar-footer">
+        <button id="global-close-server-btn" class="global-close-server-btn" onclick="closeServerInstances()" title="Close all running UMAnager server instances">⏻ Close Server</button>
+    </div>
 </div>
 
 <div class="main-content">
     <div class="top-sticky-bar">
-        <div class="clock-container">
-            <div class="clock-box">
-                <div class="clock-label">JAPAN (JST)</div>
-                <div class="clock-time" id="jst">--:--:--</div>
-            </div>
-            
-            <div id="countdown-container" class="countdown-wrapper" style="display: none;">
-                <div class="countdown-title">Next Race In</div>
-                <div id="countdown-time" class="countdown-time">--:--:--</div>
-                <div id="countdown-race" class="countdown-race">Loading...</div>
-            </div>
+        <div class="top-bar-clock-row">
+            <div class="clock-container">
+                <div class="clock-box">
+                    <div class="clock-label">JAPAN (JST)</div>
+                    <div class="clock-time" id="jst">--:--:--</div>
+                </div>
+                
+                <div id="countdown-container" class="countdown-wrapper" style="display: none;">
+                    <div class="countdown-title">Next Race In</div>
+                    <div id="countdown-time" class="countdown-time">--:--:--</div>
+                    <div id="countdown-race" class="countdown-race">Loading...</div>
+                </div>
 
-            <div class="clock-box">
-                <div class="clock-label">CENTRAL (CT)</div>
-                <div class="clock-time" id="cst">--:--:--</div>
+                <div class="clock-box">
+                    <div class="clock-label">CENTRAL (CT)</div>
+                    <div class="clock-time" id="cst">--:--:--</div>
+                </div>
             </div>
+            <div id="scrape-console" class="console-box console-top-bar"></div>
         </div>
 
         <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #333; padding-bottom: 6px;">
             <div style="display: flex; align-items: center; gap: 10px;">
+                <div class="active-date-nav">
+                    <button type="button" id="active-date-prev" class="active-date-nav-btn" onclick="shiftActiveDate(-1)">◀</button>
+                    <div class="active-date-display">
+                        <div id="active-date-label" class="active-date-label">No day selected</div>
+                        <div id="active-date-meta" class="active-date-meta">0 races</div>
+                    </div>
+                    <button type="button" id="active-date-next" class="active-date-nav-btn" onclick="shiftActiveDate(1)">▶</button>
+                </div>
                 
                 <div class="search-container">
                     <input type="text" id="horse-search" placeholder="🔍 Search horse..." autocomplete="off" oninput="handleSearchInput()" onkeydown="handleSearchKey(event)">
@@ -197,6 +214,10 @@
                 <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
                     <input type="checkbox" id="setting-autoFetchPastResults" onchange="updateSidebarSettings()">
                     <span>🏁 Auto-Fetch Past Results</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px;">
+                    <input type="checkbox" id="setting-showConsole" onchange="updateSidebarSettings()">
+                    <span>🖥️ Show Console Log</span>
                 </label>
             </div>
 

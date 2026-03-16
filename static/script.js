@@ -1097,7 +1097,7 @@ async function autoPick(event, r_id, riskOverride = null) {
     }
 
     // 4. Save and Update UI
-    fetch('/api/marks', { method: 'POST', body: JSON.stringify(globalMarks) });
+    saveMarksToServer();
 
     raceSorts[r_id] = { col: 'Default', asc: true };
     applySortLogic(r_id, 'Default', true);
@@ -1152,7 +1152,7 @@ async function reorderPicks(event, r_id) {
     }
 
     // 5. Save and instantly snap the UI into the new order
-    fetch('/api/marks', { method: 'POST', body: JSON.stringify(globalMarks) });
+    saveMarksToServer();
 
     raceSorts[r_id] = { col: 'Default', asc: true };
     applySortLogic(r_id, 'Default', true);
@@ -1286,10 +1286,6 @@ function normalizeRacesPayload(data) {
     };
 }
 
-function getTimelineLabel(timeline) {
-    return timeline === 'past' ? 'Past Races' : 'Upcoming Races';
-}
-
 function getSortedActiveDates() {
     return Object.keys(globalRacesByDate).sort();
 }
@@ -1312,6 +1308,53 @@ function formatCalendarMonth(monthKey) {
     });
 }
 
+function formatActiveDateLabel(dateStr) {
+    if (!dateStr) return 'No day selected';
+    const [year, month, day] = String(dateStr).split('-').map(Number);
+    if (!year || !month || !day) return dateStr;
+    return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        timeZone: 'UTC'
+    });
+}
+
+function updateActiveDateNavigator() {
+    const dates = getSortedActiveDates();
+    const labelEl = document.getElementById('active-date-label');
+    const metaEl = document.getElementById('active-date-meta');
+    const prevBtn = document.getElementById('active-date-prev');
+    const nextBtn = document.getElementById('active-date-next');
+    if (!labelEl || !metaEl || !prevBtn || !nextBtn) return;
+
+    if (!dates.length || !currentActiveDate) {
+        labelEl.textContent = 'No day selected';
+        metaEl.textContent = '0 races';
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+        return;
+    }
+
+    const currentIndex = dates.indexOf(currentActiveDate);
+    const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+    const raceCount = globalRacesByDate[currentActiveDate]?.length || 0;
+    labelEl.textContent = formatActiveDateLabel(currentActiveDate);
+    metaEl.textContent = `${raceCount} race${raceCount === 1 ? '' : 's'}`;
+    prevBtn.disabled = safeIndex <= 0;
+    nextBtn.disabled = safeIndex >= dates.length - 1;
+}
+
+function shiftActiveDate(step) {
+    const dates = getSortedActiveDates();
+    if (!dates.length || !currentActiveDate) return;
+    const currentIndex = dates.indexOf(currentActiveDate);
+    const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = Math.min(dates.length - 1, Math.max(0, safeIndex + step));
+    if (nextIndex === safeIndex) return;
+    switchMainTab(dates[nextIndex]);
+}
+
 function findNearestAvailableDate(targetDate, dates) {
     if (!targetDate || !Array.isArray(dates) || dates.length === 0) return null;
     if (dates.includes(targetDate)) return targetDate;
@@ -1332,13 +1375,13 @@ function renderRaceCalendar() {
 
     if (!dates.length || !months.length) {
         calendar.innerHTML = '<div class="race-calendar-empty-note">No race days loaded.</div>';
+        updateActiveDateNavigator();
         return;
     }
 
     const selectedDate = findNearestAvailableDate(currentActiveDate, dates) || dates[0];
-    const selectedTimeline = globalDateTimelineByDate[selectedDate] || 'upcoming';
     currentActiveDate = selectedDate;
-    currentTimelineTab = selectedTimeline;
+    currentTimelineTab = globalDateTimelineByDate[selectedDate] || 'upcoming';
 
     const selectedMonth = getMonthKey(selectedDate);
     if (!currentCalendarMonth || !months.includes(currentCalendarMonth)) {
@@ -1371,30 +1414,31 @@ function renderRaceCalendar() {
 
         const timeline = globalDateTimelineByDate[dateStr] || 'upcoming';
         const activeClass = dateStr === currentActiveDate ? ' is-selected' : '';
-        const timelineLabel = timeline === 'past' ? 'Past' : 'Upcoming';
         cells.push(`
-            <button type="button" class="race-calendar-day timeline-${timeline}${activeClass}" onclick="selectCalendarDate('${dateStr}')" title="${dateStr} • ${timelineLabel} • ${races.length} races">
+            <button type="button" class="race-calendar-day timeline-${timeline}${activeClass}" onclick="selectCalendarDate('${dateStr}')" title="${dateStr} • ${races.length} races">
                 <div class="race-calendar-daynum">${day}</div>
                 <div class="race-calendar-meta">
-                    <span>${timelineLabel}</span>
                     <span class="race-calendar-count">${races.length}</span>
                 </div>
             </button>
         `);
     }
 
+    const selectedCount = globalRacesByDate[currentActiveDate]?.length || 0;
+
     calendar.innerHTML = `
         <div class="race-calendar-header">
             <button type="button" class="race-calendar-nav" onclick="changeCalendarMonth(-1)" ${monthIndex <= 0 ? 'disabled' : ''}>◀</button>
             <div class="race-calendar-heading">
                 <div class="race-calendar-title">${formatCalendarMonth(monthKey)}</div>
-                <div class="race-calendar-summary">Selected: ${currentActiveDate} • ${getTimelineLabel(selectedTimeline)}</div>
+                <div class="race-calendar-summary">Selected: ${currentActiveDate} • ${selectedCount} race${selectedCount === 1 ? '' : 's'}</div>
             </div>
             <button type="button" class="race-calendar-nav" onclick="changeCalendarMonth(1)" ${monthIndex >= months.length - 1 ? 'disabled' : ''}>▶</button>
         </div>
         <div class="race-calendar-weekdays">${weekdays.map(day => `<div class="race-calendar-weekday">${day}</div>`).join('')}</div>
         <div class="race-calendar-grid">${cells.join('')}</div>
     `;
+    updateActiveDateNavigator();
 }
 
 function changeCalendarMonth(step) {
@@ -1806,7 +1850,7 @@ async function clearRaceBets(event, r_id) {
 
     if (!changed) return;
 
-    fetch('/api/marks', { method: 'POST', body: JSON.stringify(globalMarks) });
+    saveMarksToServer();
 
     applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
     const tbody = document.getElementById(`tbody-${r_id}`);
@@ -1873,7 +1917,7 @@ async function toggleMark(r_id, h_id, symbol) {
     }
 
     // Silently sync the new state to the Python backend
-    fetch('/api/marks', { method: 'POST', body: JSON.stringify(globalMarks) });
+    saveMarksToServer();
 
     // NEW: Instantly re-sort and re-render the table so voted horses snap to the top!
     applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
@@ -1885,10 +1929,21 @@ async function toggleMark(r_id, h_id, symbol) {
 // --- API CALLS ---
 let logInterval = null;
 
+function saveMarksToServer() {
+    const cleanMarks = Object.fromEntries(
+        Object.entries(globalMarks).filter(([, v]) => v !== null && v !== undefined && v !== '')
+    );
+    fetch('/api/marks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(cleanMarks)
+    });
+}
+
 function appendConsoleLine(message) {
     const consoleBox = document.getElementById('scrape-console');
     if (!consoleBox) return;
-    consoleBox.style.display = 'block';
+    if (appConfig?.ui?.showConsole ?? true) consoleBox.style.display = 'block';
     const prefix = consoleBox.textContent && consoleBox.textContent.trim() ? '\n' : '';
     consoleBox.textContent += `${prefix}${message}`;
     consoleBox.scrollTop = consoleBox.scrollHeight;
@@ -2080,7 +2135,7 @@ async function triggerScrape(mode) {
     
     // Reveal and prepare the console
     const consoleBox = document.getElementById('scrape-console');
-    consoleBox.style.display = "block";
+    if (appConfig?.ui?.showConsole ?? true) consoleBox.style.display = 'block';
     consoleBox.textContent = "Waking up scraper...";
     
     // Start pinging the Python server for console text every 500 milliseconds
@@ -2570,6 +2625,7 @@ function showSettingsModal() {
     document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
     document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
     document.getElementById('setting-autoFetchPastResults').checked = isAutoFetchPastResultsEnabled();
+        document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     // Populate formula weight inputs
     const fw = getFormulaWeights();
     document.getElementById('fw-oddsCap').value            = fw.oddsCap;
@@ -2610,6 +2666,7 @@ async function updateSidebarSettings() {
         betSafetyIndicator: document.getElementById('setting-betSafetyIndicator').checked,
         voteSortingTop: document.getElementById('setting-voteSortingTop').checked,
         autoFetchPastResults: document.getElementById('setting-autoFetchPastResults').checked,
+            showConsole: document.getElementById('setting-showConsole').checked,
         formulaWeights: {
             oddsCap:            parseFWInput('fw-oddsCap',            100),
             formMultiplier:     parseFWInput('fw-formMultiplier',     100),
@@ -2712,15 +2769,19 @@ async function toggleRaceColumnVisibility(colKey, visible) {
 }
 
 function applySidebarSettings() {
-    // Get all details elements in the sidebar (they have class "sidebar-group")
-    const sidebarGroups = document.querySelectorAll('.sidebar .sidebar-group');
-    
-    if (sidebarGroups.length >= 4) {
-        // Order: Race Database, Pedigree Lists, Auto-Pick Strategy, Weekend Watchlist
-        sidebarGroups[0].open = appConfig.sidebarTabs?.raceDatabase ?? true;
-        sidebarGroups[1].open = appConfig.sidebarTabs?.pedigreeLists ?? true;
-        sidebarGroups[2].open = appConfig.sidebarTabs?.autoPickStrategy ?? true;
-        sidebarGroups[3].open = appConfig.sidebarTabs?.weekendWatchlist ?? true;
+    const raceDatabaseGroup = document.getElementById('race-database-group');
+    const pedigreeListsGroup = document.getElementById('pedigree-lists-group');
+    const autoPickGroup = document.getElementById('auto-pick-group');
+    const weekendWatchlistGroup = document.getElementById('weekend-watchlist-group');
+
+    if (raceDatabaseGroup) raceDatabaseGroup.open = appConfig.sidebarTabs?.raceDatabase ?? true;
+    if (pedigreeListsGroup) pedigreeListsGroup.open = appConfig.sidebarTabs?.pedigreeLists ?? true;
+    if (autoPickGroup) autoPickGroup.open = appConfig.sidebarTabs?.autoPickStrategy ?? true;
+    if (weekendWatchlistGroup) weekendWatchlistGroup.open = appConfig.sidebarTabs?.weekendWatchlist ?? true;
+
+    const consoleEl = document.getElementById('scrape-console');
+    if (consoleEl) {
+        consoleEl.style.display = (appConfig.ui?.showConsole ?? true) ? 'block' : 'none';
     }
 }
 
