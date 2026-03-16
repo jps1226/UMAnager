@@ -2,10 +2,10 @@ from fastapi import APIRouter, HTTPException
 import datetime
 import logging
 import os
-from typing import Literal
+from typing import Any, Dict, List, Literal, Optional
 
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import config
 import data_manager
@@ -22,6 +22,13 @@ HORSE_DICT_FILE = config.HORSE_DICT_FILE
 
 _progress_logger = None
 
+MARKS_SCHEMA_VERSION = 2
+DEFAULT_MARKS_STORE = {
+    "version": MARKS_SCHEMA_VERSION,
+    "marks": {},
+    "raceMeta": {},
+}
+
 
 class DayResultsImportPayload(BaseModel):
     date: str
@@ -30,6 +37,28 @@ class DayResultsImportPayload(BaseModel):
 class DeleteDayPayload(BaseModel):
     date: str
     scope: Literal["marks", "entries", "all"]
+
+
+class StrategySnapshotPayload(BaseModel):
+    riskSlider: Optional[int] = None
+    riskLabel: Optional[str] = None
+    formulaWeights: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RaceMetaPayload(BaseModel):
+    savedAt: Optional[str] = None
+    updatedAt: Optional[str] = None
+    markSource: Optional[str] = None
+    strategySnapshot: StrategySnapshotPayload = Field(default_factory=StrategySnapshotPayload)
+    manualAdjustments: int = 0
+    lockStateAtSave: Optional[bool] = None
+    activeSymbols: List[str] = Field(default_factory=list)
+
+
+class MarksSavePayload(BaseModel):
+    version: Optional[int] = MARKS_SCHEMA_VERSION
+    marks: Dict[str, Optional[str]] = Field(default_factory=dict)
+    raceMeta: Dict[str, RaceMetaPayload] = Field(default_factory=dict)
 
 
 def set_progress_logger(callback):
@@ -66,12 +95,118 @@ def save_cached_races(races):
     atomic_write_pickle(CACHE_FILE, races)
 
 
+def _clean_mark_symbol(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_marks_map(raw_marks):
+    normalized = {}
+    if not isinstance(raw_marks, dict):
+        return normalized
+
+    for key, value in raw_marks.items():
+        clean_key = str(key).strip()
+        clean_value = _clean_mark_symbol(value)
+        if clean_key and clean_value:
+            normalized[clean_key] = clean_value
+    return normalized
+
+
+def _normalize_strategy_snapshot(raw_snapshot):
+    if not isinstance(raw_snapshot, dict):
+        raw_snapshot = {}
+
+    risk_slider = raw_snapshot.get("riskSlider")
+    try:
+        risk_slider = int(risk_slider) if risk_slider is not None else None
+    except (TypeError, ValueError):
+        risk_slider = None
+
+    risk_label = raw_snapshot.get("riskLabel")
+    risk_label = str(risk_label).strip() if risk_label is not None else None
+    if risk_label == "":
+        risk_label = None
+
+    formula_weights = raw_snapshot.get("formulaWeights")
+    if not isinstance(formula_weights, dict):
+        formula_weights = {}
+
+    return {
+        "riskSlider": risk_slider,
+        "riskLabel": risk_label,
+        "formulaWeights": formula_weights,
+    }
+
+
+def _normalize_race_meta_map(raw_race_meta):
+    normalized = {}
+    if not isinstance(raw_race_meta, dict):
+        return normalized
+
+    for race_id, meta in raw_race_meta.items():
+        clean_race_id = str(race_id).strip()
+        if not clean_race_id or not isinstance(meta, dict):
+            continue
+
+        manual_adjustments = meta.get("manualAdjustments", 0)
+        try:
+            manual_adjustments = max(0, int(manual_adjustments))
+        except (TypeError, ValueError):
+            manual_adjustments = 0
+
+        active_symbols = meta.get("activeSymbols")
+        if not isinstance(active_symbols, list):
+            active_symbols = []
+        active_symbols = [str(symbol).strip() for symbol in active_symbols if str(symbol).strip()]
+
+        normalized[clean_race_id] = {
+            "savedAt": str(meta.get("savedAt") or "").strip() or None,
+            "updatedAt": str(meta.get("updatedAt") or "").strip() or None,
+            "markSource": str(meta.get("markSource") or "").strip() or None,
+            "strategySnapshot": _normalize_strategy_snapshot(meta.get("strategySnapshot") or {}),
+            "manualAdjustments": manual_adjustments,
+            "lockStateAtSave": bool(meta.get("lockStateAtSave")) if meta.get("lockStateAtSave") is not None else None,
+            "activeSymbols": active_symbols,
+        }
+
+    return normalized
+
+
+def normalize_marks_store(raw_data):
+    if not isinstance(raw_data, dict):
+        return DEFAULT_MARKS_STORE.copy()
+
+    is_versioned = any(key in raw_data for key in ("version", "marks", "raceMeta"))
+    raw_marks = raw_data.get("marks", {}) if is_versioned else raw_data
+    raw_race_meta = raw_data.get("raceMeta", {}) if is_versioned else {}
+
+    return {
+        "version": MARKS_SCHEMA_VERSION,
+        "marks": _normalize_marks_map(raw_marks),
+        "raceMeta": _normalize_race_meta_map(raw_race_meta),
+    }
+
+
+def load_marks_store():
+    raw_data = safe_read_json(MARKS_FILE, {})
+    return normalize_marks_store(raw_data)
+
+
+def save_marks_store(store):
+    atomic_write_json(MARKS_FILE, normalize_marks_store(store))
+
+
 def load_marks_data():
-    return safe_read_json(MARKS_FILE, {})
+    return load_marks_store()["marks"]
 
 
 def save_marks_data(marks):
-    atomic_write_json(MARKS_FILE, marks)
+    current_store = load_marks_store()
+    current_store["marks"] = _normalize_marks_map(marks)
+    save_marks_store(current_store)
 
 
 def load_horse_dict_data():
@@ -232,12 +367,18 @@ def refresh_missing_past_race_history(weekend_races):
 
 @router.get("/api/marks")
 def get_marks():
-    return safe_read_json(MARKS_FILE, {})
+    return load_marks_store()
 
 
 @router.post("/api/marks")
-async def save_marks(marks: dict):
-    atomic_write_json(MARKS_FILE, marks)
+async def save_marks(payload: MarksSavePayload):
+    save_marks_store(
+        {
+            "version": payload.version or MARKS_SCHEMA_VERSION,
+            "marks": payload.marks,
+            "raceMeta": {race_id: meta.dict() for race_id, meta in payload.raceMeta.items()},
+        }
+    )
     return {"status": "success"}
 
 
@@ -542,7 +683,8 @@ async def delete_day_data(payload: DeleteDayPayload):
         save_cached_races(filtered_races)
 
     if scope in {"marks", "all"} and target_race_ids:
-        marks = load_marks_data()
+        marks_store = load_marks_store()
+        marks = marks_store["marks"]
         new_marks = {}
         for key, val in marks.items():
             race_prefix = key.split("_", 1)[0]
@@ -550,7 +692,16 @@ async def delete_day_data(payload: DeleteDayPayload):
                 removed_marks += 1
                 continue
             new_marks[key] = val
-        save_marks_data(new_marks)
+        new_race_meta = {
+            race_id: meta
+            for race_id, meta in marks_store["raceMeta"].items()
+            if race_id not in target_race_ids
+        }
+        save_marks_store({
+            "version": marks_store.get("version", MARKS_SCHEMA_VERSION),
+            "marks": new_marks,
+            "raceMeta": new_race_meta,
+        })
 
     if scope == "all" and target_horse_ids:
         horse_dict = load_horse_dict_data()

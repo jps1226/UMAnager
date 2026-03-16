@@ -1,4 +1,6 @@
 let globalMarks = {};
+let globalRaceMeta = {};
+let globalMarksVersion = 2;
 let listsData = { favorites: "", watchlist: "" };
 let raceLocks = {}; // Per-race lock state for mark interactions
 let upcomingRaces = []; // NEW: Stores our parsed race times
@@ -366,7 +368,10 @@ function updateAllHoverButtons() {
 // --- INITIALIZATION ---
 async function init() {
     const marksRes = await fetch('/api/marks');
-    globalMarks = await marksRes.json();
+    const marksPayload = normalizeMarksPayload(await marksRes.json());
+    globalMarks = marksPayload.marks;
+    globalRaceMeta = marksPayload.raceMeta;
+    globalMarksVersion = marksPayload.version;
     
     // NEW: Load config file
     const configRes = await fetch('/api/config');
@@ -981,6 +986,132 @@ function getRiskLabel(val) {
     return "Max Chaos";
 }
 
+function normalizeMarksPayload(payload) {
+    const normalized = {
+        version: 2,
+        marks: {},
+        raceMeta: {}
+    };
+
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        return normalized;
+    }
+
+    const isVersioned = Object.prototype.hasOwnProperty.call(payload, 'marks')
+        || Object.prototype.hasOwnProperty.call(payload, 'raceMeta')
+        || Object.prototype.hasOwnProperty.call(payload, 'version');
+
+    const rawMarks = isVersioned ? payload.marks : payload;
+    if (rawMarks && typeof rawMarks === 'object' && !Array.isArray(rawMarks)) {
+        Object.entries(rawMarks).forEach(([key, value]) => {
+            const cleanKey = String(key || '').trim();
+            const cleanValue = typeof value === 'string' ? value.trim() : '';
+            if (cleanKey && cleanValue) {
+                normalized.marks[cleanKey] = cleanValue;
+            }
+        });
+    }
+
+    const rawRaceMeta = isVersioned ? payload.raceMeta : null;
+    if (rawRaceMeta && typeof rawRaceMeta === 'object' && !Array.isArray(rawRaceMeta)) {
+        Object.entries(rawRaceMeta).forEach(([raceId, meta]) => {
+            if (!raceId || !meta || typeof meta !== 'object' || Array.isArray(meta)) return;
+
+            const strategySnapshot = meta.strategySnapshot && typeof meta.strategySnapshot === 'object' && !Array.isArray(meta.strategySnapshot)
+                ? meta.strategySnapshot
+                : {};
+
+            normalized.raceMeta[raceId] = {
+                savedAt: meta.savedAt || null,
+                updatedAt: meta.updatedAt || null,
+                markSource: meta.markSource || null,
+                strategySnapshot: {
+                    riskSlider: Number.isFinite(Number(strategySnapshot.riskSlider)) ? Number(strategySnapshot.riskSlider) : null,
+                    riskLabel: strategySnapshot.riskLabel || null,
+                    formulaWeights: strategySnapshot.formulaWeights && typeof strategySnapshot.formulaWeights === 'object' && !Array.isArray(strategySnapshot.formulaWeights)
+                        ? strategySnapshot.formulaWeights
+                        : {}
+                },
+                manualAdjustments: Number.isFinite(Number(meta.manualAdjustments)) ? Number(meta.manualAdjustments) : 0,
+                lockStateAtSave: typeof meta.lockStateAtSave === 'boolean' ? meta.lockStateAtSave : null,
+                activeSymbols: Array.isArray(meta.activeSymbols)
+                    ? meta.activeSymbols.map(symbol => String(symbol || '').trim()).filter(Boolean)
+                    : []
+            };
+        });
+    }
+
+    const version = Number(isVersioned ? payload.version : 2);
+    normalized.version = Number.isFinite(version) && version > 0 ? version : 2;
+    return normalized;
+}
+
+function getCurrentRiskValue() {
+    const slider = document.getElementById('risk-slider');
+    const parsed = Number.parseInt(slider?.value ?? '50', 10);
+    return Number.isFinite(parsed) ? parsed : 50;
+}
+
+function getFormulaWeightsSnapshot() {
+    return { ...getFormulaWeights() };
+}
+
+function getRaceActiveSymbols(r_id) {
+    const activeSymbols = [];
+    const seen = new Set();
+
+    Object.entries(globalMarks).forEach(([key, value]) => {
+        if (!key.startsWith(`${r_id}_`) || !value) return;
+        if (!seen.has(value)) {
+            seen.add(value);
+            activeSymbols.push(value);
+        }
+    });
+
+    return activeSymbols;
+}
+
+function mergeMarkSource(existingSource, incomingSource) {
+    const current = String(existingSource || '').trim();
+    const incoming = String(incomingSource || '').trim();
+
+    if (!incoming) return current || 'manual';
+    if (!current || current === incoming) return incoming;
+    if (current === 'mixed' || incoming === 'mixed') return 'mixed';
+    return 'mixed';
+}
+
+function touchRaceMeta(r_id, options = {}) {
+    const existing = globalRaceMeta[r_id] && typeof globalRaceMeta[r_id] === 'object'
+        ? globalRaceMeta[r_id]
+        : {};
+    const now = new Date().toISOString();
+    const riskSlider = Number.isFinite(Number(options.riskSlider)) ? Number(options.riskSlider) : getCurrentRiskValue();
+    const manualAdjustmentsDelta = Number.isFinite(Number(options.manualAdjustmentsDelta))
+        ? Number(options.manualAdjustmentsDelta)
+        : 0;
+    const currentManualAdjustments = Number.isFinite(Number(existing.manualAdjustments))
+        ? Number(existing.manualAdjustments)
+        : 0;
+
+    globalRaceMeta[r_id] = {
+        ...existing,
+        savedAt: existing.savedAt || now,
+        updatedAt: now,
+        markSource: mergeMarkSource(existing.markSource, options.markSource || existing.markSource || 'manual'),
+        strategySnapshot: {
+            riskSlider: riskSlider,
+            riskLabel: getRiskLabel(riskSlider),
+            formulaWeights: getFormulaWeightsSnapshot()
+        },
+        manualAdjustments: Math.max(0, currentManualAdjustments + manualAdjustmentsDelta),
+        lockStateAtSave: isRaceLocked(r_id),
+        activeSymbols: getRaceActiveSymbols(r_id)
+    };
+
+    return globalRaceMeta[r_id];
+}
+
 // NEW: Save config to server when slider changes
 async function saveConfigToServer() {
     const riskVal = document.getElementById('risk-slider').value;
@@ -1104,7 +1235,8 @@ async function autoPick(event, r_id, riskOverride = null) {
     }
 
     // 4. Save and Update UI
-    saveMarksToServer();
+    touchRaceMeta(r_id, { markSource: 'auto-pick', riskSlider: currentRisk });
+    await saveMarksToServer();
 
     raceSorts[r_id] = { col: 'Default', asc: true };
     applySortLogic(r_id, 'Default', true);
@@ -1159,7 +1291,8 @@ async function reorderPicks(event, r_id) {
     }
 
     // 5. Save and instantly snap the UI into the new order
-    saveMarksToServer();
+    touchRaceMeta(r_id, { markSource: 'reordered', riskSlider: currentRisk });
+    await saveMarksToServer();
 
     raceSorts[r_id] = { col: 'Default', asc: true };
     applySortLogic(r_id, 'Default', true);
@@ -1886,7 +2019,8 @@ async function clearRaceBets(event, r_id) {
 
     if (!changed) return;
 
-    saveMarksToServer();
+    touchRaceMeta(r_id, { markSource: 'manual', manualAdjustmentsDelta: 1 });
+    await saveMarksToServer();
 
     applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
     const tbody = document.getElementById(`tbody-${r_id}`);
@@ -1955,7 +2089,8 @@ async function toggleMark(r_id, h_id, symbol) {
     }
 
     // Silently sync the new state to the Python backend
-    saveMarksToServer();
+    touchRaceMeta(r_id, { markSource: 'manual', manualAdjustmentsDelta: 1 });
+    await saveMarksToServer();
 
     // NEW: Instantly re-sort and re-render the table so voted horses snap to the top!
     applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
@@ -1969,14 +2104,38 @@ async function toggleMark(r_id, h_id, symbol) {
 // --- API CALLS ---
 let logInterval = null;
 
-function saveMarksToServer() {
+async function saveMarksToServer() {
     const cleanMarks = Object.fromEntries(
         Object.entries(globalMarks).filter(([, v]) => v !== null && v !== undefined && v !== '')
     );
-    fetch('/api/marks', {
+    const cleanRaceMeta = Object.fromEntries(
+        Object.entries(globalRaceMeta).filter(([raceId, meta]) => {
+            return raceId && meta && typeof meta === 'object' && !Array.isArray(meta);
+        }).map(([raceId, meta]) => [raceId, {
+            savedAt: meta.savedAt || null,
+            updatedAt: meta.updatedAt || null,
+            markSource: meta.markSource || null,
+            strategySnapshot: {
+                riskSlider: Number.isFinite(Number(meta.strategySnapshot?.riskSlider)) ? Number(meta.strategySnapshot.riskSlider) : null,
+                riskLabel: meta.strategySnapshot?.riskLabel || null,
+                formulaWeights: meta.strategySnapshot?.formulaWeights && typeof meta.strategySnapshot.formulaWeights === 'object' && !Array.isArray(meta.strategySnapshot.formulaWeights)
+                    ? meta.strategySnapshot.formulaWeights
+                    : {}
+            },
+            manualAdjustments: Number.isFinite(Number(meta.manualAdjustments)) ? Number(meta.manualAdjustments) : 0,
+            lockStateAtSave: typeof meta.lockStateAtSave === 'boolean' ? meta.lockStateAtSave : null,
+            activeSymbols: Array.isArray(meta.activeSymbols) ? meta.activeSymbols.map(symbol => String(symbol || '').trim()).filter(Boolean) : []
+        }])
+    );
+
+    await fetch('/api/marks', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(cleanMarks)
+        body: JSON.stringify({
+            version: globalMarksVersion || 2,
+            marks: cleanMarks,
+            raceMeta: cleanRaceMeta
+        })
     });
 }
 
