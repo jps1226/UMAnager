@@ -2,6 +2,25 @@
 
 This branch should be treated as a voting-workspace product pass, not just a UI cleanup. The priority is to make the workspace trustworthy first, then faster to use, then analytically useful.
 
+## Current Status
+
+### Completed
+
+1. OrePro day-history persistence is live via `data/orepro_results_history.json` and `/api/orepro/results/history`.
+2. The voting page already has the lifetime OrePro stats bar from the earlier history pass.
+3. PR 1 is complete:
+  - `saved_marks.json` now supports a versioned store shape.
+  - `GET /api/marks` returns `version`, `marks`, and `raceMeta`.
+  - `POST /api/marks` accepts the typed payload instead of a raw flat dict.
+  - frontend mark loading supports both legacy flat marks and the versioned payload.
+  - race metadata is captured on manual edits, auto-pick, smart reorder, and clear-bets.
+
+### Verified outcome of PR 1
+
+1. Existing flat marks remain loadable.
+2. New edits persist race-level metadata without changing current vote rendering behavior.
+3. The next implementation target is PR 2, not more schema work.
+
 ## Branch Objectives
 
 1. Persist strategy context with each race's saved marks.
@@ -12,13 +31,15 @@ This branch should be treated as a voting-workspace product pass, not just a UI 
 
 ## Current Constraints
 
-1. `data/saved_marks.json` is still a flat `{ raceId_horseId: symbol }` map.
-2. `GET /api/marks` and `POST /api/marks` in `routers/races.py` only support that flat map.
-3. Risk strategy state lives only in current UI config (`data/config.json` -> `ui.riskSlider` and `ui.formulaWeights`) and is not attached to individual races.
-4. OrePro sync persists actual race-level purchase/payout/profit in `data/orepro_results_history.json`, but there is no joined race evaluation model yet.
-5. Search still navigates the main race tab model first and is not a true voting-sidebar-first jump flow.
+1. Race strategy is now persisted with marks, but there is still no joined race evaluation model that combines hit type and money outcome.
+2. OrePro sync persists actual race-level purchase/payout/profit in `data/orepro_results_history.json`, but those economics are not yet merged into the voting recap cards.
+3. Search still navigates the main race tab model first and is not a true voting-sidebar-first jump flow.
+4. The voting card visual language still over-emphasizes hit badges and does not distinguish pyrrhic hits from profitable ones.
+5. Header and connection controls are still taking more space than they should for a focused voting workflow.
 
 ## Phase 1: Marks Schema Upgrade
+
+Status: Complete
 
 ### Goal
 
@@ -111,6 +132,12 @@ Tasks:
 1. Marks still render normally after migration.
 2. Existing users do not lose marks.
 3. Each race has strategy metadata after any new edit.
+
+### Implemented notes
+
+1. Backend normalization and save logic live in `routers/races.py`.
+2. Frontend parsing and metadata capture live in `static/script.js`.
+3. Legacy flat marks are accepted on read and persisted in the versioned format on next save.
 
 ## Phase 2: Canonical Race Evaluation Model
 
@@ -394,11 +421,11 @@ Preferred new endpoint:
 
 ## Immediate Next Implementation Step
 
-Start with PR 1 only:
+Start with PR 2:
 
-1. upgrade `saved_marks.json`
-2. add `globalRaceMeta`
-3. capture strategy snapshots on mark save
-4. keep all current vote rendering behavior intact
+1. build the canonical joined race evaluation model
+2. classify races into profitable-hit, pyrrhic-hit, miss-loss, and related display states
+3. expose the model in a form the voting recap can consume cleanly
+4. keep the current schema and save path unchanged while that evaluation layer is added
 
-That is the smallest change that unlocks every later analytic and UI improvement.
+That is the smallest next change that unlocks the visual-state work and strategy-profit analysis.
