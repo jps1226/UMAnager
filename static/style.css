@@ -24,6 +24,10 @@
         .sidebar-brand-actions { display: flex; align-items: center; gap: 8px; }
         .app-version-badge { font-size: 10px; color: #666; font-weight: bold; letter-spacing: 1px; }
         .settings-icon-btn { background: #262730; border: 1px solid #444; color: #1dd1a1; font-size: 16px; width: 28px; height: 28px; padding: 0; border-radius: 4px; }
+        .sidebar-top-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+        .view-switcher-sidebar { margin-right: 0; }
+        .view-switcher-sidebar .toolbar-btn { flex: 1; }
+        .active-date-nav-sidebar { width: 100%; min-width: 0; box-sizing: border-box; }
         .btn-primary-prominent { background: #1dd1a1; color: #000; font-weight: bold; border-color: #1dd1a1; font-size: 15px; padding: 10px; }
         .btn-compact { font-size: 12px; padding: 8px; }
         .btn-micro { font-size: 12px; padding: 6px; }
@@ -99,6 +103,8 @@
         .clock-time { font-size: 24px; font-weight: bold; }
         .main-toolbar { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #333; padding-bottom: 6px; }
         .main-toolbar-left { display: flex; align-items: center; gap: 10px; }
+        .view-switcher { display: flex; gap: 6px; margin-right: 4px; }
+        .view-switcher .toolbar-btn.is-active { background: #1f5f4e; border-color: #1dd1a1; color: #d9fff5; }
         .active-date-nav {
             display: flex;
             align-items: center;
@@ -139,6 +145,354 @@
         .toolbar-btn { padding: 6px 12px; }
         .toolbar-btn-primary { background: #1dd1a1; color: #000; font-weight: bold; border-color: #1dd1a1; }
         .toolbar-btn-muted { background: #333; border-color: #555; }
+        #btn-winning-votes-focus.is-active { background: #1f5f4e; border-color: #1dd1a1; color: #d9fff5; }
+
+        .voting-main-shell {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 0 40px 20px 40px;
+            overflow: hidden;
+            box-sizing: border-box;
+        }
+        .voting-main-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border: 1px solid #333;
+            border-bottom: none;
+            border-radius: 10px 10px 0 0;
+            background: #20222b;
+        }
+        .voting-main-head h3 {
+            margin: 0;
+            font-size: 14px;
+            color: #f3f6fb;
+        }
+        .voting-main-head-actions { display: flex; align-items: center; gap: 8px; }
+        .orepro-session-status {
+            border: 1px solid #384156;
+            border-top: none;
+            background: #141b29;
+            color: #aeb9d4;
+            font-size: 12px;
+            padding: 7px 12px;
+        }
+        .orepro-session-status.ok {
+            color: #c4ffe2;
+            background: #17342b;
+            border-color: #2f7d63;
+        }
+        .orepro-session-status.warn {
+            color: #ffeab5;
+            background: #362b16;
+            border-color: #8d6d2c;
+        }
+        .orepro-session-status.error {
+            color: #ffd0d0;
+            background: #3a1f25;
+            border-color: #9e4656;
+        }
+        .orepro-lifetime-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 9px 12px;
+            border-left: 1px solid #333;
+            border-right: 1px solid #333;
+            border-bottom: 1px solid #333;
+            background:
+                radial-gradient(circle at top left, rgba(29, 209, 161, 0.16), transparent 140px),
+                linear-gradient(180deg, #101722, #0c1119);
+        }
+        .orepro-lifetime-bar.is-empty {
+            color: #8fa0c5;
+        }
+        .orepro-lifetime-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #87f5cf;
+            margin-right: 4px;
+        }
+        .orepro-lifetime-chip,
+        .orepro-lifetime-note,
+        .orepro-lifetime-empty {
+            font-size: 12px;
+            color: #d8e3fb;
+            border: 1px solid #31405c;
+            border-radius: 999px;
+            padding: 4px 10px;
+            background: rgba(23, 31, 45, 0.92);
+            white-space: nowrap;
+        }
+        .orepro-lifetime-chip.is-positive {
+            color: #c6ffe3;
+            border-color: #35624e;
+            background: #17342b;
+        }
+        .orepro-lifetime-chip.is-negative {
+            color: #ffd5d5;
+            border-color: #7b4d4d;
+            background: #3d2020;
+        }
+        .orepro-lifetime-note,
+        .orepro-lifetime-empty {
+            color: #a9b8d8;
+            border-style: dashed;
+        }
+        .orepro-companion-panel {
+            border: 1px solid #333;
+            border-top: none;
+            background: #10141f;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .orepro-companion-help {
+            font-size: 12px;
+            color: #95a3c4;
+        }
+        .orepro-session-row {
+            display: grid;
+            grid-template-columns: 130px 1fr auto auto;
+            gap: 8px;
+            align-items: center;
+        }
+        .orepro-session-row label {
+            font-size: 12px;
+            color: #c3d0ee;
+            font-weight: 600;
+        }
+        .orepro-session-row input {
+            background: #0c1119;
+            color: #d8e1f5;
+            border: 1px solid #2f3b52;
+            border-radius: 6px;
+            padding: 7px 9px;
+            font-size: 12px;
+            min-width: 0;
+        }
+        .orepro-sync-meta {
+            font-size: 12px;
+            color: #9fabc6;
+        }
+        .orepro-sync-date-display {
+            font-size: 12px;
+            color: #bfd2f8;
+            padding: 3px 8px;
+            background: #111b2d;
+            border: 1px solid #2f3b52;
+            border-radius: 6px;
+        }
+        .orepro-sync-date-display.orepro-sync-date-none {
+            color: #5a6a88;
+            font-style: italic;
+        }
+        .orepro-username-display {
+            font-size: 13px;
+            color: #7efcb8;
+            padding: 4px 0 2px 2px;
+        }
+        .orepro-sync-results {
+            border: 1px solid #2f3b52;
+            border-radius: 8px;
+            background: #0c1119;
+            padding: 10px;
+            color: #d6dff3;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .orepro-sync-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        .orepro-chip {
+            border: 1px solid #394663;
+            background: #1a2336;
+            color: #bfd2f8;
+            border-radius: 999px;
+            padding: 2px 8px;
+            font-size: 11px;
+        }
+        .orepro-sync-message {
+            margin-bottom: 8px;
+            color: #dfe7fb;
+        }
+        .orepro-sync-columns {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 12px;
+        }
+        .orepro-sync-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #8ea0c6;
+            margin-bottom: 4px;
+        }
+        .orepro-sync-list {
+            color: #c2cee9;
+            font-size: 12px;
+            max-height: 130px;
+            overflow: auto;
+        }
+        .orepro-money {
+            display: inline-block;
+            margin: 0 6px 6px 0;
+            border: 1px solid #375e4f;
+            background: #17342b;
+            color: #c5ffe3;
+            border-radius: 4px;
+            padding: 2px 6px;
+        }
+        .orepro-api-raw {
+            margin-top: 8px;
+            background: #0a0e16;
+            border: 1px solid #2a3550;
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 11px;
+            color: #a0b8d8;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 250px;
+            overflow: auto;
+        }
+        .orepro-mini-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .orepro-mini-table th,
+        .orepro-mini-table td {
+            border-bottom: 1px solid #2a3550;
+            padding: 6px 8px;
+            text-align: left;
+            white-space: nowrap;
+        }
+        .orepro-mini-table th {
+            color: #8ea0c6;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            background: #0c1119;
+        }
+        @media (max-width: 980px) {
+            .orepro-session-row {
+                grid-template-columns: 1fr;
+            }
+            .orepro-sync-columns {
+                grid-template-columns: 1fr;
+            }
+        }
+        .orepro-diagnostics-wrap {
+            border: 1px solid #333;
+            border-top: none;
+            background: #10141f;
+        }
+        .orepro-diagnostics-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 8px 10px;
+            border-bottom: 1px solid #2b3243;
+            color: #d8e1f5;
+            font-size: 12px;
+        }
+        .orepro-diagnostics-log {
+            margin: 0;
+            padding: 8px 10px;
+            max-height: 140px;
+            overflow: auto;
+            font-size: 11px;
+            line-height: 1.35;
+            color: #9fd8bb;
+            background: #0c1119;
+            font-family: Consolas, "Courier New", monospace;
+            white-space: pre-wrap;
+        }
+        .voting-recap-panel {
+            border: 1px solid #333;
+            border-top: none;
+            background: #141821;
+            padding: 10px 12px;
+        }
+        .voting-recap-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 8px;
+        }
+        .voting-recap-item {
+            background: #1c2230;
+            border: 1px solid #2f3b52;
+            border-radius: 8px;
+            padding: 8px 10px;
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 12px;
+            color: #b8c2d8;
+        }
+        .voting-recap-item strong {
+            color: #e8efff;
+            font-size: 12px;
+        }
+        .voting-recap-note {
+            font-size: 12px;
+            color: #aab6d3;
+        }
+        .voting-main-shell.orepro-collapsed .orepro-companion-panel {
+            display: none;
+        }
+        .voting-main-shell.orepro-collapsed .voting-recap-panel {
+            border-radius: 0 0 10px 10px;
+        }
+
+        .voting-sidebar-panel {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            flex: 1;
+            background: #1a1c23;
+            border: 1px solid #333;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .voting-sidebar-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-bottom: 1px solid #333;
+            background: #20222b;
+        }
+        .voting-sidebar-head h3 {
+            margin: 0;
+            font-size: 14px;
+            color: #f3f6fb;
+        }
+        .voting-sidebar-display {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+            background: #0e1117;
+        }
+
+        body.voting-mode .sidebar > :not(.sidebar-brand-row):not(.sidebar-top-controls):not(#voting-sidebar-panel) {
+            display: none !important;
+        }
+        body.voting-mode #voting-sidebar-panel {
+            display: flex !important;
+        }
 
         /* --- BUTTONS & INPUTS --- */
         button { background: #262730; color: white; border: 1px solid #444; padding: 8px 12px; border-radius: 4px; cursor: pointer; transition: 0.2s; font-size: 14px; }
@@ -581,6 +935,40 @@ th {
 .race-content { display: block; }
 .race-content.collapsed { display: none; }
 
+.race-hit-wrap {
+    display: inline-flex;
+    gap: 5px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.race-hit-pill {
+    display: inline-block;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: bold;
+    padding: 2px 7px;
+    line-height: 1.3;
+}
+
+.race-hit-honmei {
+    color: #ffe6a8;
+    border: 1px solid #b48f3d;
+    background: rgba(180, 143, 61, 0.16);
+}
+
+.race-hit-quinella {
+    color: #b4f7e8;
+    border: 1px solid #299f84;
+    background: rgba(41, 159, 132, 0.18);
+}
+
+.race-hit-trio {
+    color: #c8d8ff;
+    border: 1px solid #4d70c5;
+    background: rgba(77, 112, 197, 0.2);
+}
+
 /* --- COUNTDOWN TIMER --- */
 .countdown-wrapper {
     background: rgba(255, 75, 75, 0.1);
@@ -693,6 +1081,13 @@ td.finish-pos-3 { color: #cd7f32; }
     border-radius: 4px;
     font-weight: bold;
     font-size: 14px;
+    border: 1px solid #1dd1a1;
+    cursor: pointer;
+}
+.modal-link-btn-muted {
+    background: transparent;
+    color: #d5dde8;
+    border-color: #546071;
 }
 .modal-close-btn { background: #333; color: white; }
 .settings-body { padding: 20px; }
@@ -755,6 +1150,87 @@ td.finish-pos-3 { color: #cd7f32; }
 }
 .export-symbol {
     font-weight: bold; margin-right: 10px; font-size: 16px; width: 20px; text-align: center;
+}
+
+.voting-race-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.voting-line-right-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.voting-finish-badge {
+    font-size: 11px;
+    color: #d5dbe8;
+    border: 1px solid #5b6478;
+    border-radius: 4px;
+    padding: 2px 6px;
+    white-space: nowrap;
+    background: rgba(91, 100, 120, 0.18);
+}
+
+.voting-finish-badge.rank-1 {
+    color: #2e2411;
+    border-color: #c79f2f;
+    background: #f0c95c;
+}
+
+.voting-finish-badge.rank-2 {
+    color: #1e2732;
+    border-color: #8ca0b8;
+    background: #d4dfeb;
+}
+
+.voting-finish-badge.rank-3 {
+    color: #27190f;
+    border-color: #9c6546;
+    background: #d9a079;
+}
+
+.voting-race-card.is-collapsed {
+    border-style: dashed;
+    opacity: 0.58;
+}
+
+.voting-race-card.is-collapsed .voting-race-body {
+    display: none;
+}
+
+.orepro-race-inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.orepro-inline-chip {
+    font-size: 11px;
+    color: #d6e1f5;
+    border: 1px solid #44506a;
+    border-radius: 999px;
+    padding: 3px 8px;
+    background: rgba(39, 47, 65, 0.9);
+    white-space: nowrap;
+}
+
+.orepro-inline-chip.is-positive {
+    color: #c5ffe3;
+    border-color: #375e4f;
+    background: #17342b;
+}
+
+.orepro-inline-chip.is-negative {
+    color: #ffd7d7;
+    border-color: #744848;
+    background: #3d2020;
 }
 
 /* --- DIMMED TAKEN VOTES --- */
@@ -846,6 +1322,15 @@ td.finish-pos-3 { color: #cd7f32; }
 .race-header.collapsed .btn-lock-bets,
 .race-header.collapsed .btn-reorder,
 .race-header.collapsed .risk-badge {
+    display: none !important;
+}
+
+.race-header.votes-locked .btn-autopick,
+.race-header.votes-locked .btn-autopick-safe,
+.race-header.votes-locked .btn-autopick-lucky,
+.race-header.votes-locked .btn-clear-bets,
+.race-header.votes-locked .btn-reorder,
+.race-header.votes-locked .risk-badge {
     display: none !important;
 }
 

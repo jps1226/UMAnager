@@ -7,6 +7,11 @@
     },
     "ui": {
         "riskSlider": 35,
+        "betSafetyIndicator": true,
+        "voteSortingTop": true,
+        "autoFetchPastResults": true,
+        "autoLockPastVotes": true,
+        "showConsole": true,
         "raceTableColumns": [
             {
                 "key": "Finish",
@@ -53,9 +58,6 @@
                 "visible": true
             }
         ],
-        "betSafetyIndicator": true,
-        "voteSortingTop": true,
-        "autoFetchPastResults": true,
         "formulaWeights": {
             "oddsCap": 100,
             "formMultiplier": 100,
