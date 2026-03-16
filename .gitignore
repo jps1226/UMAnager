@@ -22,3 +22,14 @@ env/
 
 # Ignore local runtime logs
 server.log
+
+# Ignore local OrePro session and result state
+data/orepro_session.json
+data/orepro_last_sync.json
+data/orepro_results_history.json
+
+# Ignore reverse-engineering fixtures and scratch payloads
+tmp_*
+orepro profile example.html
+orepro sample.html
+orepro single race sample.html

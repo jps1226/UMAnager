@@ -186,6 +186,7 @@
             </div>
         </div>
         <div id="orepro-session-status" class="orepro-session-status">Use Open OrePro to place bets in a dedicated window, then Sync Results here afterward.</div>
+        <div id="orepro-lifetime-bar" class="orepro-lifetime-bar">No saved OrePro history yet.</div>
         <div id="orepro-companion-panel" class="orepro-companion-panel">
             <div class="orepro-companion-help">
                 Companion window mode avoids iframe cookie restrictions in Brave/Chrome.
@@ -196,6 +197,15 @@
                 <button onclick="saveOreProSessionCookie()" class="toolbar-btn toolbar-btn-muted">💾 Save</button>
                 <button onclick="clearOreProSessionCookie()" class="toolbar-btn toolbar-btn-muted">🗑️ Clear</button>
             </div>
+            <div class="orepro-session-row">
+                <label>Sync date</label>
+                <span id="orepro-sync-date-display" class="orepro-sync-date-display">← select a day in the calendar</span>
+                <label for="orepro-kaisai-id" style="margin-left:8px;">Venue ID (optional)</label>
+                <input id="orepro-kaisai-id" type="text" autocomplete="off" placeholder="e.g. 2026060205" maxlength="12" style="width:130px;">
+                <label for="orepro-yosoka-id" style="margin-left:8px;">Profile ID</label>
+                <input id="orepro-yosoka-id" type="text" autocomplete="off" value="20021241" placeholder="e.g. 20021241" maxlength="10" style="width:110px;">
+            </div>
+            <div id="orepro-username-display" class="orepro-username-display" style="display:none;"></div>
             <div id="orepro-sync-meta" class="orepro-sync-meta">No cookie saved yet.</div>
             <div id="orepro-sync-results" class="orepro-sync-results">No results synced yet.</div>
         </div>

@@ -1773,6 +1773,7 @@ function switchMainTab(date) {
     currentActiveDate = nextDate;
     currentTimelineTab = globalDateTimelineByDate[nextDate] || currentTimelineTab;
     currentCalendarMonth = getMonthKey(nextDate) || currentCalendarMonth;
+    updateOreProSyncDateDisplay();
     document.querySelectorAll('#schedules-container .tab-content').forEach(c => {
         c.classList.toggle('active', c.id === `tab-${nextDate}`);
     });
@@ -2494,6 +2495,7 @@ function buildRacecourseCheatHtml(targetDate) {
     const races = Array.isArray(globalRacesByDate[date]) ? globalRacesByDate[date] : [];
     const byTrack = {};
     const sMap = { "◎": 1, "〇": 2, "▲": 3, "△": 4, "☆": 5, "消": 6 };
+    const oreproRaceMap = getOreProRaceResultMapForActiveDate();
 
     races.forEach(race => {
         const r_id = String(race?.info?.race_id || '').trim();
@@ -2527,6 +2529,7 @@ function buildRacecourseCheatHtml(targetDate) {
             time: String(info.time || 'TBA'),
             raceName: localizeRaceName(info.race_name),
             winBadgesHtml: timeline === 'past' ? buildRaceWinBadgesHtml(race) : '',
+            orepro: oreproRaceMap.get(r_id) || null,
             marks: markRows
         });
     });
@@ -2545,6 +2548,15 @@ function buildRacecourseCheatHtml(targetDate) {
             html += `<div class="export-race-card voting-race-card" data-rid="${escapeHtml(raceCard.r_id)}">`;
             html += `<div class="export-race-title voting-race-title">🕒 ${escapeHtml(raceCard.time)} | Race ${raceCard.raceNum}: ${escapeHtml(raceCard.raceName || '')} ${raceCard.winBadgesHtml}</div>`;
             html += `<div class="voting-race-body">`;
+
+            if (raceCard.orepro) {
+                html += `
+                <div class="orepro-race-inline">
+                    <span class="orepro-inline-chip">Buy ${escapeHtml(raceCard.orepro.purchaseLabel || '-')}</span>
+                    <span class="orepro-inline-chip">Pay ${escapeHtml(raceCard.orepro.payoutLabel || '-')}</span>
+                    <span class="orepro-inline-chip ${Number(raceCard.orepro.profit) >= 0 ? 'is-positive' : 'is-negative'}">PnL ${escapeHtml(raceCard.orepro.profitLabel || '-')}</span>
+                </div>`;
+            }
 
             raceCard.marks.forEach(m => {
                 const favBadge = m.fav ? `Fav ${escapeHtml(String(m.fav))}` : 'Fav -';
@@ -2606,6 +2618,30 @@ function toggleVotingOrePro() {
 
 let oreproCompanionWindow = null;
 const OREPRO_COMPANION_WINDOW_NAME = 'OreProCompanionWindow';
+let oreproLastSyncPayload = null;
+
+function normalizeOreProDateLabel(dateStr) {
+    return String(dateStr || '').replace(/-/g, '').trim();
+}
+
+function getOreProRaceResultMapForActiveDate() {
+    const payload = oreproLastSyncPayload;
+    if (!payload || typeof payload !== 'object') return new Map();
+
+    const syncDate = normalizeOreProDateLabel(payload.kaisai_date);
+    const activeDate = normalizeOreProDateLabel(currentActiveDate);
+    if (!syncDate || !activeDate || syncDate !== activeDate) return new Map();
+
+    const rows = Array.isArray(payload.myRaceResults) ? payload.myRaceResults : [];
+    const result = new Map();
+    rows.forEach(row => {
+        const raceId = String(row?.raceId || '').trim();
+        if (raceId) {
+            result.set(raceId, row);
+        }
+    });
+    return result;
+}
 
 function isOreProCompanionOpen() {
     return !!(oreproCompanionWindow && !oreproCompanionWindow.closed);
@@ -2640,45 +2676,173 @@ function setOreProSessionStatus(message, mode = 'info') {
     }
 }
 
+function renderOreProHistorySummary(historyPayload) {
+    const bar = document.getElementById('orepro-lifetime-bar');
+    if (!bar) return;
+
+    const entries = Array.isArray(historyPayload?.entries) ? historyPayload.entries : [];
+    const totals = historyPayload?.totals && typeof historyPayload.totals === 'object' ? historyPayload.totals : null;
+    const formatYen = (value) => {
+        if (value === null || value === undefined || value === '') return '-';
+        const number = Number(value);
+        if (!Number.isFinite(number)) return escapeHtml(String(value));
+        const sign = number > 0 ? '+' : '';
+        return `${sign}${new Intl.NumberFormat('en-US').format(number)}円`;
+    };
+    const formatDateKey = (value) => {
+        const raw = String(value || '').trim();
+        if (!/^\d{8}$/.test(raw)) return escapeHtml(raw || '-');
+        return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
+    };
+
+    if (!totals || !entries.length) {
+        bar.classList.add('is-empty');
+        bar.innerHTML = `
+            <span class="orepro-lifetime-title">Lifetime</span>
+            <span class="orepro-lifetime-empty">No saved OrePro history yet. Sync a finished day once and it will persist here.</span>
+        `;
+        return;
+    }
+
+    const profitClass = Number(totals.profit) >= 0 ? 'is-positive' : 'is-negative';
+    const bestDay = totals.bestDay?.date
+        ? `<span class="orepro-lifetime-note">Best ${formatDateKey(totals.bestDay.date)} ${escapeHtml(totals.bestDay.profitLabel || formatYen(totals.bestDay.profit))}</span>`
+        : '';
+    const worstDay = totals.worstDay?.date
+        ? `<span class="orepro-lifetime-note">Worst ${formatDateKey(totals.worstDay.date)} ${escapeHtml(totals.worstDay.profitLabel || formatYen(totals.worstDay.profit))}</span>`
+        : '';
+
+    bar.classList.remove('is-empty');
+    bar.innerHTML = `
+        <span class="orepro-lifetime-title">Lifetime</span>
+        <span class="orepro-lifetime-chip">Days ${escapeHtml(String(totals.days || 0))}</span>
+        <span class="orepro-lifetime-chip">Races ${escapeHtml(String(totals.races || 0))}</span>
+        <span class="orepro-lifetime-chip">Buy ${escapeHtml(totals.purchaseLabel || formatYen(totals.purchase))}</span>
+        <span class="orepro-lifetime-chip">Pay ${escapeHtml(totals.payoutLabel || formatYen(totals.payout))}</span>
+        <span class="orepro-lifetime-chip ${profitClass}">PnL ${escapeHtml(totals.profitLabel || formatYen(totals.profit))}</span>
+        <span class="orepro-lifetime-chip">ROI ${escapeHtml(String(totals.roiPct || 0))}%</span>
+        ${bestDay}
+        ${worstDay}
+    `;
+}
+
 function renderOreProSyncPayload(payload) {
     const out = document.getElementById('orepro-sync-results');
     if (!out) return;
 
-    const lines = Array.isArray(payload?.summaryLines) ? payload.summaryLines : [];
-    const yenVals = Array.isArray(payload?.yenValues) ? payload.yenValues : [];
+    oreproLastSyncPayload = payload || null;
+    if (payload?.historySummary) {
+        renderOreProHistorySummary(payload.historySummary);
+    }
+
+    const resolvedKaisaiIds = Array.isArray(payload?.resolvedKaisaiIds) ? payload.resolvedKaisaiIds : [];
+    const raceIds = Array.isArray(payload?.raceIds) ? payload.raceIds : [];
+    const myRaceResults = Array.isArray(payload?.myRaceResults) ? payload.myRaceResults : [];
+    const mySummary = payload?.myBetSummary && typeof payload.myBetSummary === 'object' ? payload.myBetSummary : null;
     const fetchedAt = escapeHtml(payload?.fetchedAt || payload?.updatedAt || '');
     const status = escapeHtml(payload?.status || 'idle');
     const message = escapeHtml(payload?.message || 'No sync run yet.');
     const loginLabel = payload?.loggedIn ? 'yes' : 'no';
+    const dateLabel = payload?.kaisai_date ? escapeHtml(payload.kaisai_date) : 'current';
+    const venueLabel = payload?.kaisai_id ? escapeHtml(payload.kaisai_id) : '-';
+    const profileLabel = payload?.debug?.yosokaIdUsed ? escapeHtml(String(payload.debug.yosokaIdUsed)) : '-';
+    const resolvedVenueLabel = resolvedKaisaiIds.length ? resolvedKaisaiIds.map(v => escapeHtml(String(v))).join(', ') : '-';
+
+    const formatYen = (value) => {
+        if (value === null || value === undefined || value === '') return '-';
+        const number = Number(value);
+        if (!Number.isFinite(number)) return escapeHtml(String(value));
+        const sign = number > 0 ? '+' : '';
+        return `${sign}${new Intl.NumberFormat('en-US').format(number)}円`;
+    };
+
+    // Show username badge if we got one
+    const userEl = document.getElementById('orepro-username-display');
+    if (userEl) {
+        const uname = payload?.username ? escapeHtml(payload.username) : '';
+        if (uname) {
+            userEl.style.display = 'block';
+            userEl.innerHTML = `✅ Logged in as <strong>${uname}</strong>`;
+        } else if (payload?.loggedIn) {
+            userEl.style.display = 'block';
+            userEl.innerHTML = '✅ Logged in (username not detected)';
+        } else {
+            userEl.style.display = 'none';
+            userEl.innerHTML = '';
+        }
+    }
+
+    let mySummaryHtml = '';
+    if (mySummary && mySummary.races > 0) {
+        mySummaryHtml = `
+            <div class="orepro-sync-title">My Bets Summary</div>
+            <div class="orepro-sync-badges" style="margin-top:4px;">
+                <span class="orepro-chip">races: ${escapeHtml(String(mySummary.races || 0))}</span>
+                <span class="orepro-chip">purchase: ${escapeHtml(mySummary.purchaseLabel || formatYen(mySummary.purchase))}</span>
+                <span class="orepro-chip">payout: ${escapeHtml(mySummary.payoutLabel || formatYen(mySummary.payout))}</span>
+                <span class="orepro-chip">profit: ${escapeHtml(mySummary.profitLabel || formatYen(mySummary.profit))}</span>
+            </div>
+        `;
+    } else {
+        const accountLoggedIn = payload?.debug?.accountLoggedIn;
+        const hint = accountLoggedIn === false
+            ? 'No personal bet cards detected because mydata login was not confirmed for this cookie (nkauth alone may be insufficient).'
+            : 'No personal bet cards were detected for this sync/day.';
+        mySummaryHtml = `<div class="orepro-sync-title">My Bets Summary</div><div class="orepro-sync-list">${escapeHtml(hint)}</div>`;
+    }
+
+    const myRaceNoteHtml = myRaceResults.length
+        ? `<div class="orepro-sync-list">Per-race purchase, payout, and profit are shown directly in the voting sidebar cards for this day.</div>`
+        : '';
 
     out.innerHTML = `
         <div class="orepro-sync-badges">
             <span class="orepro-chip">status: ${status}</span>
             <span class="orepro-chip">logged-in: ${loginLabel}</span>
+            <span class="orepro-chip">date: ${dateLabel}</span>
+            <span class="orepro-chip">venue: ${venueLabel}</span>
+            <span class="orepro-chip">profile: ${profileLabel}</span>
+            <span class="orepro-chip">resolved-venues: ${resolvedVenueLabel}</span>
+            <span class="orepro-chip">races-found: ${raceIds.length}</span>
             <span class="orepro-chip">updated: ${fetchedAt || '-'}</span>
         </div>
         <div class="orepro-sync-message">${message}</div>
-        <div class="orepro-sync-columns">
-            <div>
-                <div class="orepro-sync-title">Detected money values</div>
-                <div class="orepro-sync-list">${yenVals.length ? yenVals.map(v => `<span class="orepro-money">${escapeHtml(v)}円</span>`).join(' ') : 'none'}</div>
-            </div>
-            <div>
-                <div class="orepro-sync-title">Summary lines</div>
-                <div class="orepro-sync-list">${lines.length ? lines.map(line => `<div>${escapeHtml(line)}</div>`).join('') : 'none'}</div>
-            </div>
-        </div>
+        ${mySummaryHtml}
+        ${myRaceNoteHtml}
     `;
+
+    const sidebarDisplay = document.getElementById('voting-sidebar-display');
+    if (sidebarDisplay && currentMainView === 'voting') {
+        sidebarDisplay.innerHTML = buildRacecourseCheatHtml(currentActiveDate);
+        if (winningVotesFocusEnabled) {
+            applyWinningVotesFocusToVotingSidebar(getDayOverallHitSummary(currentActiveDate));
+        }
+    }
+}
+
+function updateOreProSyncDateDisplay() {
+    const el = document.getElementById('orepro-sync-date-display');
+    if (!el) return;
+    if (currentActiveDate) {
+        el.textContent = `${currentActiveDate} (from calendar)`;
+        el.classList.remove('orepro-sync-date-none');
+    } else {
+        el.textContent = '← select a day in the calendar';
+        el.classList.add('orepro-sync-date-none');
+    }
 }
 
 async function loadOreProSessionStatus() {
+    updateOreProSyncDateDisplay();
     try {
-        const [sessionRes, lastRes] = await Promise.all([
+        const [sessionRes, lastRes, historyRes] = await Promise.all([
             fetch('/api/orepro/session'),
             fetch('/api/orepro/results/last'),
+            fetch('/api/orepro/results/history'),
         ]);
         const session = await sessionRes.json();
         const last = await lastRes.json();
+        const history = await historyRes.json();
 
         const meta = document.getElementById('orepro-sync-meta');
         if (meta) {
@@ -2691,6 +2855,7 @@ async function loadOreProSessionStatus() {
         }
 
         renderOreProSyncPayload(last || {});
+        renderOreProHistorySummary(last?.historySummary || history || {});
     } catch (err) {
         setOreProSessionStatus(`Failed loading OrePro sync state: ${err?.message || err}`, 'warn');
     }
@@ -2715,7 +2880,10 @@ async function saveOreProSessionCookie() {
             throw new Error(data.message || 'Failed to save cookie');
         }
         if (input) input.value = '';
-        setOreProSessionStatus('nkauth cookie saved. You can now sync post-race results.', 'ok');
+        const msg = data.stripped
+            ? 'Cookie saved (non-ASCII characters were stripped — make sure you copied only the cookie value).'
+            : 'nkauth cookie saved. You can now sync post-race results.';
+        setOreProSessionStatus(msg, data.stripped ? 'warn' : 'ok');
         await loadOreProSessionStatus();
     } catch (err) {
         setOreProSessionStatus(`Could not save nkauth cookie: ${err?.message || err}`, 'error');
@@ -2733,13 +2901,28 @@ async function clearOreProSessionCookie() {
 }
 
 async function syncOreProResults() {
-    setOreProSessionStatus('Syncing OrePro results with saved nkauth cookie...', 'warn');
+    // Derive date from the calendar's currently selected day
+    const kaisai_date = currentActiveDate ? currentActiveDate.replace(/-/g, '') : '';
+    const kaisai_id = (document.getElementById('orepro-kaisai-id')?.value || '').trim();
+    const yosoka_id = (document.getElementById('orepro-yosoka-id')?.value || '').trim();
+
+    if (!kaisai_date) {
+        setOreProSessionStatus('No day selected in the calendar. Select a race day first.', 'warn');
+        return;
+    }
+
+    const label = ` for ${kaisai_date}`;
+    setOreProSessionStatus(`Syncing OrePro results${label}...`, 'warn');
     try {
-        const res = await fetch('/api/orepro/results/sync', { method: 'POST' });
+        const res = await fetch('/api/orepro/results/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kaisai_date, kaisai_id, yosoka_id }),
+        });
         const data = await res.json();
         renderOreProSyncPayload(data);
         if (data.status === 'success') {
-            setOreProSessionStatus('OrePro results synced.', 'ok');
+            setOreProSessionStatus(`OrePro results synced${label}.`, 'ok');
         } else {
             setOreProSessionStatus(data.message || 'OrePro sync finished with warnings.', 'warn');
         }
