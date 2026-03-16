@@ -93,7 +93,7 @@
         /* --- CLOCK ROW (clocks + inline console) --- */
         .top-bar-clock-row { display: flex; align-items: stretch; gap: 16px; margin-bottom: 20px; }
         .clock-container { display: flex; justify-content: center; gap: 40px; background-color: rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 10px; flex-shrink: 0; margin-bottom: 0; }
-        .console-top-bar { flex: 1; min-width: 200px; height: auto; min-height: 72px; margin-top: 0; border-radius: 10px; font-size: 11px; display: none; }
+        .console-top-bar { flex: 1; min-width: 200px; height: 102px; max-height: 102px; margin-top: 0; border-radius: 10px; font-size: 11px; display: none; }
         .clock-box { text-align: center; }
         .clock-label { font-size: 12px; color: #888; letter-spacing: 1px; }
         .clock-time { font-size: 24px; font-weight: bold; }
