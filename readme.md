@@ -1,68 +1,92 @@
-# UMAnager 🐎
+# UMAnager
 
-A lightweight, local web dashboard for scraping, managing, and sorting weekend horse racing data from Netkeiba.
+UMAnager is a local FastAPI dashboard for tracking Japanese horse racing cards, pedigree angles, manual marks, and lightweight race-day workflow data from Netkeiba.
 
-### ⚠️ Author's Note & Disclaimer
+It is built as a personal tool first: scrape upcoming cards, keep pedigree watchlists, mark runners quickly, import completed results for a day, and keep everything in local files under `data/`.
 
-Let's get one thing out of the way right now: **I barely know anything about horse racing, odds math, or deep betting strategy.** This project was entirely *vibe-coded* as a fun, personal tool to help me keep track of cool horse lineages, monitor my favorite runners, and generate some highly unscientific automated picks so I didn't have to guess blindly. 
+## What It Does
 
-Please **do not** take the "Smart Sort" or "Auto-Pick" math too seriously, and absolutely do not use this to make actual financial decisions. It's built for fun, not profit! 
+- Scrapes upcoming race cards and caches them locally.
+- Uses a wider upcoming window with fallback day-level discovery when monthly race lists are incomplete.
+- Shows race days through a persistent calendar-first UI.
+- Lets you move between loaded days quickly with both the sidebar calendar and header prev/next day controls.
+- Supports manual horse marks that persist locally.
+- Tracks horses through two simple local lists: Favorites and Watchlist.
+- Translates and caches horse and pedigree names for easier reading.
+- Imports completed results for a selected day back into cached race entries.
+- Refreshes cached upcoming cards and can auto-refresh missing past-race history when enabled.
+- Creates and restores backups of the local `data/` directory.
+- Includes an in-app scrape console and a local server shutdown button.
 
-That being said, if you *do* know what you're doing when it comes to racing algorithms or web scraping, **I would love your input!** Issues, feedback, and pull requests are highly encouraged.
+## Current UI/Workflow
 
----
+- Sidebar calendar for loaded race days.
+- Header day navigator for fast day-to-day movement.
+- Search bar for horses across the currently loaded races.
+- Auto-pick strategy slider and configurable display/settings toggles.
+- Voting cheat sheet export for building bets outside the app.
 
-## ✨ Features
+## Storage Model
 
-* **Live Netkeiba Scraping:** Pulls down the current weekend's race cards, including post positions, brackets, weights, and live/predicted odds.
-* **Pedigree Sniper:** Automatically translates Japanese horse names to English and allows you to save specific horses to a "Favorites" or "Watchlist" tracker.
-* **Vibe-Based Auto-Picker:** A dynamic strategy slider that lets you weigh your automated picks between "Chalky/Safe" (favoring low odds) and "Maximum Chaos" (favoring fresh horses with good bloodlines). 
-* **Pop-out OrePro Cheat Sheet:** Generates an "always-on-top" floating window that formats your weekend picks perfectly for rapid ticket-building in OrePro.
-* **Quick Search:** A fast, auto-completing search bar to instantly locate any horse running on the weekend card.
+UMAnager is local-file based. It does not use a database.
 
----
+Important files under `data/`:
 
-## 🛠️ Tech Stack
+- `race_cache.pkl`: cached race cards and entry data
+- `saved_marks.json`: saved per-horse marks
+- `tracked_horses.txt`: Favorites list
+- `watchlist_horses.txt`: Watchlist list
+- `horse_names.json`: cached horse/pedigree translation data
+- `config.json`: UI and behavior settings
 
-* **Backend:** Python, FastAPI, Uvicorn
-* **Data Processing:** Pandas, BeautifulSoup4, Pykakasi (for Romaji translation)
-* **Frontend:** Vanilla HTML, CSS, JavaScript (No heavy frameworks!)
-* **Scraping:** Requests, [keibascraper](https://pypi.org/project/keibascraper/)
+Backups are written to `backups/`.
 
----
+## Tech Stack
 
-## 🚀 Installation & Setup
+- Backend: Python, FastAPI, Uvicorn
+- Frontend: vanilla HTML, CSS, JavaScript
+- Data handling: pandas, BeautifulSoup4
+- Scraping: requests, keibascraper
+- Name conversion: pykakasi
 
-1. **Clone the repository:**
-   
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/umanager.git
-   cd umanager
-   ```
+## Setup
 
-2. **Install the required Python packages:**
-   
-   ```bash
-   pip install fastapi uvicorn pandas beautifulsoup4 requests pykakasi keibascraper
-   ```
+1. Install dependencies:
 
-3. **Run the local server:**
-   
-   ```bash
-   uvicorn server:app --reload
-   ```
+```bash
+pip install -r requirements.txt
+```
 
-4. **Open the Dashboard:**
-   Open your web browser and go to `http://127.0.0.1:8000`.
+2. Start the app:
 
----
+```bash
+uvicorn server:app --reload --host 127.0.0.1 --port 8000
+```
 
-## 🤝 Contributing
+3. Open:
 
-Since I built this mostly on vibes, there is definitely room for improvement! 
+```text
+http://127.0.0.1:8000
+```
 
-* Did I completely botch the odds-weighting math? 
-* Is there a more efficient way to hit the Netkeiba API without triggering rate limits? 
-* Do you have an idea for a cool new feature?
+On Windows, you can also use `run.bat`, which opens the browser and writes server output to `server.log`.
 
-Feel free to open an issue or submit a pull request!
+## Project Layout
+
+- `server.py`: FastAPI app assembly, scrape job orchestration, root page, shutdown endpoint
+- `routers/maintenance.py`: cache, dictionary, and backup/restore endpoints
+- `routers/lists_config.py`: Favorites/Watchlist and config endpoints
+- `routers/races.py`: marks, race data, history refresh, day import, and day delete endpoints
+- `data_manager.py`: scraping, translation, race discovery, and history/result fetch logic
+- `static/`: browser-side app logic and styling
+- `data/`: local runtime state
+
+## Notes
+
+- This tool is not a betting model and should not be treated like one.
+- Netkeiba page structure changes can break parts of the scraper.
+- Upcoming race discovery is only as good as the currently published Netkeiba data plus the day-list fallback.
+
+## Contributing
+
+If you want to improve scraper reliability, race/result parsing, UI workflow, or the auto-pick logic, contributions are welcome.

@@ -1,11 +1,7 @@
 from fastapi import APIRouter, HTTPException
 import datetime
-import json
 import logging
 import os
-import pickle
-import tempfile
-from pathlib import Path
 from typing import Literal
 
 import pandas as pd
@@ -13,6 +9,7 @@ from pydantic import BaseModel
 
 import config
 import data_manager
+from storage import atomic_write_json, atomic_write_pickle, load_app_config, load_pickle, load_text_file, safe_read_json
 
 router = APIRouter(tags=["races"])
 logger = logging.getLogger(__name__)
@@ -22,7 +19,6 @@ MARKS_FILE = config.MARKS_FILE
 TRACKING_FILE = config.TRACKING_FILE
 WATCHLIST_FILE = config.WATCHLIST_FILE
 HORSE_DICT_FILE = config.HORSE_DICT_FILE
-CONFIG_FILE = config.DATA_DIR / "config.json"
 
 _progress_logger = None
 
@@ -46,43 +42,6 @@ def log_progress(msg):
         _progress_logger(msg)
 
 
-def atomic_write_json(path, payload):
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", dir=target.parent) as tmp:
-        json.dump(payload, tmp, ensure_ascii=False, indent=4)
-        tmp_path = tmp.name
-    os.replace(tmp_path, target)
-
-
-def atomic_write_pickle(path, payload):
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("wb", delete=False, dir=target.parent) as tmp:
-        pickle.dump(payload, tmp)
-        tmp_path = tmp.name
-    os.replace(tmp_path, target)
-
-
-def safe_read_json(path, default):
-    target = Path(path)
-    if not target.exists():
-        return default
-    try:
-        with open(target, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"Failed to read JSON from {target}: {e}")
-        return default
-
-
-def load_text_file(filepath):
-    if os.path.exists(filepath):
-        with open(filepath, "r", encoding="utf-8") as f:
-            return f.read()
-    return ""
-
-
 def load_ids(filepath):
     ids = set()
     text = load_text_file(filepath)
@@ -100,10 +59,7 @@ def force_str(val):
 
 
 def load_cached_races():
-    if not os.path.exists(CACHE_FILE):
-        return []
-    with open(CACHE_FILE, "rb") as f:
-        return pickle.load(f)
+    return load_pickle(CACHE_FILE, [])
 
 
 def save_cached_races(races):
@@ -127,11 +83,7 @@ def save_horse_dict_data(horse_dict):
 
 
 def load_config():
-    defaults = {
-        "sidebarTabs": {"favorites": True, "watchlist": True, "weekendWatchlist": True},
-        "ui": {"riskSlider": 50, "autoFetchPastResults": True},
-    }
-    return safe_read_json(CONFIG_FILE, defaults)
+    return load_app_config()
 
 
 def parse_sort_time(sort_time_str):

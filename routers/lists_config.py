@@ -1,21 +1,18 @@
 from fastapi import APIRouter
 import os
 import re
-import tempfile
-import json
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel
 
 import config
 import data_manager
+from storage import atomic_write_text, load_app_config, load_text_file, save_app_config
 
 router = APIRouter(tags=["lists-config"])
 
 TRACKING_FILE = config.TRACKING_FILE
 WATCHLIST_FILE = config.WATCHLIST_FILE
-CONFIG_FILE = "data/config.json"
 
 
 class ListsPayload(BaseModel):
@@ -27,42 +24,6 @@ class SnipeRequest(BaseModel):
     url: str = ""
     id: str = ""
     list_type: Literal["favorites", "watchlist"] = "favorites"
-
-
-def atomic_write_json(path, payload):
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", dir=target.parent) as tmp:
-        json.dump(payload, tmp, ensure_ascii=False, indent=4)
-        tmp_path = tmp.name
-    os.replace(tmp_path, target)
-
-
-def atomic_write_text(path, text):
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", dir=target.parent) as tmp:
-        tmp.write(text)
-        tmp_path = tmp.name
-    os.replace(tmp_path, target)
-
-
-def safe_read_json(path, default):
-    target = Path(path)
-    if not target.exists():
-        return default
-    try:
-        with open(target, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return default
-
-
-def load_text_file(filepath):
-    if os.path.exists(filepath):
-        with open(filepath, "r", encoding="utf-8") as f:
-            return f.read()
-    return ""
 
 
 def validate_horse_id(horse_id):
@@ -80,18 +41,6 @@ def validate_url(url_str):
         return candidate
     match = re.search(r"/([a-zA-Z0-9]{10})", candidate)
     return match.group(1) if match else None
-
-
-def load_config():
-    defaults = {
-        "sidebarTabs": {"favorites": True, "watchlist": True, "weekendWatchlist": True},
-        "ui": {"riskSlider": 50, "autoFetchPastResults": True},
-    }
-    return safe_read_json(CONFIG_FILE, defaults)
-
-
-def save_config(config_data):
-    atomic_write_json(CONFIG_FILE, config_data)
 
 
 @router.get("/api/lists")
@@ -151,10 +100,10 @@ async def snipe_horse(payload: SnipeRequest):
 
 @router.get("/api/config")
 def get_config():
-    return load_config()
+    return load_app_config()
 
 
 @router.post("/api/config")
 async def update_config(config_data: dict[str, Any]):
-    save_config(config_data)
+    save_app_config(config_data)
     return {"status": "success"}
