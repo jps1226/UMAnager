@@ -10,7 +10,9 @@ let globalDateTimelineByDate = {}; // Maps YYYY-MM-DD -> "upcoming" | "past"
 let currentTimelineTab = "upcoming";
 let currentActiveDate = null;
 let currentCalendarMonth = null;
+let currentMainView = 'races';
 let raceSorts = {}; // NEW: Remembers which column is sorted for each race
+let winningVotesFocusEnabled = false;
 let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 let appConfig = {}; // NEW: Stores app configuration
@@ -79,6 +81,10 @@ function isVoteSortingEnabled() {
 
 function isAutoFetchPastResultsEnabled() {
     return appConfig.ui?.autoFetchPastResults ?? true;
+}
+
+function isAutoLockPastVotesEnabled() {
+    return appConfig.ui?.autoLockPastVotes ?? false;
 }
 
 function raceHasHistoryData(race) {
@@ -379,6 +385,7 @@ async function init() {
     applySidebarSettings();
     
     await refreshDataAndUI();
+    switchMainView('races');
 }
 
 // --- HORSE LIST UI LOGIC ---
@@ -1471,6 +1478,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
     if (dates.length === 0) {
         currentActiveDate = null;
         renderRaceCalendar();
+        updateWinningVotesFocusButton();
         scheds.innerHTML = `<div class="tab-content active"><div style="color:#888; font-size:14px; text-align:center; padding:30px 10px;">No race days available.</div></div>`;
         return;
     }
@@ -1492,6 +1500,9 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 
         globalRacesByDate[date].forEach(race => {
             const r_id = race.info.race_id;
+            if (isAutoLockPastVotesEnabled() && dateTimeline === 'past') {
+                raceLocks[r_id] = true;
+            }
 
             let shouldCollapse = false;
             if (
@@ -1565,13 +1576,14 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
             const clearStyle = countRaceMarks(r_id) > 0 ? "display: inline-block;" : "display: none;";
 
             const localName = localizeRaceName(race.info.race_name);
+            const winBadgesHtml = buildRaceWinBadgesHtml(race);
             const historyBtnHtml = dateTimeline === 'past' && !raceHasHistoryData(race)
                 ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Fetch finish positions and result data for this race">📜 Update History</button>`
                 : "";
 
             html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
                 <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
-                    <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> 🕒 ${race.info.time} | ${race.info.place.toUpperCase()} R${race.info.race_number}: ${localName}
+                    <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> 🕒 ${race.info.time} | ${race.info.place.toUpperCase()} R${race.info.race_number}: ${localName} ${winBadgesHtml}
 
                     ${historyBtnHtml}
 
@@ -1596,6 +1608,15 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
         html += `</div>`;
         scheds.innerHTML += html;
     });
+
+    updateWinningVotesFocusButton();
+    updateLiveViewPopoutAvailability();
+    if (winningVotesFocusEnabled) {
+        applyWinningVotesFocus();
+    }
+    if (currentMainView === 'voting') {
+        renderLiveViewPanel();
+    }
 }
 
 // --- RENDER DASHBOARD ---
@@ -1729,6 +1750,8 @@ async function loadRaces() {
     currentCalendarMonth = currentActiveDate ? getMonthKey(currentActiveDate) : getAvailableCalendarMonths()[0] || null;
 
     renderDayTabsAndSchedules(currentActiveDate, collapseBeforeTime, keepOpenRaceId);
+    syncVotingViewAvailability();
+    updateLiveViewPopoutAvailability();
     updateAllRiskBadges();
 
     isFirstLoad = false;
@@ -1753,7 +1776,14 @@ function switchMainTab(date) {
     document.querySelectorAll('#schedules-container .tab-content').forEach(c => {
         c.classList.toggle('active', c.id === `tab-${nextDate}`);
     });
+    winningVotesFocusEnabled = false;
+    syncVotingViewAvailability();
+    updateLiveViewPopoutAvailability();
+    updateWinningVotesFocusButton();
     renderRaceCalendar();
+    if (currentMainView === 'voting') {
+        renderLiveViewPanel();
+    }
 }
 
 // Creates the individual prediction buttons (◎, 〇, ▲, △)
@@ -1819,6 +1849,11 @@ function updateRaceActionButtons(r_id) {
             : "Lock to prevent any mark changes in this race";
     }
 
+    const header = document.getElementById(`header-${r_id}`);
+    if (header) {
+        header.classList.toggle('votes-locked', isLocked);
+    }
+
     const autoBtns = document.querySelectorAll(`.auto-group-${r_id}`);
     const reorderBtn = document.getElementById(`btn-reorder-${r_id}`);
 
@@ -1858,6 +1893,8 @@ async function clearRaceBets(event, r_id) {
     refreshRaceHeaderSortLabels(r_id);
     updateRaceActionButtons(r_id);
     updateRiskBadge(r_id);
+    updateWinningVotesFocusButton();
+    if (winningVotesFocusEnabled) applyWinningVotesFocus();
 }
 
 function toggleRaceLock(event, r_id) {
@@ -1924,6 +1961,8 @@ async function toggleMark(r_id, h_id, symbol) {
     document.getElementById(`tbody-${r_id}`).innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
     updateRaceActionButtons(r_id);
     updateRiskBadge(r_id);
+    updateWinningVotesFocusButton();
+    if (winningVotesFocusEnabled) applyWinningVotesFocus();
 }
 
 // --- API CALLS ---
@@ -2171,26 +2210,543 @@ async function fetchLogs() {
     }
 }
 
-// --- Voting Cheat Sheet (POP-OUT WINDOW) ---
-async function showExportModal() {
-    const summaryByDate = {}; 
-    const sMap = {"◎": 1, "〇": 2, "▲": 3, "△": 4, "☆": 5, "消": 6};
-    
-    // NEW: Also track chronological order
-    const summaryChronological = [];
+// --- Live View Popout ---
+function parseFinishRank(value) {
+    const text = String(value ?? '').trim();
+    const match = text.match(/\d+/);
+    if (!match) return null;
+    const rank = parseInt(match[0], 10);
+    return Number.isFinite(rank) ? rank : null;
+}
 
-    // 1. Group all marks by Date, then Track, then Race Number
+function collectRaceMainMarks(raceId) {
+    const marks = {};
+    const validSymbols = new Set(["◎", "〇", "▲", "△"]);
+
     for (const [key, symbol] of Object.entries(globalMarks)) {
-        if (!symbol || symbol === 'X') continue; 
-        
+        if (!symbol || !validSymbols.has(symbol)) continue;
+        const [r_id, h_id] = key.split('_');
+        if (r_id !== raceId || !h_id) continue;
+        marks[symbol] = h_id;
+    }
+
+    return marks;
+}
+
+function setRaceCollapsedState(r_id, shouldCollapse) {
+    const content = document.getElementById(`content-${r_id}`);
+    const header = document.getElementById(`header-${r_id}`);
+    const arrow = document.getElementById(`arrow-${r_id}`);
+    if (!content || !header || !arrow) return;
+
+    content.classList.toggle('collapsed', shouldCollapse);
+    header.classList.toggle('collapsed', shouldCollapse);
+    arrow.innerText = shouldCollapse ? '▶' : '▼';
+}
+
+function evaluateRaceRecap(race) {
+    const info = race?.info || {};
+    const raceId = String(info.race_id || '').trim();
+    const raceLabel = `${(info.place || '').toUpperCase()} R${info.race_number || '?'}`.trim();
+    const entries = Array.isArray(race?.entries) ? race.entries : [];
+
+    const finishByRank = {};
+    entries.forEach(row => {
+        const rank = parseFinishRank(row?.Finish);
+        if (!rank || rank < 1 || rank > 3) return;
+
+        const horseId = String(row?.Horse_ID ?? '').split('.')[0].trim();
+        if (!horseId) return;
+        if (!finishByRank[rank]) finishByRank[rank] = horseId;
+    });
+
+    const hasCompleteTop3 = !!(finishByRank[1] && finishByRank[2] && finishByRank[3]);
+    if (!hasCompleteTop3) {
+        return {
+            raceId,
+            raceLabel,
+            hasCompleteTop3: false,
+            honmeiHit: false,
+            quinellaHit: false,
+            trioHit: false
+        };
+    }
+
+    const marks = collectRaceMainMarks(raceId);
+    const pickedSet = new Set(Object.values(marks).filter(Boolean));
+    const top1 = finishByRank[1];
+    const top2 = finishByRank[2];
+    const top3 = finishByRank[3];
+
+    return {
+        raceId,
+        raceLabel,
+        hasCompleteTop3: true,
+        honmeiHit: !!marks["◎"] && marks["◎"] === top1,
+        quinellaHit: pickedSet.has(top1) && pickedSet.has(top2),
+        trioHit: pickedSet.has(top1) && pickedSet.has(top2) && pickedSet.has(top3)
+    };
+}
+
+function getDayOverallHitSummary(targetDate) {
+    const date = String(targetDate || '').trim();
+    const timeline = globalDateTimelineByDate[date] || null;
+    const races = Array.isArray(globalRacesByDate[date]) ? globalRacesByDate[date] : [];
+
+    if (!date || timeline !== 'past' || !races.length) {
+        return {
+            visible: false,
+            total: 0,
+            correct: 0,
+            rate: 0,
+            winningRaceIds: []
+        };
+    }
+
+    const winningRaceIds = [];
+    let total = 0;
+    let correct = 0;
+    let votedRaces = 0;
+
+    races.forEach(race => {
+        const r_id = String(race?.info?.race_id || '').trim();
+        if (!r_id) return;
+
+        const marks = collectRaceMainMarks(r_id);
+        const hasVotes = Object.keys(marks).length > 0;
+        if (!hasVotes) return;
+        votedRaces += 1;
+
+        const recap = evaluateRaceRecap(race);
+        if (!recap.hasCompleteTop3) return;
+
+        total += 1;
+        const isCorrect = recap.honmeiHit || recap.quinellaHit || recap.trioHit;
+        if (isCorrect) {
+            correct += 1;
+            winningRaceIds.push(r_id);
+        }
+    });
+
+    const rate = total > 0 ? Math.round((correct / total) * 100) : 0;
+    return {
+        visible: votedRaces > 0 && total > 0,
+        total,
+        correct,
+        rate,
+        winningRaceIds
+    };
+}
+
+function getDayDetailedHitSummary(targetDate) {
+    const date = String(targetDate || '').trim();
+    const timeline = globalDateTimelineByDate[date] || null;
+    const races = Array.isArray(globalRacesByDate[date]) ? globalRacesByDate[date] : [];
+
+    const summary = {
+        visible: false,
+        date,
+        timeline,
+        votedRaces: 0,
+        totalScored: 0,
+        honmei: 0,
+        quinella: 0,
+        trio: 0
+    };
+
+    if (!date || timeline !== 'past' || !races.length) {
+        return summary;
+    }
+
+    races.forEach(race => {
+        const r_id = String(race?.info?.race_id || '').trim();
+        if (!r_id) return;
+
+        const marks = collectRaceMainMarks(r_id);
+        if (!Object.keys(marks).length) return;
+        summary.votedRaces += 1;
+
+        const recap = evaluateRaceRecap(race);
+        if (!recap.hasCompleteTop3) return;
+
+        summary.totalScored += 1;
+        if (recap.honmeiHit) summary.honmei += 1;
+        if (recap.quinellaHit) summary.quinella += 1;
+        if (recap.trioHit) summary.trio += 1;
+    });
+
+    summary.visible = summary.votedRaces > 0;
+    return summary;
+}
+
+function pct(part, total) {
+    if (!total) return 0;
+    return Math.round((part / total) * 100);
+}
+
+function buildVotingRecapHtml(targetDate) {
+    const summary = getDayDetailedHitSummary(targetDate);
+    if ((summary.timeline || '') !== 'past') {
+        return '';
+    }
+
+    if (!summary.visible) {
+        return '<div class="voting-recap-note">No votes found for this day yet.</div>';
+    }
+
+    if (!summary.totalScored) {
+        return `<div class="voting-recap-note">${escapeHtml(summary.date)} has votes, but result rows are not fully scored yet.</div>`;
+    }
+
+    return `
+    <div class="voting-recap-grid">
+        <div class="voting-recap-item"><span>Voted Races</span><strong>${summary.votedRaces}</strong></div>
+        <div class="voting-recap-item"><span>Scored Races</span><strong>${summary.totalScored}</strong></div>
+        <div class="voting-recap-item"><span>◎ Hit</span><strong>${summary.honmei}/${summary.totalScored} (${pct(summary.honmei, summary.totalScored)}%)</strong></div>
+        <div class="voting-recap-item"><span>Q Box Hit</span><strong>${summary.quinella}/${summary.totalScored} (${pct(summary.quinella, summary.totalScored)}%)</strong></div>
+        <div class="voting-recap-item"><span>T Box Hit</span><strong>${summary.trio}/${summary.totalScored} (${pct(summary.trio, summary.totalScored)}%)</strong></div>
+    </div>`;
+}
+
+function applyWinningVotesFocus() {
+    const summary = getDayOverallHitSummary(currentActiveDate);
+    if (!summary.visible) return;
+
+    const winSet = new Set(summary.winningRaceIds);
+    (globalRacesByDate[currentActiveDate] || []).forEach(race => {
+        const r_id = String(race?.info?.race_id || '').trim();
+        if (!r_id) return;
+
+        const shouldCollapse = winningVotesFocusEnabled ? !winSet.has(r_id) : false;
+        setRaceCollapsedState(r_id, shouldCollapse);
+    });
+
+    applyWinningVotesFocusToVotingSidebar(summary);
+}
+
+function applyWinningVotesFocusToVotingSidebar(summary) {
+    const sidebar = document.getElementById('voting-sidebar-display');
+    if (!sidebar) return;
+
+    const winSet = new Set(summary?.winningRaceIds || []);
+    sidebar.querySelectorAll('.voting-race-card').forEach(card => {
+        const r_id = String(card.dataset.rid || '').trim();
+        const shouldCollapse = winningVotesFocusEnabled && summary?.visible ? !winSet.has(r_id) : false;
+        card.classList.toggle('is-collapsed', shouldCollapse);
+    });
+}
+
+function updateWinningVotesFocusButton() {
+    const btn = document.getElementById('btn-winning-votes-focus');
+    if (!btn) return;
+
+    const summary = getDayOverallHitSummary(currentActiveDate);
+    const shouldShow = summary.visible || currentMainView === 'voting';
+    if (!shouldShow) {
+        winningVotesFocusEnabled = false;
+        btn.style.display = 'none';
+        btn.classList.remove('is-active');
+        return;
+    }
+
+    btn.style.display = 'inline-block';
+    if (!summary.visible) {
+        winningVotesFocusEnabled = false;
+        btn.classList.remove('is-active');
+        btn.textContent = '🏁 Hit N/A (0/0)';
+        btn.title = 'Hit rate appears once there are scored races with results.';
+        return;
+    }
+
+    btn.classList.toggle('is-active', winningVotesFocusEnabled);
+    const modeLabel = winningVotesFocusEnabled ? ' (Winners Only)' : '';
+    btn.textContent = `🏁 Hit ${summary.rate}% (${summary.correct}/${summary.total})${modeLabel}`;
+    btn.title = winningVotesFocusEnabled
+        ? 'Showing only races where at least one of your bet types hit. Click to reset.'
+        : 'Collapse non-winning races for this day.';
+}
+
+function toggleWinningVotesFocus() {
+    const summary = getDayOverallHitSummary(currentActiveDate);
+    if (!summary.visible) return;
+
+    winningVotesFocusEnabled = !winningVotesFocusEnabled;
+    applyWinningVotesFocus();
+    updateWinningVotesFocusButton();
+}
+
+function buildRaceWinBadgesHtml(race) {
+    const recap = evaluateRaceRecap(race);
+    if (!recap.hasCompleteTop3) return "";
+
+    const badges = [];
+    if (recap.honmeiHit) badges.push('<span class="race-hit-pill race-hit-honmei" title="◎ Honmei hit">◎ Win</span>');
+    if (recap.quinellaHit) badges.push('<span class="race-hit-pill race-hit-quinella" title="Quinella Box hit">Q Box</span>');
+    if (recap.trioHit) badges.push('<span class="race-hit-pill race-hit-trio" title="Trio Box hit">T Box</span>');
+
+    if (!badges.length) return "";
+    return `<span class="race-hit-wrap">${badges.join('')}</span>`;
+}
+
+function buildRacecourseCheatHtml(targetDate) {
+    const date = String(targetDate || '').trim();
+    const timeline = globalDateTimelineByDate[date] || '';
+    const races = Array.isArray(globalRacesByDate[date]) ? globalRacesByDate[date] : [];
+    const byTrack = {};
+    const sMap = { "◎": 1, "〇": 2, "▲": 3, "△": 4, "☆": 5, "消": 6 };
+
+    races.forEach(race => {
+        const r_id = String(race?.info?.race_id || '').trim();
+        if (!r_id) return;
+
+        const marks = collectRaceMainMarks(r_id);
+        if (!Object.keys(marks).length) return;
+
+        const info = race.info || {};
+        const track = String(info.place || '').toUpperCase();
+        const raceNum = parseInt(info.race_number, 10) || 0;
+        const entries = Array.isArray(race.entries) ? race.entries : [];
+        const recap = evaluateRaceRecap(race);
+
+        const markRows = Object.entries(marks).map(([symbol, horseId]) => {
+            const row = entries.find(r => String(r.Horse_ID).split('.')[0] === String(horseId));
+            const finishRank = parseFinishRank(row?.Finish);
+            return {
+                symbol,
+                rank: sMap[symbol] || 99,
+                horse: row ? row.Horse : 'Unknown Horse',
+                fav: row ? String(row.Fav || '').trim() : '',
+                finishRank
+            };
+        }).sort((a, b) => a.rank - b.rank);
+
+        if (!byTrack[track]) byTrack[track] = [];
+        byTrack[track].push({
+            r_id,
+            raceNum,
+            time: String(info.time || 'TBA'),
+            raceName: localizeRaceName(info.race_name),
+            winBadgesHtml: timeline === 'past' ? buildRaceWinBadgesHtml(race) : '',
+            marks: markRows
+        });
+    });
+
+    const tracks = Object.keys(byTrack).sort();
+    if (!tracks.length) {
+        return "<p style='text-align:center; color:#888; margin-top:30px;'>No votes for this day yet.</p>";
+    }
+
+    let html = '';
+    tracks.forEach(track => {
+        html += `<div class="export-track-header">${escapeHtml(track)}</div>`;
+        html += `<div class="export-track-grid">`;
+
+        byTrack[track].sort((a, b) => a.raceNum - b.raceNum).forEach(raceCard => {
+            html += `<div class="export-race-card voting-race-card" data-rid="${escapeHtml(raceCard.r_id)}">`;
+            html += `<div class="export-race-title voting-race-title">🕒 ${escapeHtml(raceCard.time)} | Race ${raceCard.raceNum}: ${escapeHtml(raceCard.raceName || '')} ${raceCard.winBadgesHtml}</div>`;
+            html += `<div class="voting-race-body">`;
+
+            raceCard.marks.forEach(m => {
+                const favBadge = m.fav ? `Fav ${escapeHtml(String(m.fav))}` : 'Fav -';
+                const finishBadge = timeline === 'past'
+                    ? `<span class="voting-finish-badge${m.finishRank ? ` rank-${m.finishRank}` : ''}">Fin ${m.finishRank || '-'}</span>`
+                    : '';
+
+                html += `
+                <div class="export-horse-line" style="margin-bottom: 8px;">
+                    <span class="export-symbol" style="font-weight:bold; margin-right:8px; width:22px; text-align:center;">${escapeHtml(m.symbol)}</span>
+                    <div style="flex: 1; min-width: 0; display:flex; justify-content:space-between; gap:10px;">
+                        <span style="font-weight:500;">${escapeHtml(String(m.horse || 'Unknown Horse'))}</span>
+                        <div class="voting-line-right-meta">
+                            <span style="font-size:11px; color:#ddd; border:1px solid #555; border-radius:4px; padding:2px 6px; white-space:nowrap;">${favBadge}</span>
+                            ${finishBadge}
+                        </div>
+                    </div>
+                </div>`;
+            });
+
+            html += `</div>`;
+            html += `</div>`;
+        });
+
+        html += `</div>`;
+    });
+
+    return html;
+}
+
+function syncVotingViewAvailability() {
+    const votingBtn = document.getElementById('main-view-voting');
+    if (!votingBtn) return;
+
+    votingBtn.style.display = 'inline-block';
+}
+
+function updateLiveViewPopoutAvailability() {
+    const btn = document.getElementById('btn-live-view-popout');
+    if (!btn) return;
+    const isPast = (globalDateTimelineByDate[currentActiveDate] || '') === 'past';
+    btn.style.display = isPast ? 'none' : 'inline-block';
+}
+
+function setVotingOreProCollapsed(collapsed) {
+    const container = document.getElementById('live-view-container');
+    const toggleBtn = document.getElementById('btn-voting-orepro-toggle');
+    if (!container || !toggleBtn) return;
+
+    container.classList.toggle('orepro-collapsed', !!collapsed);
+    toggleBtn.textContent = collapsed ? '🌐 Show OrePro' : '🧾 Collapse OrePro';
+}
+
+function toggleVotingOrePro() {
+    const container = document.getElementById('live-view-container');
+    if (!container) return;
+    setVotingOreProCollapsed(!container.classList.contains('orepro-collapsed'));
+}
+
+async function requestOreProSessionAccess() {
+    const statusEl = document.getElementById('orepro-session-status');
+    const frame = document.getElementById('live-orepro-iframe');
+
+    const setStatus = (msg, mode = 'info') => {
+        if (!statusEl) return;
+        statusEl.textContent = msg;
+        statusEl.classList.remove('ok', 'warn', 'error');
+        statusEl.classList.add(mode);
+    };
+
+    try {
+        setStatus('Requesting browser storage access for embedded OrePro login...', 'info');
+
+        if (typeof document.requestStorageAccessFor === 'function') {
+            await document.requestStorageAccessFor('https://orepro.netkeiba.com');
+            setStatus('Storage access granted. Reloading OrePro frame...', 'ok');
+            if (frame && frame.src && frame.src !== 'about:blank') {
+                frame.src = OREPRO_URL;
+            }
+            return;
+        }
+
+        if (window.top !== window && typeof document.requestStorageAccess === 'function') {
+            await document.requestStorageAccess();
+            setStatus('Storage access granted. Reloading OrePro frame...', 'ok');
+            if (frame && frame.src && frame.src !== 'about:blank') {
+                frame.src = OREPRO_URL;
+            }
+            return;
+        }
+
+        setStatus('This browser does not expose storage-access APIs here. If embedded login still fails, allow third-party cookies for this site.', 'warn');
+    } catch (err) {
+        const msg = err?.message ? String(err.message) : 'request denied';
+        setStatus(`Could not enable embedded login access (${msg}). Try allowing third-party cookies for localhost and netkeiba, or use Open External.`, 'error');
+    }
+}
+
+function renderLiveViewPanel() {
+    const sidebarTitle = document.getElementById('voting-sidebar-title');
+    const sidebarDisplay = document.getElementById('voting-sidebar-display');
+    const mainTitle = document.getElementById('voting-main-title');
+    const recapPanel = document.getElementById('voting-recap-panel');
+    const oreproFrame = document.getElementById('live-orepro-iframe');
+    if (!sidebarTitle || !sidebarDisplay || !mainTitle || !recapPanel || !oreproFrame) return;
+
+    const date = String(currentActiveDate || '').trim();
+    const timeline = globalDateTimelineByDate[date] || '';
+    sidebarTitle.textContent = `By Racecourse · ${date || 'No day selected'}`;
+    sidebarDisplay.innerHTML = buildRacecourseCheatHtml(date);
+    mainTitle.textContent = `OrePro · ${date || 'No day selected'}`;
+
+    if (winningVotesFocusEnabled) {
+        applyWinningVotesFocusToVotingSidebar(getDayOverallHitSummary(date));
+    }
+
+    if (timeline === 'past') {
+        recapPanel.style.display = 'block';
+        recapPanel.innerHTML = buildVotingRecapHtml(date);
+    } else {
+        recapPanel.style.display = 'none';
+        recapPanel.innerHTML = '';
+    }
+
+    if (!oreproFrame.src || oreproFrame.src === 'about:blank') {
+        oreproFrame.src = OREPRO_URL;
+    }
+}
+
+function switchMainView(view) {
+    currentMainView = view === 'voting' ? 'voting' : 'races';
+
+    const schedules = document.getElementById('schedules-container');
+    const liveView = document.getElementById('live-view-container');
+    const racesBtn = document.getElementById('main-view-races');
+    const votingBtn = document.getElementById('main-view-voting');
+    if (!schedules || !liveView || !racesBtn || !votingBtn) return;
+
+    const isVoting = currentMainView === 'voting';
+    schedules.style.display = isVoting ? 'none' : 'block';
+    liveView.style.display = isVoting ? 'flex' : 'none';
+    racesBtn.classList.toggle('is-active', !isVoting);
+    votingBtn.classList.toggle('is-active', isVoting);
+    document.body.classList.toggle('voting-mode', isVoting);
+
+    syncVotingViewAvailability();
+    updateLiveViewPopoutAvailability();
+    updateWinningVotesFocusButton();
+
+    if (isVoting) {
+        renderLiveViewPanel();
+    }
+}
+
+function buildDailyRecapHtml(targetDate) {
+    const date = String(targetDate || '').trim();
+    if (!date || (globalDateTimelineByDate[date] || '') !== 'past') {
+        return `
+        <div class="day-recap-note">
+            Overall hit rate appears when you are viewing a past race day.
+        </div>`;
+    }
+
+    const summary = getDayOverallHitSummary(date);
+    if (!summary.visible) {
+        return `
+        <div class="day-recap-note">
+            ${escapeHtml(date)} has no fully-scored voted races yet.
+        </div>`;
+    }
+
+    return `
+    <section class="day-recap-card">
+        <div class="day-recap-card-head">
+            <h3>📅 ${escapeHtml(String(date))}</h3>
+            <span class="day-recap-total">Overall</span>
+        </div>
+        <div class="day-recap-line">
+            <div class="day-recap-line-head">
+                <span class="day-recap-label">Correct vs Total (any hit type)</span>
+                <span class="day-recap-score">${summary.correct}/${summary.total} (${summary.rate}%)</span>
+            </div>
+        </div>
+    </section>`;
+}
+
+async function showExportModal() {
+    const targetDate = String(currentActiveDate || '').trim();
+    const summaryByDate = {};
+    const sMap = {"◎": 1, "〇": 2, "▲": 3, "△": 4, "☆": 5, "消": 6};
+
+    for (const [key, symbol] of Object.entries(globalMarks)) {
+        if (!symbol || symbol === 'X') continue;
+
         const [r_id, h_id] = key.split('_');
         const info = globalRaceInfo[r_id];
         if (!info) continue;
 
         const dateStr = info.clean_date || "Unknown Date";
+        if (!targetDate || dateStr !== targetDate) continue;
         const track = info.place.toUpperCase();
         const raceNum = parseInt(info.race_number);
-        const sortTime = info.sort_time ? new Date(info.sort_time.replace(' ', 'T')) : new Date(0);
 
         if (!summaryByDate[dateStr]) summaryByDate[dateStr] = {};
         if (!summaryByDate[dateStr][track]) summaryByDate[dateStr][track] = {};
@@ -2203,25 +2759,19 @@ async function showExportModal() {
         const bk = horseRow ? parseInt(horseRow.BK) || 0 : 0;
         const fav = horseRow ? String(horseRow.Fav || "").trim() : "";
 
-        const raceData = {
-            symbol: symbol, rank: sMap[symbol] || 99, horse: horseName, pp: pp, bk: bk,
-            fav: fav,
-            date: dateStr, track: track, raceNum: raceNum, sortTime: sortTime, time: info.time, r_id: r_id
-        };
-        
-        summaryByDate[dateStr][track][raceNum].push(raceData);
-        
-        // NEW: Add to chronological list
-        summaryChronological.push(raceData);
+        summaryByDate[dateStr][track][raceNum].push({
+            symbol: symbol,
+            rank: sMap[symbol] || 99,
+            horse: horseName,
+            pp: pp,
+            bk: bk,
+            fav: fav
+        });
     }
-    
-    // NEW: Sort chronological list by race time
-    summaryChronological.sort((a, b) => a.sortTime - b.sortTime);
 
-    // 2. Generate the Visual HTML Grid (Racecourse View)
     let html = "";
     const dates = Object.keys(summaryByDate).sort();
-    
+
     if (dates.length === 0) {
         html = "<p style='text-align:center; color:#888; margin-top:50px;'>No votes cast yet! Make your selections in the grid first.</p>";
     } else {
@@ -2231,41 +2781,39 @@ async function showExportModal() {
             
             const tracks = Object.keys(summaryByDate[date]).sort();
             tracks.forEach(track => {
-                
-                // NEW: Create a safe ID for the entire track
+
                 const safeTrackId = `${date}-${track}`.replace(/[^a-zA-Z0-9-]/g, '');
-                
-                // NEW: Make the Track Header clickable
-                     const safeTrack = escapeHtml(String(track));
-                     html += `<div class="export-track-header" onclick="toggleExportTrack('${safeTrackId}')" title="Click to collapse/expand track">
-                                     <span id="arrow-track-${safeTrackId}" style="display:inline-block; width:20px; font-size: 14px; vertical-align: middle;">▼</span>${safeTrack}
-                         </div>`;
-                         
-                // NEW: Wrap the grid so the whole thing can vanish
+
+                const safeTrack = escapeHtml(String(track));
+                html += `<div class="export-track-header" onclick="toggleExportTrack('${safeTrackId}')" title="Click to collapse/expand track">
+                                <span id="arrow-track-${safeTrackId}" style="display:inline-block; width:20px; font-size: 14px; vertical-align: middle;">▼</span>${safeTrack}
+                    </div>`;
+
                 html += `<div id="content-track-${safeTrackId}" class="export-track-grid">`;
-                
+
                 const races = Object.keys(summaryByDate[date][track]).map(Number).sort((a,b) => a - b);
                 races.forEach(rNum => {
                     html += `<div class="export-race-card">`;
-                    
+
                     const safeId = `${date}-${track}-${rNum}`.replace(/[^a-zA-Z0-9-]/g, '');
                     html += `<div class="export-race-title" onclick="toggleExportRace('${safeId}')" title="Click to collapse/expand">
                                 <span id="arrow-${safeId}" style="display:inline-block; width:15px; font-size: 10px; vertical-align: middle;">▼</span> Race ${rNum}
                              </div>`;
-                    
+
                     html += `<div id="content-${safeId}">`;
-                    
+
                     const marks = summaryByDate[date][track][rNum];
-                    marks.sort((a, b) => a.rank - b.rank); 
-                    
+                    marks.sort((a, b) => a.rank - b.rank);
+
                     marks.forEach(m => {
                         let symSize = "16px";
-                        if(m.symbol === "◎") { symSize = "19px"; } 
+                        if (m.symbol === "◎") {
+                            symSize = "19px";
+                        }
 
-                        // NEW: Updated Custom Color Palette
                         const bColors = {
                             1: { bg: '#f8f9fa', color: '#000', border: '#ccc' },
-                            2: { bg: '#212529', color: '#fff', border: '#444' }, 
+                            2: { bg: '#212529', color: '#fff', border: '#444' },
                             3: { bg: '#d26363', color: '#fff', border: '#d26363' },
                             4: { bg: '#5970b0', color: '#fff', border: '#5970b0' },
                             5: { bg: '#b8b053', color: '#000', border: '#b8b053' },
@@ -2275,7 +2823,7 @@ async function showExportModal() {
                         };
                         
                         const c = bColors[m.bk] || { bg: '#444', color: '#fff', border: '#444' };
-                        
+
                         const ppBadge = m.pp !== 99 
                             ? `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:12px; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:6px;">${m.pp}</span>` 
                             : `<span style="display:inline-block; width:22px; height:22px; margin-right:6px;"></span>`;
@@ -2297,92 +2845,16 @@ async function showExportModal() {
                     html += `</div>`; 
                     html += `</div>`; 
                 });
-                html += `</div>`; // End track grid
+                html += `</div>`;
             });
         });
-    }
-    
-    // NEW: Generate Chronological View HTML
-    let chrono_html = "";
-    if (summaryChronological.length === 0) {
-        chrono_html = "<p style='text-align:center; color:#888; margin-top:50px;'>No votes cast yet! Make your selections in the grid first.</p>";
-    } else {
-        // Group by race
-        const racesByRaceId = summaryChronological.reduce((acc, m) => {
-            if (!acc[m.r_id]) {
-                acc[m.r_id] = {
-                    info: m,
-                    marks: []
-                };
-            }
-            acc[m.r_id].marks.push(m);
-            return acc;
-        }, {});
-
-        const sortedRaces = Object.values(racesByRaceId).sort((a,b) => a.info.sortTime - b.info.sortTime);
-
-        let currentDate = null;
-        sortedRaces.forEach(raceGroup => {
-            const m = raceGroup.info; // Use the first mark for race info
-            if (m.date !== currentDate) {
-                if (currentDate !== null) {
-                    chrono_html += `</div>`; // Close previous date group
-                }
-                currentDate = m.date;
-                const safeChronoDate = escapeHtml(String(m.date));
-                chrono_html += `<h2 style="color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px;">📅 ${safeChronoDate}</h2>`;
-                chrono_html += `<div style="display: flex; flex-direction: column; gap: 12px;">`;
-            }
-
-            const safeId = `chrono-${m.r_id}`;
-            const safeChronoTrack = escapeHtml(String(m.track));
-            const safeChronoTime = escapeHtml(String(m.time));
-            chrono_html += `<div class="export-race-card chrono-race-card" data-sort-ms="${m.sortTime.getTime()}" data-safe-id="${safeId}">
-                <div class="export-race-title" onclick="toggleExportRace('${safeId}')" title="Click to collapse/expand">
-                    <span id="arrow-${safeId}" style="display:inline-block; width:15px; font-size: 10px; vertical-align: middle;">▼</span>
-                    ${safeChronoTrack} R${m.raceNum} - ${safeChronoTime}
-                </div>
-                <div id="content-${safeId}">`;
-
-            raceGroup.marks.sort((a, b) => a.rank - b.rank).forEach(mark => {
-                let symSize = "16px";
-                if(mark.symbol === "◎") { symSize = "19px"; }
-                
-                const bColors = {
-                    1: { bg: '#f8f9fa', color: '#000', border: '#ccc' }, 2: { bg: '#212529', color: '#fff', border: '#444' }, 3: { bg: '#d26363', color: '#fff', border: '#d26363' },
-                    4: { bg: '#5970b0', color: '#fff', border: '#5970b0' }, 5: { bg: '#b8b053', color: '#000', border: '#b8b053' }, 6: { bg: '#72af68', color: '#fff', border: '#72af68' },
-                    7: { bg: '#efa65e', color: '#000', border: '#efa65e' }, 8: { bg: '#dc809a', color: '#000', border: '#dc809a' }
-                };
-                const c = bColors[mark.bk] || { bg: '#444', color: '#fff', border: '#444' };
-                
-                const ppBadge = mark.pp !== 99 ? `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:12px; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:6px;">${mark.pp}</span>` : `<span style="display:inline-block; width:22px; height:22px; margin-right:6px;"></span>`;
-                const markBadge = `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:${symSize}; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:8px;">${mark.symbol}</span>`;
-
-                const favBadge = mark.fav ? `Fav ${escapeHtml(String(mark.fav))}` : "Fav -";
-                const safeMarkHorse = escapeHtml(String(mark.horse || "Unknown Horse"));
-
-                chrono_html += `<div class="export-horse-line" style="margin-left: 15px;">
-                    ${ppBadge}
-                    ${markBadge}
-                    <div class="export-horse-main" style="flex: 1; min-width: 0;">
-                        <span style="font-weight: 500;">${safeMarkHorse}</span>
-                        <span class="export-fav-badge">${favBadge}</span>
-                    </div>
-                </div>`;
-            });
-            chrono_html += `</div></div>`;
-        });
-
-        if (currentDate !== null) {
-            chrono_html += `</div>`; // Close last date group
-        }
     }
 
     const fullHtml = `
     <!DOCTYPE html>
     <html>
     <head>
-        <title>📋 Voting Cheat Sheet</title>
+        <title>🪟 Live View Popout</title>
         <style>
             body { font-family: sans-serif; background-color: #0c0c0c; color: #fafafa; margin: 0; padding: 20px; }
             h2 { color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px; }
@@ -2402,155 +2874,19 @@ async function showExportModal() {
             .export-horse-line { display: flex; align-items: center; margin-bottom: 8px; font-size: 14px; }
             .export-horse-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
             .export-fav-badge { font-size: 11px; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
-            
-            /* NEW: Toggle button styling */
-            .view-toggle-container { display: flex; gap: 8px; justify-content: center; margin: 15px 0; }
-            .view-toggle-btn { padding: 8px 16px; border: 1px solid #555; background: #1a1c23; color: #888; cursor: pointer; border-radius: 4px; font-size: 14px; font-weight: bold; transition: 0.2s; }
-            .view-toggle-btn.active { background: #ff4b4b; color: #fff; border-color: #ff4b4b; }
-            .view-toggle-btn:hover { border-color: #ff4b4b; }
-
-            .live-toggle-wrap { display: none; margin-top: 8px; text-align: center; }
-            .live-toggle-wrap label { font-size: 12px; color: #ccc; cursor: pointer; user-select: none; }
-            .live-toggle-wrap input { margin-right: 6px; vertical-align: middle; }
-            
-            .view-content { display: none; }
-            .view-content.active { display: block; }
         </style>
     </head>
     <body>
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px;">
-            <h3 style="margin: 0; font-size: 20px;">📋 Voting Cheat Sheet</h3>
+            <h3 style="margin: 0; font-size: 20px;">🪟 Live View Popout</h3>
             <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" style="background: #1dd1a1; color: black; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">🔗 Open OrePro</a>
         </div>
-        
-        <!-- NEW: View Toggle Buttons -->
-        <div class="view-toggle-container">
-            <button class="view-toggle-btn active" onclick="switchView('racecourse')">🏇 By Racecourse</button>
-            <button class="view-toggle-btn" onclick="switchView('chronological')">⏱️ Live Race Flow</button>
-        </div>
-        <div id="live-toggle-wrap" class="live-toggle-wrap">
-            <label><input type="checkbox" id="auto-follow-current" onchange="toggleAutoFollowCurrent(this.checked)"> Auto-collapse finished races and keep current race at top</label>
-        </div>
-        
-        <!-- Racecourse View -->
-        <div id="racecourse-view" class="view-content active">
+
+        <div id="racecourse-view">
             ${html}
         </div>
         
-        <!-- Chronological View -->
-        <div id="chronological-view" class="view-content">
-            ${chrono_html}
-        </div>
-        
         <script>
-            let autoFollowTimer = null;
-            let lastAutoFollowSafeId = null;
-
-            function switchView(viewName) {
-                // Hide both views
-                document.getElementById('racecourse-view').classList.remove('active');
-                document.getElementById('chronological-view').classList.remove('active');
-                const liveToggle = document.getElementById('live-toggle-wrap');
-                
-                // Remove active class from all buttons
-                document.querySelectorAll('.view-toggle-btn').forEach(btn => {
-                    btn.classList.remove('active');
-                });
-                
-                // Show selected view and highlight button
-                if (viewName === 'racecourse') {
-                    document.getElementById('racecourse-view').classList.add('active');
-                    document.querySelectorAll('.view-toggle-btn')[0].classList.add('active');
-                    if (liveToggle) liveToggle.style.display = 'none';
-                } else if (viewName === 'chronological') {
-                    document.getElementById('chronological-view').classList.add('active');
-                    document.querySelectorAll('.view-toggle-btn')[1].classList.add('active');
-                    if (liveToggle) liveToggle.style.display = 'block';
-                    runAutoFollowTick();
-                }
-            }
-
-            function setRaceCollapsed(safeId, collapseIt) {
-                const content = document.getElementById('content-' + safeId);
-                const titleArrow = document.getElementById('arrow-' + safeId);
-                if (!content || !titleArrow) return;
-
-                const title = titleArrow.parentElement;
-                if (collapseIt) {
-                    content.style.display = 'none';
-                    title.classList.add('collapsed');
-                    titleArrow.innerText = '▶';
-                } else {
-                    content.style.display = '';
-                    title.classList.remove('collapsed');
-                    titleArrow.innerText = '▼';
-                }
-            }
-
-            function toggleAutoFollowCurrent(enabled) {
-                if (autoFollowTimer) {
-                    clearInterval(autoFollowTimer);
-                    autoFollowTimer = null;
-                }
-                if (!enabled) return;
-
-                runAutoFollowTick();
-                autoFollowTimer = setInterval(runAutoFollowTick, 15000);
-            }
-
-            function runAutoFollowTick() {
-                const checkbox = document.getElementById('auto-follow-current');
-                const chronoView = document.getElementById('chronological-view');
-                if (!checkbox || !checkbox.checked || !chronoView || !chronoView.classList.contains('active')) return;
-
-                const cards = Array.from(document.querySelectorAll('.chrono-race-card'))
-                    .sort((a, b) => (parseInt(a.dataset.sortMs || '0', 10) - parseInt(b.dataset.sortMs || '0', 10)));
-                if (cards.length === 0) return;
-
-                const now = Date.now();
-                const THIRTY_MIN_MS = 30 * 60 * 1000;
-
-                // A race is active from its start until the earlier of:
-                // 1) next race start, or 2) 30 minutes after its own start.
-                let currentIndex = -1;
-                for (let i = 0; i < cards.length; i++) {
-                    const startMs = parseInt(cards[i].dataset.sortMs || '0', 10);
-                    const nextStartMs = (i + 1 < cards.length)
-                        ? parseInt(cards[i + 1].dataset.sortMs || '0', 10)
-                        : Number.MAX_SAFE_INTEGER;
-                    const finishMs = Math.min(nextStartMs, startMs + THIRTY_MIN_MS);
-
-                    if (now >= startMs && now < finishMs) {
-                        currentIndex = i;
-                        break;
-                    }
-                }
-
-                // If no race is currently active, focus the next upcoming race.
-                if (currentIndex < 0) {
-                    const nextIndex = cards.findIndex(card => parseInt(card.dataset.sortMs || '0', 10) > now);
-                    currentIndex = nextIndex >= 0 ? nextIndex : cards.length - 1;
-                }
-
-                for (let i = 0; i < currentIndex; i++) {
-                    const safeId = cards[i].dataset.safeId;
-                    if (safeId) setRaceCollapsed(safeId, true);
-                }
-
-                const currentCard = cards[currentIndex];
-                if (!currentCard) return;
-
-                const currentSafeId = currentCard.dataset.safeId;
-                if (currentSafeId) {
-                    setRaceCollapsed(currentSafeId, false);
-                    if (lastAutoFollowSafeId !== currentSafeId) {
-                        currentCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                        lastAutoFollowSafeId = currentSafeId;
-                    }
-                }
-            }
-            
-            // Toggles individual races
             function toggleExportRace(safeId) {
                 const content = document.getElementById('content-' + safeId);
                 const title = document.getElementById('arrow-' + safeId).parentElement;
@@ -2566,8 +2902,7 @@ async function showExportModal() {
                     arrow.innerText = '▶';
                 }
             }
-            
-            // NEW: Toggles the entire track grid
+
             function toggleExportTrack(safeId) {
                 const content = document.getElementById('content-track-' + safeId);
                 const title = document.getElementById('arrow-track-' + safeId).parentElement;
@@ -2615,6 +2950,8 @@ function closeExportModal() {
     document.getElementById('export-modal').style.display = "none";
 }
 
+const OREPRO_URL = 'https://orepro.netkeiba.com/bet/race_list.html';
+
 // --- SETTINGS MODAL ---
 function showSettingsModal() {
     // Populate checkboxes from current config
@@ -2625,6 +2962,7 @@ function showSettingsModal() {
     document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
     document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
     document.getElementById('setting-autoFetchPastResults').checked = isAutoFetchPastResultsEnabled();
+    document.getElementById('setting-autoLockPastVotes').checked = isAutoLockPastVotesEnabled();
         document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     // Populate formula weight inputs
     const fw = getFormulaWeights();
@@ -2666,6 +3004,7 @@ async function updateSidebarSettings() {
         betSafetyIndicator: document.getElementById('setting-betSafetyIndicator').checked,
         voteSortingTop: document.getElementById('setting-voteSortingTop').checked,
         autoFetchPastResults: document.getElementById('setting-autoFetchPastResults').checked,
+        autoLockPastVotes: document.getElementById('setting-autoLockPastVotes').checked,
             showConsole: document.getElementById('setting-showConsole').checked,
         formulaWeights: {
             oddsCap:            parseFWInput('fw-oddsCap',            100),
@@ -2783,6 +3122,15 @@ function applySidebarSettings() {
     if (consoleEl) {
         consoleEl.style.display = (appConfig.ui?.showConsole ?? true) ? 'block' : 'none';
     }
+
+    // Keep lock behavior and header controls in sync when settings change.
+    Object.keys(globalRaceInfo).forEach(r_id => {
+        const timeline = globalRaceInfo[r_id]?._timeline || 'upcoming';
+        if (isAutoLockPastVotesEnabled() && timeline === 'past') {
+            raceLocks[r_id] = true;
+        }
+        updateRaceActionButtons(r_id);
+    });
 }
 
 // --- RACE NAME LOCALIZER ---

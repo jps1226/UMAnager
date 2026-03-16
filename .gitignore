@@ -19,3 +19,6 @@ data/*.zip
 .env
 venv/
 env/
+
+# Ignore local runtime logs
+server.log
