@@ -10,6 +10,7 @@ from routers.lists_config import router as lists_config_router
 from routers.races import router as races_router, set_progress_logger
 from routers.scrape import router as scrape_router, log_progress
 from routers.orepro import router as orepro_router
+from storage import init_storage_foundation
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -31,6 +32,11 @@ app.include_router(orepro_router)
 
 
 set_progress_logger(log_progress)
+
+
+@app.on_event("startup")
+def initialize_storage_foundation():
+    init_storage_foundation()
 
 def find_listening_pids(port=8000):
     """Find PIDs listening on a TCP port (Windows and POSIX best effort)."""

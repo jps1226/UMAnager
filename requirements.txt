@@ -6,3 +6,4 @@ requests
 pykakasi
 keibascraper
 python-dotenv
+SQLAlchemy
