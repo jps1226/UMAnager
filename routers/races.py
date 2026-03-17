@@ -9,14 +9,19 @@ from pydantic import BaseModel, Field
 
 import config
 import data_manager
-from storage import atomic_write_json, atomic_write_pickle, delete_marks_for_races, load_app_config, load_horse_list, load_marks_store, load_pickle, safe_read_json, save_marks_store
+from storage import (
+    delete_horse_cache_entries_by_ids,
+    delete_marks_for_races,
+    load_app_config,
+    load_horse_list,
+    load_marks_store,
+    load_race_cache,
+    save_marks_store,
+    save_race_cache,
+)
 
 router = APIRouter(tags=["races"])
 logger = logging.getLogger(__name__)
-
-CACHE_FILE = config.CACHE_FILE
-MARKS_FILE = config.MARKS_FILE
-HORSE_DICT_FILE = config.HORSE_DICT_FILE
 
 _progress_logger = None
 
@@ -80,11 +85,11 @@ def force_str(val):
 
 
 def load_cached_races():
-    return load_pickle(CACHE_FILE, [])
+    return load_race_cache()
 
 
 def save_cached_races(races):
-    atomic_write_pickle(CACHE_FILE, races)
+    save_race_cache(races)
 
 
 def _clean_mark_symbol(value):
@@ -190,14 +195,6 @@ def save_marks_data(marks):
     current_store = load_marks_store()
     current_store["marks"] = _normalize_marks_map(marks)
     save_marks_store(current_store)
-
-
-def load_horse_dict_data():
-    return safe_read_json(HORSE_DICT_FILE, {})
-
-
-def save_horse_dict_data(horse_dict):
-    atomic_write_json(HORSE_DICT_FILE, horse_dict)
 
 
 def load_config():
@@ -367,7 +364,8 @@ async def save_marks(payload: MarksSavePayload):
 
 @router.get("/api/races")
 def get_races():
-    if not os.path.exists(CACHE_FILE):
+    weekend_races = load_cached_races()
+    if not weekend_races:
         return {
             "top_picks": [],
             "races_by_date": {},
@@ -376,7 +374,6 @@ def get_races():
         }
 
     app_cfg = load_config()
-    weekend_races = load_cached_races()
     auto_history_enabled = app_cfg.get("ui", {}).get("autoFetchPastResults", True)
     if auto_history_enabled:
         auto_refreshed_races, auto_refreshed_entries = refresh_missing_past_race_history(weekend_races)
@@ -669,12 +666,7 @@ async def delete_day_data(payload: DeleteDayPayload):
         removed_marks, _ = delete_marks_for_races(target_race_ids)
 
     if scope == "all" and target_horse_ids:
-        horse_dict = load_horse_dict_data()
-        for h_id in target_horse_ids:
-            if h_id in horse_dict:
-                del horse_dict[h_id]
-                removed_horses += 1
-        save_horse_dict_data(horse_dict)
+        removed_horses = delete_horse_cache_entries_by_ids(target_horse_ids)
 
     return {
         "status": "success",

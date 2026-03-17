@@ -2361,19 +2361,30 @@ async function triggerScrape(mode) {
     
     // Start pinging the Python server for console text every 500 milliseconds
     logInterval = setInterval(fetchLogs, 500);
-    
-    await fetch('/api/scrape', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({mode: mode})
-    });
-    
-    // The scrape is completely finished!
-    clearInterval(logInterval);
-    await fetchLogs(); // Grab any final lines
-    
-    document.getElementById('btn-new-race').disabled = false;
-    document.getElementById('btn-all-race').disabled = false;
-    loadRaces(); 
+
+    try {
+        const scrapeRes = await fetch('/api/scrape', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({mode: mode})
+        });
+        const scrapeData = await scrapeRes.json().catch(() => ({}));
+        if (!scrapeRes.ok) {
+            throw new Error(scrapeData.detail || scrapeData.message || `HTTP ${scrapeRes.status}`);
+        }
+
+        await fetchLogs(); // Grab any final lines
+        await loadRaces();
+
+        if (Number(scrapeData.cached_races || 0) === 0) {
+            alert('Scrape completed but cached 0 races. This usually means no races matched the current discovery window. Try Full Re-Scrape and check scrape console logs.');
+        }
+    } catch (err) {
+        alert(`Scrape failed: ${err.message}`);
+    } finally {
+        clearInterval(logInterval);
+        document.getElementById('btn-new-race').disabled = false;
+        document.getElementById('btn-all-race').disabled = false;
+    }
 }
 
 async function fetchLogs() {

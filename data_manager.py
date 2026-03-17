@@ -6,20 +6,18 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import os
-import pickle
 import pykakasi
 import json
 import time
 import logging
 import config
-from storage import load_horse_cache_map, upsert_horse_cache_entries
+from storage import load_horse_cache_map, load_race_cache, save_race_cache, upsert_horse_cache_entries
 
 logger = logging.getLogger(__name__)
 
 # 1. Setup Offline Translators & Caches
 kks = pykakasi.kakasi()
 
-CACHE_FILE = config.CACHE_FILE
 HORSE_CACHE = load_horse_cache_map()
 HORSE_CACHE_DIRTY_IDS = set()
 
@@ -472,9 +470,8 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
     })
     
     cached_races = []
-    if mode in ["load", "new"] and os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, "rb") as f:
-            cached_races = pickle.load(f)
+    if mode in ["load", "new"]:
+        cached_races = load_race_cache()
             
     if mode == "load" and cached_races: return cached_races
 
@@ -590,7 +587,7 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
         x["info"].get("place", "")
     ))
     
-    with open(CACHE_FILE, "wb") as f: pickle.dump(weekend_races, f)
+    save_race_cache(weekend_races)
     return weekend_races
 
 def fetch_race_history_by_id(race_id):

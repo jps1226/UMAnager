@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 import config
 from data_manager import clear_horse_runtime_cache
-from storage import count_horse_cache_entries, clear_horse_cache_entries, dispose_storage_connections, init_storage_foundation
+from storage import clear_race_cache, count_horse_cache_entries, clear_horse_cache_entries, dispose_storage_connections, init_storage_foundation
 
 router = APIRouter(tags=["maintenance"])
 
@@ -80,6 +80,7 @@ def _clear_data_dir():
 
 @router.post("/api/cache/clear")
 def clear_cache():
+    clear_race_cache()
     if os.path.exists(CACHE_FILE):
         os.remove(CACHE_FILE)
     return {"status": "success"}

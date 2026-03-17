@@ -358,6 +358,214 @@ def load_pickle(path, default=None):
         return pickle.load(f)
 
 
+def _safe_int(value, default=0):
+    try:
+        text_value = str(value).strip()
+        if text_value == "":
+            return default
+        return int(float(text_value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value, default=0.0):
+    try:
+        text_value = str(value).strip()
+        if text_value == "":
+            return default
+        return float(text_value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_jsonable(value):
+    if value is None:
+        return None
+    if isinstance(value, (bool, int, float, str)):
+        if isinstance(value, float) and (value != value):
+            return ""
+        return value
+    if isinstance(value, dict):
+        return {str(k): _coerce_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_coerce_jsonable(v) for v in value]
+    text_value = str(value)
+    return "" if text_value.lower() == "nan" else text_value
+
+
+def _entries_to_records(entries):
+    if entries is None:
+        return []
+    try:
+        import pandas as pd  # local import to avoid unnecessary module load at startup
+        if isinstance(entries, pd.DataFrame):
+            return [
+                {str(k): _coerce_jsonable(v) for k, v in row.items()}
+                for row in entries.to_dict(orient="records")
+            ]
+    except Exception:
+        pass
+
+    if isinstance(entries, list):
+        return [
+            {str(k): _coerce_jsonable(v) for k, v in row.items()}
+            for row in entries
+            if isinstance(row, dict)
+        ]
+    return []
+
+
+def _write_race_cache_to_db(session, weekend_races):
+    session.execute(race_entries_table.delete())
+    session.execute(races_table.delete())
+
+    race_rows = []
+    entry_rows = []
+    for race_order, race in enumerate(weekend_races or []):
+        info = race.get("info", {}) if isinstance(race, dict) else {}
+        race_id = str(info.get("race_id", "")).strip()
+        if not race_id:
+            continue
+
+        info_payload = {
+            str(k): _coerce_jsonable(v)
+            for k, v in info.items()
+            if isinstance(k, str)
+        }
+        info_payload["_cache_order"] = race_order
+
+        race_rows.append(
+            {
+                "race_id": race_id,
+                "race_date": str(info.get("clean_date") or "").strip(),
+                "kaisai_id": str(info.get("kaisai_id") or "").strip(),
+                "track": str(info.get("place") or "").strip(),
+                "race_name": str(info.get("race_name") or "").strip(),
+                "race_number": _safe_int(info.get("race_number"), 0),
+                "sort_time": str(info.get("sort_time") or "").strip(),
+                "distance": _safe_int(info.get("distance"), 0),
+                "surface": str(info.get("surface") or "").strip(),
+                "grade": str(info.get("grade") or "").strip(),
+                "raw_payload": info_payload,
+            }
+        )
+
+        used_horse_numbers = set()
+        for row_order, entry in enumerate(_entries_to_records(race.get("entries"))):
+            horse_number = _safe_int(entry.get("PP"), 0)
+            if horse_number <= 0 or horse_number in used_horse_numbers:
+                horse_number = 1000 + row_order
+            used_horse_numbers.add(horse_number)
+
+            entry_payload = {str(k): _coerce_jsonable(v) for k, v in entry.items()}
+            entry_payload["_row_order"] = row_order
+
+            entry_rows.append(
+                {
+                    "race_id": race_id,
+                    "horse_id": str(entry.get("Horse_ID") or "").strip(),
+                    "horse_name": str(entry.get("Horse") or "").strip(),
+                    "frame_number": _safe_int(entry.get("BK"), 0),
+                    "horse_number": horse_number,
+                    "jockey": str(entry.get("Jockey") or "").strip(),
+                    "odds": _safe_float(entry.get("Odds"), 0.0),
+                    "finish_position": _safe_int(entry.get("Finish"), 0),
+                    "entry_score": _safe_float(entry.get("Score"), 0.0),
+                    "mark_symbol": str(entry.get("Match") or "").strip(),
+                    "raw_payload": entry_payload,
+                }
+            )
+
+    if race_rows:
+        session.execute(races_table.insert(), race_rows)
+    if entry_rows:
+        session.execute(race_entries_table.insert(), entry_rows)
+
+
+def _import_legacy_race_cache_if_needed(session):
+    existing_count = session.execute(text("SELECT COUNT(1) FROM races")).scalar_one()
+    if int(existing_count or 0) > 0:
+        return
+
+    legacy_races = load_pickle(config.CACHE_FILE, [])
+    if not isinstance(legacy_races, list) or not legacy_races:
+        return
+
+    _write_race_cache_to_db(session, legacy_races)
+    logger.info("Imported %d races from legacy cache %s", len(legacy_races), config.CACHE_FILE)
+
+
+def load_race_cache():
+    with db_session_scope() as session:
+        _import_legacy_race_cache_if_needed(session)
+        race_rows = session.execute(races_table.select()).all()
+        if not race_rows:
+            return []
+
+        entries_by_race = {}
+        for row in session.execute(race_entries_table.select()).all():
+            entries_by_race.setdefault(row.race_id, []).append(row)
+
+        try:
+            import pandas as pd
+        except Exception as exc:
+            logger.error("Failed to import pandas while loading race cache: %s", exc)
+            return []
+
+        ordered_races = sorted(
+            race_rows,
+            key=lambda row: (
+                _safe_int((row.raw_payload or {}).get("_cache_order"), 999999),
+                str(row.race_date or ""),
+                str(row.sort_time or ""),
+                _safe_int(row.race_number, 0),
+                str(row.race_id or ""),
+            ),
+        )
+
+        weekend_races = []
+        for race_row in ordered_races:
+            info_payload = race_row.raw_payload if isinstance(race_row.raw_payload, dict) else {}
+            info = dict(info_payload) if info_payload else {
+                "race_id": race_row.race_id,
+                "clean_date": race_row.race_date,
+                "place": race_row.track,
+                "race_name": race_row.race_name,
+                "race_number": race_row.race_number,
+                "sort_time": race_row.sort_time,
+            }
+
+            entry_rows = entries_by_race.get(race_row.race_id, [])
+            ordered_entries = sorted(
+                entry_rows,
+                key=lambda row: (_safe_int((row.raw_payload or {}).get("_row_order"), 999999), row.id),
+            )
+            entry_records = [
+                dict(row.raw_payload) if isinstance(row.raw_payload, dict) else {}
+                for row in ordered_entries
+            ]
+
+            weekend_races.append(
+                {
+                    "info": info,
+                    "entries": pd.DataFrame(entry_records),
+                }
+            )
+
+        return weekend_races
+
+
+def save_race_cache(weekend_races):
+    with db_session_scope() as session:
+        _write_race_cache_to_db(session, weekend_races)
+
+
+def clear_race_cache():
+    with db_session_scope() as session:
+        session.execute(race_entries_table.delete())
+        session.execute(races_table.delete())
+
+
 def _merge_dicts(defaults, override):
     if not isinstance(defaults, dict):
         return copy.deepcopy(override) if override is not None else copy.deepcopy(defaults)
@@ -630,6 +838,17 @@ def clear_horse_cache_entries():
 def count_horse_cache_entries():
     with db_session_scope() as session:
         return int(session.execute(text("SELECT COUNT(1) FROM horses")).scalar_one() or 0)
+
+
+def delete_horse_cache_entries_by_ids(horse_ids):
+    clean_ids = [str(h).strip() for h in (horse_ids or []) if str(h).strip()]
+    if not clean_ids:
+        return 0
+    with db_session_scope() as session:
+        result = session.execute(
+            horses_table.delete().where(horses_table.c.horse_id.in_(clean_ids))
+        )
+        return int(result.rowcount or 0)
 
 
 # --- Marks and race metadata repositories ---
