@@ -64,43 +64,24 @@ Replace the current mixed file-based persistence model with a local SQLite-backe
 - 2026-03-16 — Steps 4 & 5 complete: Added DB-backed config and horse list repositories to `storage.py` (`load_horse_list`, `save_horse_list`, `add_horse_to_list`, `horse_ids_to_text`, `_parse_horse_lines_from_text`). Upgraded `load_app_config`/`save_app_config` to DB-backed upsert with one-time JSON import fallback. Updated `routers/lists_config.py` and `routers/races.py` to read/write through the new repositories; removed direct file access and file-path constants from both routers. Added `display_name` column to horse list tables (with idempotent `ALTER TABLE` migration on startup) and one-time backfill from legacy txt files so the `ID # Name` wire format is fully preserved.
 - 2026-03-16 — Step 6 complete: Migrated marks and race metadata off `saved_marks.json` into `race_marks` and `race_metadata` DB tables. Added `load_marks_store`, `save_marks_store`, `_write_marks_store_to_db`, and `delete_marks_for_races` to `storage.py` with a one-time import from the legacy JSON file (handles both old flat format and versioned format, no circular import). Replaced the file-backed `load_marks_store`/`save_marks_store` in `routers/races.py` with imports from `storage`; simplified `delete_day_data` to use `delete_marks_for_races` directly. API contract for `GET /api/marks` and `POST /api/marks` is unchanged.
 - 2026-03-16 — Step 6 bugfix (committed): After day-delete, marks stayed on screen until manual refresh. Fixed in `static/script.js` `deleteDayData()`: when scope is `marks` or `all`, re-fetches `/api/marks` and updates `globalMarks`/`globalRaceMeta`/`globalMarksVersion` before rebuilding UI.
-- 2026-03-16 — Steps 7 & 8 implemented (NOT YET COMMITTED — awaiting test): Migrated OrePro durable state to DB and updated `routers/orepro.py` to use DB repositories. Added OrePro repository block to `storage.py`: `orepro_upsert_history_from_payload`, `orepro_get_history_summary`, `orepro_get_last_sync_payload`, plus private helpers `_ensure_orepro_profile`, `_orepro_build_history_entry_from_payload`, `_orepro_should_replace_history_entry`, `_orepro_summary_from_entries`, `_orepro_write_history_entry`, `_load_orepro_history_entries_from_db`, `_import_legacy_orepro_files_if_needed` (one-time import of `orepro_results_history.json` and `orepro_last_sync.json` on first run). `routers/orepro.py` now uses these DB functions; all file-based helpers removed. Design decision change: nkauth cookie storage is not needed because user bets can be scraped from the public OrePro profile endpoints without login. All cookie/session endpoints (`GET/POST /api/orepro/session`, `POST /api/orepro/session/clear`) removed. `sync_orepro_results` now sends `cookies = {}` and relies on `yosoka_id` param. Cookie input row removed from `index.html`. `saveOreProSessionCookie` and `clearOreProSessionCookie` removed from `static/script.js`. API contract for `GET /api/orepro/results/last` and `GET /api/orepro/results/history` is unchanged.
-- 2026-03-16 — Backup/restore fix implemented (NOT YET COMMITTED — awaiting test): Restore endpoint was returning HTTP 500 on Windows because SQLAlchemy held open connections to `umanager.sqlite3` while `_clear_data_dir()` tried to `unlink()` it. Added `dispose_storage_connections()` to `storage.py` (disposes engine, resets `_db_engine`/`_session_factory` globals). Updated `routers/maintenance.py` `restore_data_backup()` to: (1) call `dispose_storage_connections()` before clearing, (2) retry `_clear_data_dir()` up to 3 times with 0.25s wait between each (re-disposing between attempts), (3) raise HTTP 409 with a clear "locked by another process" message instead of a raw 500 if still locked after retries, (4) call `init_storage_foundation()` after successful extraction to re-bootstrap the DB. Added `import time` to `routers/maintenance.py`.
+- 2026-03-17 — Steps 7 & 8 committed and pushed (`2c26a47`): OrePro durable state migrated to DB repositories in `storage.py`, `routers/orepro.py` updated to DB-only storage reads/writes, and cookie/session persistence flow removed from UI + API.
+- 2026-03-17 — Backup/restore fix committed and pushed (`2c26a47`): restore now disposes DB connections before clearing `data/`, retries clear on Windows locks, returns HTTP 409 with clear lock guidance, and re-initializes storage foundation after extraction.
 
 ---
 
-**Resume Checklist (pick up on another machine)**
+**Current Resume Point**
+- Next implementation target: **Step 9** (refactor horse cache off `HORSE_CACHE` + `horse_names.json` onto `horses` DB table with optional small in-process cache).
+- Testing priority before Step 9 expansion: finish a clean in-app validation pass for backup/restore behavior.
 
-The branch is eature/storage-overhaul. Five files are modified but NOT committed:
-- storage.py
-- 
-outers/orepro.py
-- 
-outers/maintenance.py
-- static/script.js
-- index.html
+**Backup Testing Playbook (App-only)**
+1. Open the app and navigate to **Maintenance**.
+2. Click **Backup Data Folder** and confirm an alert appears: `Backup created automatically: backups/<filename>.zip`.
+3. Make a visible data change in-app (for example, add/edit one mark, or adjust a config toggle and save).
+4. Click **Restore Latest Backup**, confirm the prompt, and wait for the completion alert with `restored_from` and `restored_files`.
+5. After auto-refresh, verify the data change from step 3 is rolled back to backup state.
+6. Repeat restore once more; confirm it succeeds again (idempotent behavior, no HTTP 500).
 
-**Before committing, run the following tests:**
-
-*Backup / Restore*
-1. Start the server (
-un.bat or uvicorn server:app --host 127.0.0.1 --port 8000).
-2. In the Maintenance section of the app, click **Backup Data Folder** � confirm a zip appears in ackups/.
-3. Click **Restore Latest Backup** � confirm it succeeds without an HTTP 500 and that data is intact after page reload.
-4. (Optional Windows lock test) If you have a second terminal, try restoring while a second server process is running � expect a clear HTTP 409 "locked by another process" message, not a 500.
-
-*OrePro � cookie removal and DB migration*
-5. Open the Voting view � confirm there is **no** cookie/nkauth input field visible.
-6. Set a Profile ID (yosoka_id), pick a calendar day, click **Sync Results** � confirm a success or warning message appears (no hard error).
-7. Refresh the page � confirm the last-sync date and history totals are still displayed (proving DB persistence).
-8. For a day where you have known past bets, verify the per-race OrePro chips appear in the voting sidebar.
-9. Sync a day with no bets � confirm a warning message, not a crash/error.
-
-*After all tests pass, commit:*
-```
-git add -A
-git commit -m "Steps 7-8: OrePro DB migration + cookie removal; Fix backup restore HTTP 500 on Windows"
-git push
-```
-
-**Next step after commit: Step 9** � Refactor the horse cache (HORSE_CACHE global + horse_names.json) to use the horses DB table.
+**If Restore Still Fails (App-only signals)**
+- If alert says `locked by another process`, close any duplicate UMAnager tabs/windows and stop extra server instances, then retry restore.
+- If alert says `No backup archives found`, run **Backup Data Folder** first, then restore.
+- If alert says restore completed but state looks unchanged, create a clearly visible change (single mark/config toggle) before retrying the test flow.
