@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 import config
 import data_manager
-from storage import atomic_write_json, atomic_write_pickle, load_app_config, load_horse_list, load_pickle, safe_read_json
+from storage import atomic_write_json, atomic_write_pickle, delete_marks_for_races, load_app_config, load_horse_list, load_marks_store, load_pickle, safe_read_json, save_marks_store
 
 router = APIRouter(tags=["races"])
 logger = logging.getLogger(__name__)
@@ -180,15 +180,6 @@ def normalize_marks_store(raw_data):
         "marks": _normalize_marks_map(raw_marks),
         "raceMeta": _normalize_race_meta_map(raw_race_meta),
     }
-
-
-def load_marks_store():
-    raw_data = safe_read_json(MARKS_FILE, {})
-    return normalize_marks_store(raw_data)
-
-
-def save_marks_store(store):
-    atomic_write_json(MARKS_FILE, normalize_marks_store(store))
 
 
 def load_marks_data():
@@ -675,25 +666,7 @@ async def delete_day_data(payload: DeleteDayPayload):
         save_cached_races(filtered_races)
 
     if scope in {"marks", "all"} and target_race_ids:
-        marks_store = load_marks_store()
-        marks = marks_store["marks"]
-        new_marks = {}
-        for key, val in marks.items():
-            race_prefix = key.split("_", 1)[0]
-            if race_prefix in target_race_ids:
-                removed_marks += 1
-                continue
-            new_marks[key] = val
-        new_race_meta = {
-            race_id: meta
-            for race_id, meta in marks_store["raceMeta"].items()
-            if race_id not in target_race_ids
-        }
-        save_marks_store({
-            "version": marks_store.get("version", MARKS_SCHEMA_VERSION),
-            "marks": new_marks,
-            "raceMeta": new_race_meta,
-        })
+        removed_marks, _ = delete_marks_for_races(target_race_ids)
 
     if scope == "all" and target_horse_ids:
         horse_dict = load_horse_dict_data()

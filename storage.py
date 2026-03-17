@@ -488,3 +488,125 @@ def horse_ids_to_text(horse_pairs):
             horse_id, name = item, ""
         lines.append(f"{horse_id} # {name}" if name else horse_id)
     return "\n".join(lines) + "\n"
+
+
+# --- Marks and race metadata repositories ---
+
+def load_marks_store():
+    """Load the full marks store from DB in the canonical {version, marks, raceMeta} shape.
+    Performs a one-time import from saved_marks.json on first run."""
+    with db_session_scope() as session:
+        mark_rows = session.execute(race_marks_table.select()).all()
+        meta_rows = session.execute(race_metadata_table.select()).all()
+
+        if mark_rows or meta_rows:
+            marks = {row.race_id + "_" + row.horse_key: row.mark_symbol for row in mark_rows}
+            race_meta = {}
+            for row in meta_rows:
+                race_meta[row.race_id] = {
+                    "savedAt": row.saved_at or None,
+                    "updatedAt": row.updated_at or None,
+                    "markSource": row.mark_source or None,
+                    "strategySnapshot": row.strategy_snapshot if isinstance(row.strategy_snapshot, dict) else {},
+                    "manualAdjustments": row.manual_adjustments or 0,
+                    "lockStateAtSave": row.lock_state_at_save,
+                    "activeSymbols": row.active_symbols if isinstance(row.active_symbols, list) else [],
+                }
+            return {"version": 2, "marks": marks, "raceMeta": race_meta}
+
+        # One-time import from legacy JSON file — parse without importing races.py
+        raw = safe_read_json(config.MARKS_FILE, {})
+        if not raw:
+            return {"version": 2, "marks": {}, "raceMeta": {}}
+
+        is_versioned = any(k in raw for k in ("version", "marks", "raceMeta"))
+        raw_marks = raw.get("marks", {}) if is_versioned else raw
+        raw_meta = raw.get("raceMeta", {}) if is_versioned else {}
+
+        marks = {str(k).strip(): str(v).strip() for k, v in raw_marks.items() if k and v}
+        race_meta = {}
+        for race_id, meta in (raw_meta.items() if isinstance(raw_meta, dict) else []):
+            if not isinstance(meta, dict):
+                continue
+            race_meta[str(race_id).strip()] = {
+                "savedAt": str(meta.get("savedAt") or "").strip() or None,
+                "updatedAt": str(meta.get("updatedAt") or "").strip() or None,
+                "markSource": str(meta.get("markSource") or "").strip() or None,
+                "strategySnapshot": meta.get("strategySnapshot") if isinstance(meta.get("strategySnapshot"), dict) else {},
+                "manualAdjustments": int(meta.get("manualAdjustments") or 0),
+                "lockStateAtSave": meta.get("lockStateAtSave"),
+                "activeSymbols": meta.get("activeSymbols") if isinstance(meta.get("activeSymbols"), list) else [],
+            }
+
+        store = {"version": 2, "marks": marks, "raceMeta": race_meta}
+        _write_marks_store_to_db(session, store)
+        logger.info("Imported %d marks and %d raceMeta entries from %s", len(marks), len(race_meta), config.MARKS_FILE)
+        return store
+
+
+def _write_marks_store_to_db(session, store):
+    """Overwrite DB marks and race_metadata from the given store dict."""
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    marks = store.get("marks", {})
+    race_meta = store.get("raceMeta", {})
+
+    # Rebuild race_marks: clear and reinsert
+    session.execute(race_marks_table.delete())
+    if marks:
+        rows = []
+        for composite_key, symbol in marks.items():
+            if not symbol:
+                continue
+            parts = composite_key.split("_", 1)
+            if len(parts) != 2:
+                continue
+            rows.append({"race_id": parts[0], "horse_key": parts[1], "mark_symbol": symbol})
+        if rows:
+            session.execute(race_marks_table.insert(), rows)
+
+    # Rebuild race_metadata: clear and reinsert
+    session.execute(race_metadata_table.delete())
+    if race_meta:
+        rows = []
+        for race_id, meta in race_meta.items():
+            if not isinstance(meta, dict):
+                continue
+            rows.append({
+                "race_id": race_id,
+                "saved_at": str(meta.get("savedAt") or ""),
+                "updated_at": str(meta.get("updatedAt") or ""),
+                "mark_source": str(meta.get("markSource") or ""),
+                "strategy_snapshot": meta.get("strategySnapshot") or {},
+                "manual_adjustments": int(meta.get("manualAdjustments") or 0),
+                "lock_state_at_save": meta.get("lockStateAtSave"),
+                "active_symbols": meta.get("activeSymbols") or [],
+            })
+        if rows:
+            session.execute(race_metadata_table.insert(), rows)
+
+
+def save_marks_store(store):
+    """Persist the full marks store to DB."""
+    with db_session_scope() as session:
+        _write_marks_store_to_db(session, store)
+
+
+def delete_marks_for_races(race_ids):
+    """Remove all marks and metadata rows for the given set of race_ids."""
+    race_ids = list(race_ids)
+    if not race_ids:
+        return 0, 0
+    with db_session_scope() as session:
+        deleted_marks = 0
+        deleted_meta = 0
+        for rid in race_ids:
+            r = session.execute(
+                race_marks_table.delete().where(race_marks_table.c.race_id == rid)
+            )
+            deleted_marks += r.rowcount
+            r = session.execute(
+                race_metadata_table.delete().where(race_metadata_table.c.race_id == rid)
+            )
+            deleted_meta += r.rowcount
+    return deleted_marks, deleted_meta
