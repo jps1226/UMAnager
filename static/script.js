@@ -2283,6 +2283,13 @@ async function deleteDayData() {
     try {
         const result = await postJson('/api/day/delete', { date: targetDate, scope: scope });
         alert(`Done. Races removed: ${result.removed_races}, marks removed: ${result.removed_marks}, horse dict entries removed: ${result.removed_horse_entries}`);
+        if (scope === 'marks' || scope === 'all') {
+            const marksRes = await fetch('/api/marks');
+            const marksPayload = normalizeMarksPayload(await marksRes.json());
+            globalMarks = marksPayload.marks;
+            globalRaceMeta = marksPayload.raceMeta;
+            globalMarksVersion = marksPayload.version;
+        }
         await refreshDataAndUI();
         switchMainTab(targetDate);
     } catch (err) {
