@@ -66,12 +66,13 @@ Replace the current mixed file-based persistence model with a local SQLite-backe
 - 2026-03-16 — Step 6 bugfix (committed): After day-delete, marks stayed on screen until manual refresh. Fixed in `static/script.js` `deleteDayData()`: when scope is `marks` or `all`, re-fetches `/api/marks` and updates `globalMarks`/`globalRaceMeta`/`globalMarksVersion` before rebuilding UI.
 - 2026-03-17 — Steps 7 & 8 committed and pushed (`2c26a47`): OrePro durable state migrated to DB repositories in `storage.py`, `routers/orepro.py` updated to DB-only storage reads/writes, and cookie/session persistence flow removed from UI + API.
 - 2026-03-17 — Backup/restore fix committed and pushed (`2c26a47`): restore now disposes DB connections before clearing `data/`, retries clear on Windows locks, returns HTTP 409 with clear lock guidance, and re-initializes storage foundation after extraction.
+- 2026-03-17 — Step 9 complete (pending verification): Horse cache persistence migrated from `horse_names.json` to DB `horses` table. Added one-time legacy import (`horse_names.json` -> `horses`) and DB repositories in `storage.py` (`load_horse_cache_map`, `upsert_horse_cache_entry`, `upsert_horse_cache_entries`, `clear_horse_cache_entries`). Updated `data_manager.py` to hydrate in-memory cache from DB and flush only dirty entries to DB. Updated `routers/maintenance.py` `POST /api/dict/wipe` to clear `horses` table as the primary cache store.
 
 ---
 
 **Current Resume Point**
-- Next implementation target: **Step 9** (refactor horse cache off `HORSE_CACHE` + `horse_names.json` onto `horses` DB table with optional small in-process cache).
-- Testing priority before Step 9 expansion: finish a clean in-app validation pass for backup/restore behavior.
+- Next implementation target: **Step 10** (replace `race_cache.pkl` with relational `races` + `race_entries` storage and migrate read/write codepaths).
+- Testing priority before Step 10 expansion: validate horse-name/pedigree cache behavior fully from DB-backed storage.
 
 **Backup Testing Playbook (App-only)**
 1. Open the app and navigate to **Maintenance**.

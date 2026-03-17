@@ -501,6 +501,132 @@ def horse_ids_to_text(horse_pairs):
     return "\n".join(lines) + "\n"
 
 
+# --- Horse cache repositories ---
+
+def _normalize_horse_cache_entry(entry):
+    base = entry if isinstance(entry, dict) else {}
+    return {
+        "name": str(base.get("name") or "").strip(),
+        "sire": str(base.get("sire") or "").strip(),
+        "dam": str(base.get("dam") or "").strip(),
+        "bms": str(base.get("bms") or "").strip(),
+        "sire_id": str(base.get("sire_id") or "").strip(),
+        "dam_id": str(base.get("dam_id") or "").strip(),
+        "bms_id": str(base.get("bms_id") or "").strip(),
+        "record": str(base.get("record") or "0/0").strip() or "0/0",
+    }
+
+
+def _horse_cache_row_to_entry(row):
+    raw_payload = row.raw_payload if isinstance(row.raw_payload, dict) else {}
+    return {
+        "name": row.horse_name or "",
+        "sire": row.sire or "",
+        "dam": row.dam or "",
+        "bms": row.bms or "",
+        "sire_id": str(raw_payload.get("sire_id") or "").strip(),
+        "dam_id": str(raw_payload.get("dam_id") or "").strip(),
+        "bms_id": str(raw_payload.get("bms_id") or "").strip(),
+        "record": str(raw_payload.get("record") or "0/0").strip() or "0/0",
+    }
+
+
+def _upsert_horse_cache_entry(session, horse_id, entry):
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    clean_horse_id = str(horse_id or "").replace(".0", "").strip()
+    if not clean_horse_id:
+        return
+
+    normalized = _normalize_horse_cache_entry(entry)
+    pedigree_payload = {
+        "sire": normalized["sire"],
+        "dam": normalized["dam"],
+        "bms": normalized["bms"],
+        "sire_id": normalized["sire_id"],
+        "dam_id": normalized["dam_id"],
+        "bms_id": normalized["bms_id"],
+    }
+    raw_payload = {
+        "sire_id": normalized["sire_id"],
+        "dam_id": normalized["dam_id"],
+        "bms_id": normalized["bms_id"],
+        "record": normalized["record"],
+    }
+
+    stmt = (
+        sqlite_insert(horses_table)
+        .values(
+            horse_id=clean_horse_id,
+            horse_name=normalized["name"],
+            sire=normalized["sire"],
+            dam=normalized["dam"],
+            bms=normalized["bms"],
+            pedigree=pedigree_payload,
+            raw_payload=raw_payload,
+        )
+        .on_conflict_do_update(
+            index_elements=["horse_id"],
+            set_={
+                "horse_name": normalized["name"],
+                "sire": normalized["sire"],
+                "dam": normalized["dam"],
+                "bms": normalized["bms"],
+                "pedigree": pedigree_payload,
+                "raw_payload": raw_payload,
+                "updated_at": text("CURRENT_TIMESTAMP"),
+            },
+        )
+    )
+    session.execute(stmt)
+
+
+def _import_legacy_horse_cache_if_needed(session):
+    existing_count = session.execute(text("SELECT COUNT(1) FROM horses")).scalar_one()
+    if int(existing_count or 0) > 0:
+        return
+
+    legacy_data = safe_read_json(config.HORSE_DICT_FILE, {})
+    if not isinstance(legacy_data, dict) or not legacy_data:
+        return
+
+    imported = 0
+    for horse_id, payload in legacy_data.items():
+        clean_horse_id = str(horse_id or "").replace(".0", "").strip()
+        if not clean_horse_id:
+            continue
+        _upsert_horse_cache_entry(session, clean_horse_id, payload)
+        imported += 1
+
+    if imported:
+        logger.info("Imported %d horse cache entries from %s", imported, config.HORSE_DICT_FILE)
+
+
+def load_horse_cache_map():
+    with db_session_scope() as session:
+        _import_legacy_horse_cache_if_needed(session)
+        rows = session.execute(horses_table.select()).all()
+        return {row.horse_id: _horse_cache_row_to_entry(row) for row in rows if row.horse_id}
+
+
+def upsert_horse_cache_entry(horse_id, entry):
+    with db_session_scope() as session:
+        _upsert_horse_cache_entry(session, horse_id, entry)
+
+
+def upsert_horse_cache_entries(entries_by_id):
+    if not isinstance(entries_by_id, dict) or not entries_by_id:
+        return
+    with db_session_scope() as session:
+        for horse_id, entry in entries_by_id.items():
+            _upsert_horse_cache_entry(session, horse_id, entry)
+
+
+def clear_horse_cache_entries():
+    with db_session_scope() as session:
+        session.execute(horses_table.delete())
+
+
 # --- Marks and race metadata repositories ---
 
 def load_marks_store():

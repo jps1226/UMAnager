@@ -10,7 +10,7 @@ import zipfile
 from pydantic import BaseModel
 
 import config
-from storage import dispose_storage_connections, init_storage_foundation
+from storage import clear_horse_cache_entries, dispose_storage_connections, init_storage_foundation
 
 router = APIRouter(tags=["maintenance"])
 
@@ -86,6 +86,7 @@ def clear_cache():
 
 @router.post("/api/dict/wipe")
 def wipe_dict():
+    clear_horse_cache_entries()
     if os.path.exists(HORSE_DICT_FILE):
         os.remove(HORSE_DICT_FILE)
     return {"status": "success"}
