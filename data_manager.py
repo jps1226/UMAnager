@@ -23,6 +23,11 @@ CACHE_FILE = config.CACHE_FILE
 HORSE_CACHE = load_horse_cache_map()
 HORSE_CACHE_DIRTY_IDS = set()
 
+
+def clear_horse_runtime_cache():
+    HORSE_CACHE.clear()
+    HORSE_CACHE_DIRTY_IDS.clear()
+
 def safe_request(url, timeout=None, retries=None):
     """Make HTTP request with automatic retry and error handling."""
     if timeout is None:

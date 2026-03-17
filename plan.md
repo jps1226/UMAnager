@@ -67,6 +67,7 @@ Replace the current mixed file-based persistence model with a local SQLite-backe
 - 2026-03-17 — Steps 7 & 8 committed and pushed (`2c26a47`): OrePro durable state migrated to DB repositories in `storage.py`, `routers/orepro.py` updated to DB-only storage reads/writes, and cookie/session persistence flow removed from UI + API.
 - 2026-03-17 — Backup/restore fix committed and pushed (`2c26a47`): restore now disposes DB connections before clearing `data/`, retries clear on Windows locks, returns HTTP 409 with clear lock guidance, and re-initializes storage foundation after extraction.
 - 2026-03-17 — Step 9 complete (pending verification): Horse cache persistence migrated from `horse_names.json` to DB `horses` table. Added one-time legacy import (`horse_names.json` -> `horses`) and DB repositories in `storage.py` (`load_horse_cache_map`, `upsert_horse_cache_entry`, `upsert_horse_cache_entries`, `clear_horse_cache_entries`). Updated `data_manager.py` to hydrate in-memory cache from DB and flush only dirty entries to DB. Updated `routers/maintenance.py` `POST /api/dict/wipe` to clear `horses` table as the primary cache store.
+- 2026-03-17 — Step 9 bugfix: `Reset Translation Memory` now clears runtime in-memory horse cache (`data_manager.HORSE_CACHE`) in addition to DB/file storage, so reset takes effect immediately without requiring server restart.
 
 ---
 
