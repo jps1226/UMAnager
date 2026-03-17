@@ -189,13 +189,7 @@
         <div id="orepro-lifetime-bar" class="orepro-lifetime-bar">No saved OrePro history yet.</div>
         <div id="orepro-companion-panel" class="orepro-companion-panel">
             <div class="orepro-companion-help">
-                Companion window mode avoids iframe cookie restrictions in Brave/Chrome.
-            </div>
-            <div class="orepro-session-row">
-                <label for="orepro-nkauth-input">nkauth cookie</label>
-                <input id="orepro-nkauth-input" type="password" autocomplete="off" placeholder="Paste your current nkauth cookie value">
-                <button onclick="saveOreProSessionCookie()" class="toolbar-btn toolbar-btn-muted">💾 Save</button>
-                <button onclick="clearOreProSessionCookie()" class="toolbar-btn toolbar-btn-muted">🗑️ Clear</button>
+                Companion window mode avoids iframe restrictions in Brave/Chrome and lets you verify your profile before syncing.
             </div>
             <div class="orepro-session-row">
                 <label>Sync date</label>
@@ -206,7 +200,7 @@
                 <input id="orepro-yosoka-id" type="text" autocomplete="off" value="20021241" placeholder="e.g. 20021241" maxlength="10" style="width:110px;">
             </div>
             <div id="orepro-username-display" class="orepro-username-display" style="display:none;"></div>
-            <div id="orepro-sync-meta" class="orepro-sync-meta">No cookie saved yet.</div>
+            <div id="orepro-sync-meta" class="orepro-sync-meta">Cookie storage is disabled. Sync uses public OrePro endpoints/profile ID.</div>
             <div id="orepro-sync-results" class="orepro-sync-results">No results synced yet.</div>
         </div>
         <div id="voting-recap-panel" class="voting-recap-panel" style="display:none;"></div>

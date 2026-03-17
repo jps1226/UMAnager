@@ -2955,7 +2955,7 @@ function renderOreProSyncPayload(payload) {
     } else {
         const accountLoggedIn = payload?.debug?.accountLoggedIn;
         const hint = accountLoggedIn === false
-            ? 'No personal bet cards detected because mydata login was not confirmed for this cookie (nkauth alone may be insufficient).'
+            ? 'No personal bet cards detected because mydata login was not confirmed.'
             : 'No personal bet cards were detected for this sync/day.';
         mySummaryHtml = `<div class="orepro-sync-title">My Bets Summary</div><div class="orepro-sync-list">${escapeHtml(hint)}</div>`;
     }
@@ -3004,68 +3004,22 @@ function updateOreProSyncDateDisplay() {
 async function loadOreProSessionStatus() {
     updateOreProSyncDateDisplay();
     try {
-        const [sessionRes, lastRes, historyRes] = await Promise.all([
-            fetch('/api/orepro/session'),
+        const [lastRes, historyRes] = await Promise.all([
             fetch('/api/orepro/results/last'),
             fetch('/api/orepro/results/history'),
         ]);
-        const session = await sessionRes.json();
         const last = await lastRes.json();
         const history = await historyRes.json();
 
         const meta = document.getElementById('orepro-sync-meta');
         if (meta) {
-            if (session.configured) {
-                const stamp = session.updatedAt ? ` (updated ${escapeHtml(session.updatedAt)})` : '';
-                meta.textContent = `Cookie saved: ${session.masked || 'set'}${stamp}`;
-            } else {
-                meta.textContent = 'No cookie saved yet.';
-            }
+            meta.textContent = 'Cookie storage is disabled. Sync uses public OrePro endpoints/profile ID.';
         }
 
         renderOreProSyncPayload(last || {});
         renderOreProHistorySummary(last?.historySummary || history || {});
     } catch (err) {
         setOreProSessionStatus(`Failed loading OrePro sync state: ${err?.message || err}`, 'warn');
-    }
-}
-
-async function saveOreProSessionCookie() {
-    const input = document.getElementById('orepro-nkauth-input');
-    const value = String(input?.value || '').trim();
-    if (!value) {
-        setOreProSessionStatus('Paste your current nkauth cookie value first.', 'warn');
-        return;
-    }
-
-    try {
-        const res = await fetch('/api/orepro/session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ nkauth: value }),
-        });
-        const data = await res.json();
-        if (data.status !== 'success') {
-            throw new Error(data.message || 'Failed to save cookie');
-        }
-        if (input) input.value = '';
-        const msg = data.stripped
-            ? 'Cookie saved (non-ASCII characters were stripped — make sure you copied only the cookie value).'
-            : 'nkauth cookie saved. You can now sync post-race results.';
-        setOreProSessionStatus(msg, data.stripped ? 'warn' : 'ok');
-        await loadOreProSessionStatus();
-    } catch (err) {
-        setOreProSessionStatus(`Could not save nkauth cookie: ${err?.message || err}`, 'error');
-    }
-}
-
-async function clearOreProSessionCookie() {
-    try {
-        await fetch('/api/orepro/session/clear', { method: 'POST' });
-        setOreProSessionStatus('Stored nkauth cookie cleared.', 'warn');
-        await loadOreProSessionStatus();
-    } catch (err) {
-        setOreProSessionStatus(`Could not clear nkauth cookie: ${err?.message || err}`, 'error');
     }
 }
 

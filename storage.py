@@ -233,6 +233,17 @@ def get_db_session_factory():
     return _session_factory
 
 
+def dispose_storage_connections():
+    """Dispose cached SQLAlchemy engine/session factory.
+    This is used before destructive file operations (like restore) so
+    Windows can replace/delete the SQLite file without lock errors."""
+    global _db_engine, _session_factory
+    if _db_engine is not None:
+        _db_engine.dispose()
+    _db_engine = None
+    _session_factory = None
+
+
 @contextmanager
 def db_session_scope():
     session = get_db_session_factory()()
@@ -610,3 +621,335 @@ def delete_marks_for_races(race_ids):
             )
             deleted_meta += r.rowcount
     return deleted_marks, deleted_meta
+
+
+# --- OrePro repositories ---
+
+def _format_orepro_yen(value):
+    sign = "+" if value > 0 else ""
+    return f"{sign}{value:,}円"
+
+
+def _ensure_orepro_profile(session, profile_id, username=""):
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    pid = str(profile_id or "").strip()
+    if not pid:
+        pid = "unknown"
+    uname = str(username or "").strip()
+
+    stmt = (
+        sqlite_insert(orepro_profiles_table)
+        .values(profile_id=pid, username=uname)
+        .on_conflict_do_update(
+            index_elements=["profile_id"],
+            set_={"username": uname, "updated_at": text("CURRENT_TIMESTAMP")},
+        )
+    )
+    session.execute(stmt)
+    return pid
+
+
+def _orepro_build_history_entry_from_payload(payload):
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("myBetSummary") or {}
+    date_key = str(payload.get("kaisai_date") or "").strip()
+    profile_id = str(((payload.get("debug") or {}).get("yosokaIdUsed") or payload.get("memberId") or "")).strip()
+    races = int(summary.get("races") or 0)
+    if not date_key or not profile_id or races <= 0:
+        return None
+
+    purchase = int(summary.get("purchase") or 0)
+    payout = int(summary.get("payout") or 0)
+    profit = int(summary.get("profit") or 0)
+    return {
+        "date": date_key,
+        "profileId": profile_id,
+        "username": str(payload.get("username") or ((payload.get("debug") or {}).get("username") or "")).strip(),
+        "kaisaiId": str(payload.get("kaisai_id") or "").strip(),
+        "resolvedKaisaiIds": payload.get("resolvedKaisaiIds") or [],
+        "isPartial": bool(payload.get("kaisai_id")),
+        "races": races,
+        "purchase": purchase,
+        "purchaseLabel": _format_orepro_yen(purchase),
+        "payout": payout,
+        "payoutLabel": _format_orepro_yen(payout),
+        "profit": profit,
+        "profitLabel": _format_orepro_yen(profit),
+        "fetchedAt": str(payload.get("fetchedAt") or ""),
+        "myRaceResults": payload.get("myRaceResults") or [],
+    }
+
+
+def _orepro_should_replace_history_entry(existing, incoming):
+    if not isinstance(existing, dict):
+        return True
+    existing_partial = bool(existing.get("isPartial"))
+    incoming_partial = bool(incoming.get("isPartial"))
+    if existing_partial and not incoming_partial:
+        return True
+    if not existing_partial and incoming_partial:
+        return False
+
+    existing_races = int(existing.get("races") or 0)
+    incoming_races = int(incoming.get("races") or 0)
+    if incoming_races != existing_races:
+        return incoming_races > existing_races
+
+    return str(incoming.get("fetchedAt") or "") >= str(existing.get("fetchedAt") or "")
+
+
+def _orepro_summary_from_entries(entries):
+    valid_entries = [entry for entry in entries if isinstance(entry, dict)]
+    sorted_entries = sorted(
+        valid_entries,
+        key=lambda item: (str(item.get("date") or ""), str(item.get("fetchedAt") or "")),
+        reverse=True,
+    )
+    purchase = sum(int(entry.get("purchase") or 0) for entry in sorted_entries)
+    payout = sum(int(entry.get("payout") or 0) for entry in sorted_entries)
+    profit = sum(int(entry.get("profit") or 0) for entry in sorted_entries)
+    races = sum(int(entry.get("races") or 0) for entry in sorted_entries)
+    roi_pct = round((payout / purchase) * 100, 1) if purchase > 0 else 0.0
+    best_day = max(sorted_entries, key=lambda entry: int(entry.get("profit") or 0), default=None)
+    worst_day = min(sorted_entries, key=lambda entry: int(entry.get("profit") or 0), default=None)
+
+    return {
+        "status": "success",
+        "entries": sorted_entries,
+        "totals": {
+            "days": len(sorted_entries),
+            "races": races,
+            "purchase": purchase,
+            "purchaseLabel": _format_orepro_yen(purchase),
+            "payout": payout,
+            "payoutLabel": _format_orepro_yen(payout),
+            "profit": profit,
+            "profitLabel": _format_orepro_yen(profit),
+            "roiPct": roi_pct,
+            "bestDay": best_day,
+            "worstDay": worst_day,
+            "lastUpdatedAt": sorted_entries[0].get("fetchedAt", "") if sorted_entries else "",
+        },
+    }
+
+
+def _orepro_write_history_entry(session, entry):
+    profile_id = _ensure_orepro_profile(session, entry.get("profileId"), entry.get("username"))
+    date_key = str(entry.get("date") or "").strip()
+    if not date_key:
+        return
+
+    existing_row = session.execute(
+        orepro_daily_results_table.select().where(
+            orepro_daily_results_table.c.date_key == date_key,
+            orepro_daily_results_table.c.profile_id == profile_id,
+        )
+    ).first()
+
+    existing_entry = None
+    if existing_row is not None:
+        existing_entry = {
+            "isPartial": bool(existing_row.is_partial),
+            "races": int(existing_row.races or 0),
+            "fetchedAt": str(existing_row.fetched_at or ""),
+        }
+        if not _orepro_should_replace_history_entry(existing_entry, entry):
+            return
+
+    payload = {
+        "date_key": date_key,
+        "profile_id": profile_id,
+        "username": str(entry.get("username") or "").strip(),
+        "kaisai_id": str(entry.get("kaisaiId") or "").strip(),
+        "resolved_kaisai_ids": entry.get("resolvedKaisaiIds") or [],
+        "is_partial": bool(entry.get("isPartial")),
+        "races": int(entry.get("races") or 0),
+        "purchase": int(entry.get("purchase") or 0),
+        "payout": int(entry.get("payout") or 0),
+        "profit": int(entry.get("profit") or 0),
+        "fetched_at": str(entry.get("fetchedAt") or ""),
+        "my_race_results": entry.get("myRaceResults") or [],
+    }
+
+    if existing_row is None:
+        session.execute(orepro_daily_results_table.insert().values(**payload))
+        daily_row = session.execute(
+            orepro_daily_results_table.select().where(
+                orepro_daily_results_table.c.date_key == date_key,
+                orepro_daily_results_table.c.profile_id == profile_id,
+            )
+        ).first()
+    else:
+        session.execute(
+            orepro_daily_results_table.update()
+            .where(orepro_daily_results_table.c.id == existing_row.id)
+            .values(**payload)
+        )
+        daily_row = session.execute(
+            orepro_daily_results_table.select().where(orepro_daily_results_table.c.id == existing_row.id)
+        ).first()
+
+    if daily_row is None:
+        return
+
+    session.execute(
+        orepro_race_results_table.delete().where(orepro_race_results_table.c.daily_result_id == daily_row.id)
+    )
+    race_rows = []
+    for row in (entry.get("myRaceResults") or []):
+        if not isinstance(row, dict):
+            continue
+        race_rows.append(
+            {
+                "daily_result_id": daily_row.id,
+                "race_id": str(row.get("raceId") or "").strip(),
+                "race_number": int(row.get("raceNumber") or 0),
+                "purchase": int(row.get("purchase") or 0),
+                "payout": int(row.get("payout") or 0),
+                "profit": int(row.get("profit") or 0),
+                "raw_payload": row,
+            }
+        )
+    if race_rows:
+        session.execute(orepro_race_results_table.insert(), race_rows)
+
+
+def _load_orepro_history_entries_from_db(session):
+    daily_rows = session.execute(orepro_daily_results_table.select()).all()
+    if not daily_rows:
+        return []
+
+    race_rows = session.execute(orepro_race_results_table.select()).all()
+    races_by_daily = {}
+    for row in race_rows:
+        races_by_daily.setdefault(row.daily_result_id, []).append(row)
+
+    entries = []
+    for row in daily_rows:
+        race_results = []
+        for rr in races_by_daily.get(row.id, []):
+            raw = rr.raw_payload if isinstance(rr.raw_payload, dict) else {}
+            race_results.append(
+                {
+                    "raceId": str(rr.race_id or "").strip(),
+                    "purchase": int(rr.purchase or 0),
+                    "purchaseLabel": raw.get("purchaseLabel") or _format_orepro_yen(int(rr.purchase or 0)),
+                    "payout": int(rr.payout or 0),
+                    "payoutLabel": raw.get("payoutLabel") or _format_orepro_yen(int(rr.payout or 0)),
+                    "profit": int(rr.profit or 0),
+                    "profitLabel": raw.get("profitLabel") or _format_orepro_yen(int(rr.profit or 0)),
+                }
+            )
+        entries.append(
+            {
+                "date": str(row.date_key or ""),
+                "profileId": str(row.profile_id or ""),
+                "username": str(row.username or ""),
+                "kaisaiId": str(row.kaisai_id or ""),
+                "resolvedKaisaiIds": row.resolved_kaisai_ids if isinstance(row.resolved_kaisai_ids, list) else [],
+                "isPartial": bool(row.is_partial),
+                "races": int(row.races or 0),
+                "purchase": int(row.purchase or 0),
+                "purchaseLabel": _format_orepro_yen(int(row.purchase or 0)),
+                "payout": int(row.payout or 0),
+                "payoutLabel": _format_orepro_yen(int(row.payout or 0)),
+                "profit": int(row.profit or 0),
+                "profitLabel": _format_orepro_yen(int(row.profit or 0)),
+                "fetchedAt": str(row.fetched_at or ""),
+                "myRaceResults": race_results,
+            }
+        )
+    return entries
+
+
+def _import_legacy_orepro_files_if_needed(session):
+    if session.execute(orepro_daily_results_table.select().limit(1)).first() is not None:
+        return
+
+    history_path = config.DATA_DIR / "orepro_results_history.json"
+    last_sync_path = config.DATA_DIR / "orepro_last_sync.json"
+
+    history = safe_read_json(history_path, {"entries": []})
+    entries = history.get("entries", []) if isinstance(history, dict) else []
+    if not isinstance(entries, list):
+        entries = []
+
+    imported = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        _orepro_write_history_entry(session, entry)
+        imported += 1
+
+    # Backfill from last sync file if history file did not exist/was empty.
+    if imported == 0:
+        last_payload = safe_read_json(last_sync_path, {})
+        seeded_entry = _orepro_build_history_entry_from_payload(last_payload)
+        if seeded_entry is not None:
+            _orepro_write_history_entry(session, seeded_entry)
+            imported = 1
+
+    if imported:
+        logger.info("Imported %d OrePro history entries from legacy files", imported)
+
+
+def orepro_upsert_history_from_payload(payload):
+    """Upsert one history entry derived from a sync payload, then return summary."""
+    with db_session_scope() as session:
+        _import_legacy_orepro_files_if_needed(session)
+        entry = _orepro_build_history_entry_from_payload(payload)
+        if entry is not None:
+            _orepro_write_history_entry(session, entry)
+        entries = _load_orepro_history_entries_from_db(session)
+    return _orepro_summary_from_entries(entries)
+
+
+def orepro_get_history_summary():
+    with db_session_scope() as session:
+        _import_legacy_orepro_files_if_needed(session)
+        entries = _load_orepro_history_entries_from_db(session)
+    return _orepro_summary_from_entries(entries)
+
+
+def orepro_get_last_sync_payload():
+    """Return a best-effort last sync payload derived from the latest DB history entry."""
+    history = orepro_get_history_summary()
+    entries = history.get("entries", []) if isinstance(history, dict) else []
+    if not entries:
+        return {
+            "status": "idle",
+            "loggedIn": False,
+            "message": "No OrePro sync has been run yet.",
+            "summaryLines": [],
+            "yenValues": [],
+            "historySummary": history,
+        }
+
+    last = entries[0]
+    return {
+        "status": "success",
+        "loggedIn": True,
+        "username": last.get("username", ""),
+        "message": "Loaded most recent OrePro sync from DB history.",
+        "fetchedAt": last.get("fetchedAt", ""),
+        "kaisai_date": last.get("date", ""),
+        "kaisai_id": last.get("kaisaiId", ""),
+        "resolvedKaisaiIds": last.get("resolvedKaisaiIds", []),
+        "raceIds": [str(row.get("raceId") or "") for row in (last.get("myRaceResults") or []) if row.get("raceId")],
+        "myBetSummary": {
+            "races": int(last.get("races") or 0),
+            "purchase": int(last.get("purchase") or 0),
+            "purchaseLabel": last.get("purchaseLabel") or _format_orepro_yen(int(last.get("purchase") or 0)),
+            "payout": int(last.get("payout") or 0),
+            "payoutLabel": last.get("payoutLabel") or _format_orepro_yen(int(last.get("payout") or 0)),
+            "profit": int(last.get("profit") or 0),
+            "profitLabel": last.get("profitLabel") or _format_orepro_yen(int(last.get("profit") or 0)),
+        },
+        "myRaceResults": last.get("myRaceResults") or [],
+        "summaryLines": [],
+        "yenValues": [],
+        "historySummary": history,
+        "debug": {"yosokaIdUsed": last.get("profileId", "")},
+    }

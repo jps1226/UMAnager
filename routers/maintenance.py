@@ -4,11 +4,13 @@ import datetime
 import os
 from pathlib import Path
 import shutil
+import time
 from typing import Optional
 import zipfile
 from pydantic import BaseModel
 
 import config
+from storage import dispose_storage_connections, init_storage_foundation
 
 router = APIRouter(tags=["maintenance"])
 
@@ -138,7 +140,26 @@ def restore_data_backup(payload: RestoreBackupPayload):
     if payload.create_safety_backup and _has_data_files():
         safety_backup_name = _create_backup_archive("umanager_safety_pre_restore")
 
-    _clear_data_dir()
+    # Ensure SQLite files are not held open while data/ is replaced.
+    dispose_storage_connections()
+    clear_error = None
+    for _ in range(3):
+        try:
+            _clear_data_dir()
+            clear_error = None
+            break
+        except PermissionError as exc:
+            clear_error = exc
+            dispose_storage_connections()
+            time.sleep(0.25)
+    if clear_error is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Could not restore because data files are locked by another process "
+                "(likely another UMAnager/server instance). Close other instances and retry."
+            ),
+        )
 
     extracted_files = 0
     with zipfile.ZipFile(target, "r") as zf:
@@ -153,6 +174,9 @@ def restore_data_backup(payload: RestoreBackupPayload):
             zf.extract(member, path=DATA_DIR.parent)
             if not member.endswith("/"):
                 extracted_files += 1
+
+    # Reinitialize DB engine/schema after restore so the app can continue safely.
+    init_storage_foundation()
 
     return {
         "status": "success",
