@@ -2154,7 +2154,19 @@ function appendConsoleLine(message) {
 async function triggerPost(url) {
     try {
         const res = await fetch(url, { method: 'POST' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.message || `HTTP ${res.status}`);
+        if (url === '/api/dict/wipe') {
+            const runtimeCount = Number(data?.cleared?.runtimeEntries || 0);
+            const dbCount = Number(data?.cleared?.dbEntries || 0);
+            const fileDeleted = Boolean(data?.cleared?.legacyFileDeleted);
+            alert(
+                `${data.message || 'Translation memory cleared.'}\n\n` +
+                `Runtime entries cleared: ${runtimeCount}\n` +
+                `DB entries cleared: ${dbCount}\n` +
+                `Legacy file deleted: ${fileDeleted ? 'yes' : 'no'}`
+            );
+        }
         await refreshDataAndUI();
     } catch (err) {
         alert(`Request failed: ${err.message}`);

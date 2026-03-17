@@ -627,6 +627,11 @@ def clear_horse_cache_entries():
         session.execute(horses_table.delete())
 
 
+def count_horse_cache_entries():
+    with db_session_scope() as session:
+        return int(session.execute(text("SELECT COUNT(1) FROM horses")).scalar_one() or 0)
+
+
 # --- Marks and race metadata repositories ---
 
 def load_marks_store():

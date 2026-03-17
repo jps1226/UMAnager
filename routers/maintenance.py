@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 import config
 from data_manager import clear_horse_runtime_cache
-from storage import clear_horse_cache_entries, dispose_storage_connections, init_storage_foundation
+from storage import count_horse_cache_entries, clear_horse_cache_entries, dispose_storage_connections, init_storage_foundation
 
 router = APIRouter(tags=["maintenance"])
 
@@ -87,11 +87,25 @@ def clear_cache():
 
 @router.post("/api/dict/wipe")
 def wipe_dict():
-    clear_horse_runtime_cache()
+    runtime_cleared = clear_horse_runtime_cache()
+    db_cleared = count_horse_cache_entries()
     clear_horse_cache_entries()
+    legacy_file_deleted = False
     if os.path.exists(HORSE_DICT_FILE):
         os.remove(HORSE_DICT_FILE)
-    return {"status": "success"}
+        legacy_file_deleted = True
+    return {
+        "status": "success",
+        "message": (
+            "Translation memory cleared. Existing loaded race cards may still show prior translated names "
+            "until races are refreshed/re-scraped."
+        ),
+        "cleared": {
+            "runtimeEntries": runtime_cleared,
+            "dbEntries": db_cleared,
+            "legacyFileDeleted": legacy_file_deleted,
+        },
+    }
 
 
 @router.post("/api/data/backup")
