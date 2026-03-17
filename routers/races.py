@@ -9,15 +9,13 @@ from pydantic import BaseModel, Field
 
 import config
 import data_manager
-from storage import atomic_write_json, atomic_write_pickle, load_app_config, load_pickle, load_text_file, safe_read_json
+from storage import atomic_write_json, atomic_write_pickle, load_app_config, load_horse_list, load_pickle, safe_read_json
 
 router = APIRouter(tags=["races"])
 logger = logging.getLogger(__name__)
 
 CACHE_FILE = config.CACHE_FILE
 MARKS_FILE = config.MARKS_FILE
-TRACKING_FILE = config.TRACKING_FILE
-WATCHLIST_FILE = config.WATCHLIST_FILE
 HORSE_DICT_FILE = config.HORSE_DICT_FILE
 
 _progress_logger = None
@@ -71,14 +69,8 @@ def log_progress(msg):
         _progress_logger(msg)
 
 
-def load_ids(filepath):
-    ids = set()
-    text = load_text_file(filepath)
-    for line in text.split("\n"):
-        clean = line.split("#")[0].strip()
-        if clean:
-            ids.add(clean)
-    return ids
+def load_ids(list_type):
+    return {h for h, _n in load_horse_list(list_type)}
 
 
 def force_str(val):
@@ -403,8 +395,8 @@ def get_races():
                 auto_refreshed_races,
                 auto_refreshed_entries,
             )
-    tracked_ids = load_ids(TRACKING_FILE)
-    watchlist_ids = load_ids(WATCHLIST_FILE)
+    tracked_ids = load_ids("favorites")
+    watchlist_ids = load_ids("watchlist")
 
     races_by_date = {}
     top_picks = []

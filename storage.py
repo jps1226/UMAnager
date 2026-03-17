@@ -84,6 +84,7 @@ tracked_horses_table = Table(
     DB_METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("horse_id", String(32), nullable=False, unique=True),
+    Column("display_name", String(255), nullable=False, server_default=text("''")),
     Column("added_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
 )
 
@@ -92,6 +93,7 @@ watchlist_horses_table = Table(
     DB_METADATA,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("horse_id", String(32), nullable=False, unique=True),
+    Column("display_name", String(255), nullable=False, server_default=text("''")),
     Column("added_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
 )
 
@@ -244,11 +246,25 @@ def db_session_scope():
         session.close()
 
 
+def _apply_incremental_migrations(conn):
+    """Apply in-place ALTER TABLE migrations for columns added after initial schema creation."""
+    for table_name in ("tracked_horses", "watchlist_horses"):
+        existing_cols = {
+            row[1]
+            for row in conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+        }
+        if "display_name" not in existing_cols:
+            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"))
+            logger.info("Added display_name column to %s", table_name)
+
+
 def bootstrap_schema():
     engine = get_db_engine()
     DB_METADATA.create_all(bind=engine)
 
     with engine.begin() as conn:
+        _apply_incremental_migrations(conn)
+
         version_exists = conn.execute(
             text("SELECT 1 FROM schema_migrations WHERE version = :version LIMIT 1"),
             {"version": CURRENT_SCHEMA_VERSION},
@@ -345,12 +361,130 @@ def _merge_dicts(defaults, override):
     return merged
 
 
+def _upsert_app_config(session, config_data):
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    stmt = (
+        sqlite_insert(app_config_table)
+        .values(config_key="app_config", config_value=config_data)
+        .on_conflict_do_update(
+            index_elements=["config_key"],
+            set_={"config_value": config_data, "updated_at": text("CURRENT_TIMESTAMP")},
+        )
+    )
+    session.execute(stmt)
+
+
 def load_app_config(path=None):
-    config_path = path or (config.DATA_DIR / "config.json")
-    stored = safe_read_json(config_path, {})
-    return _merge_dicts(APP_CONFIG_DEFAULTS, stored)
+    """Load app config from DB, with a one-time import from config.json on first run.
+    The optional `path` argument is accepted for backward compatibility."""
+    with db_session_scope() as session:
+        row = session.execute(
+            app_config_table.select().where(app_config_table.c.config_key == "app_config")
+        ).first()
+        if row is not None:
+            return _merge_dicts(APP_CONFIG_DEFAULTS, row.config_value)
+        # One-time import from legacy JSON file
+        json_path = path or (config.DATA_DIR / "config.json")
+        stored = safe_read_json(json_path, {})
+        merged = _merge_dicts(APP_CONFIG_DEFAULTS, stored)
+        _upsert_app_config(session, merged)
+        logger.info("Imported app config from %s into DB", json_path)
+        return merged
 
 
 def save_app_config(config_data, path=None):
-    config_path = path or (config.DATA_DIR / "config.json")
-    atomic_write_json(config_path, config_data)
+    """Save app config to DB. The optional `path` argument is accepted for
+    backward compatibility but ignored now that config is DB-backed."""
+    with db_session_scope() as session:
+        _upsert_app_config(session, config_data)
+
+
+# --- Horse list repositories ---
+
+def _parse_horse_lines_from_text(raw_text):
+    """Extract (horse_id, display_name) pairs from raw list text (format: ID # Name)."""
+    results = []
+    seen = set()
+    for line in (raw_text or "").splitlines():
+        parts = line.split("#", 1)
+        horse_id = parts[0].strip()
+        if horse_id and len(horse_id) == 10 and horse_id not in seen:
+            name = parts[1].strip() if len(parts) > 1 else ""
+            results.append((horse_id, name))
+            seen.add(horse_id)
+    return results
+
+
+def _parse_horse_ids_from_text(raw_text):
+    """Extract 10-char alphanumeric horse IDs from raw list text (format: ID # Name)."""
+    return [h for h, _n in _parse_horse_lines_from_text(raw_text)]
+
+
+def load_horse_list(list_type):
+    """Load (horse_id, display_name) pairs for 'favorites' or 'watchlist' from DB.
+    Performs a one-time import from the legacy .txt file when the table is empty.
+    Returns an ordered list of (horse_id, display_name) tuples."""
+    if list_type == "favorites":
+        table = tracked_horses_table
+        txt_path = config.TRACKING_FILE
+    else:
+        table = watchlist_horses_table
+        txt_path = config.WATCHLIST_FILE
+    with db_session_scope() as session:
+        rows = session.execute(table.select().order_by(table.c.added_at)).all()
+        if rows:
+            return [(row.horse_id, getattr(row, 'display_name', '')) for row in rows]
+        # One-time import from legacy txt file
+        raw = load_text_file(txt_path)
+        pairs = _parse_horse_lines_from_text(raw)
+        if pairs:
+            session.execute(
+                table.insert(),
+                [{"horse_id": h, "display_name": n} for h, n in pairs],
+            )
+            logger.info("Imported %d horse IDs into %s list from %s", len(pairs), list_type, txt_path)
+        return pairs
+
+
+def save_horse_list(list_type, horse_ids):
+    """Replace all DB entries for the given list with the provided horse ID list.
+    Accepts either a list of horse_id strings or (horse_id, display_name) tuples."""
+    table = tracked_horses_table if list_type == "favorites" else watchlist_horses_table
+    with db_session_scope() as session:
+        session.execute(table.delete())
+        if horse_ids:
+            rows = []
+            for item in horse_ids:
+                if isinstance(item, tuple):
+                    rows.append({"horse_id": item[0], "display_name": item[1] if len(item) > 1 else ""})
+                else:
+                    rows.append({"horse_id": item, "display_name": ""})
+            session.execute(table.insert(), rows)
+
+
+def add_horse_to_list(list_type, horse_id, display_name=""):
+    """Add a single horse to the given list. Silent no-op if already present."""
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    table = tracked_horses_table if list_type == "favorites" else watchlist_horses_table
+    with db_session_scope() as session:
+        stmt = (
+            sqlite_insert(table)
+            .values(horse_id=horse_id, display_name=display_name)
+            .on_conflict_do_nothing(index_elements=["horse_id"])
+        )
+        session.execute(stmt)
+
+
+def horse_ids_to_text(horse_pairs):
+    """Reconstruct the wire-format text (ID # Name per line) from a list of
+    (horse_id, display_name) tuples. Bare ID strings are also accepted."""
+    if not horse_pairs:
+        return ""
+    lines = []
+    for item in horse_pairs:
+        if isinstance(item, tuple):
+            horse_id, name = item[0], item[1] if len(item) > 1 else ""
+        else:
+            horse_id, name = item, ""
+        lines.append(f"{horse_id} # {name}" if name else horse_id)
+    return "\n".join(lines) + "\n"

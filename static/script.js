@@ -405,31 +405,34 @@ function buildListHTML(rawText, listType) {
     let html = "";
     const lines = rawText.split('\n');
     lines.forEach(line => {
-        const parts = line.split('#');
-        if (parts.length >= 2) {
-            const id = parts[0].trim();
-            const name = parts[1].trim();
-            if (id && name) {
-                const escapedName = escapeHtml(name);
-                const escapedId = escapeHtml(id);
-                
-                // Find this horse in searchableHorses to get date and race_id
-                const horseData = searchableHorses.find(h => h.h_id === id);
-                if (horseData) {
-                    html += `
+        const cleanLine = (line || '').trim();
+        if (!cleanLine) return;
+
+        const parts = cleanLine.split('#');
+        const id = (parts[0] || '').trim();
+        if (!id) return;
+
+        const horseData = searchableHorses.find(h => h.h_id === id);
+        const parsedName = parts.length >= 2 ? (parts.slice(1).join('#') || '').trim() : '';
+        const name = parsedName || (horseData ? horseData.name : '') || id;
+
+        const escapedName = escapeHtml(name);
+        const escapedId = escapeHtml(id);
+
+        // Find this horse in searchableHorses to get date and race_id
+        if (horseData) {
+            html += `
                 <div class="horse-item">
                     <span class="horse-item-name" style="cursor: pointer;" onclick="jumpToHorse('${horseData.date}', '${horseData.r_id}', '${horseData.h_id}', '${horseData.timeline || "upcoming"}')" title="Click to view in race">${escapedName}</span>
                     <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapeHtml(listType)}', '${escapedId}')">✖</button>
                 </div>`;
-                } else {
-                    // Fallback if not found in searchableHorses
-                    html += `
+        } else {
+            // Fallback if not found in searchableHorses
+            html += `
                 <div class="horse-item">
                     <span class="horse-item-name" style="color: #888;">${escapedName}</span>
                     <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapeHtml(listType)}', '${escapedId}')">✖</button>
                 </div>`;
-                }
-            }
         }
     });
     return html;
