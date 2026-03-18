@@ -18,6 +18,7 @@ data/*.sqlite3
 
 # Ignore environment variables or virtual environments (if you use them)
 .env
+.venv/
 venv/
 env/
 
@@ -40,4 +41,3 @@ compendium_txt/
 project_full_contents.md
 generate_compendium.ps1
 generate_compendium_folder.ps1
-plan.md
