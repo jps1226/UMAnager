@@ -39,12 +39,6 @@ class LegacyImportPayload(BaseModel):
     overwrite_existing: bool = False
 
 
-def _iter_data_files():
-    if not DATA_DIR.exists() or not DATA_DIR.is_dir():
-        return []
-    return [p for p in DATA_DIR.rglob("*") if p.is_file()]
-
-
 def _has_data_files() -> bool:
     if not DATA_DIR.exists() or not DATA_DIR.is_dir():
         return False

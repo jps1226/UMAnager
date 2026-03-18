@@ -482,19 +482,6 @@ def _write_race_cache_to_db(session, weekend_races):
         session.execute(race_entries_table.insert(), entry_rows)
 
 
-def _import_legacy_race_cache_if_needed(session):
-    existing_count = session.execute(text("SELECT COUNT(1) FROM races")).scalar_one()
-    if int(existing_count or 0) > 0:
-        return
-
-    legacy_races = load_pickle(config.CACHE_FILE, [])
-    if not isinstance(legacy_races, list) or not legacy_races:
-        return
-
-    _write_race_cache_to_db(session, legacy_races)
-    logger.info("Imported %d races from legacy cache %s", len(legacy_races), config.CACHE_FILE)
-
-
 def load_race_cache():
     with db_session_scope() as session:
         race_rows = session.execute(races_table.select()).all()
@@ -677,11 +664,6 @@ def _parse_horse_lines_from_text(raw_text):
             results.append((horse_id, name))
             seen.add(horse_id)
     return results
-
-
-def _parse_horse_ids_from_text(raw_text):
-    """Extract 10-char alphanumeric horse IDs from raw list text (format: ID # Name)."""
-    return [h for h, _n in _parse_horse_lines_from_text(raw_text)]
 
 
 def load_horse_list(list_type):
