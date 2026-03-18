@@ -3,10 +3,10 @@
         "raceDatabase": true,
         "pedigreeLists": false,
         "autoPickStrategy": true,
-        "weekendWatchlist": true
+        "weekendWatchlist": false
     },
     "ui": {
-        "riskSlider": 35,
+        "riskSlider": 63,
         "betSafetyIndicator": true,
         "voteSortingTop": true,
         "autoFetchPastResults": true,
