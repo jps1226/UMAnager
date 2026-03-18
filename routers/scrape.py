@@ -37,7 +37,7 @@ async def run_scrape(payload: ScrapeRequest):
         scrape_logs = ["Initializing Netkeiba Scraper..."]
 
     async with scrape_job_lock:
-        await asyncio.to_thread(
+        races = await asyncio.to_thread(
             data_manager.fetch_weekend_timeline,
             mode=payload.mode,
             progress_callback=log_progress,
@@ -45,7 +45,11 @@ async def run_scrape(payload: ScrapeRequest):
 
     with scrape_logs_lock:
         scrape_logs.append("Done! Refreshing schedule...")
-    return {"status": "success"}
+    return {
+        "status": "success",
+        "mode": payload.mode,
+        "cached_races": len(races or []),
+    }
 
 
 @router.get("/api/scrape/log")

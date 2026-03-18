@@ -6,27 +6,27 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import os
-import pickle
 import pykakasi
 import json
 import time
 import logging
-import tempfile
 import config
+from storage import load_horse_cache_map, load_race_cache, save_race_cache, upsert_horse_cache_entries
 
 logger = logging.getLogger(__name__)
 
 # 1. Setup Offline Translators & Caches
 kks = pykakasi.kakasi()
 
-CACHE_FILE = config.CACHE_FILE
-HORSE_DICT_FILE = config.HORSE_DICT_FILE
+HORSE_CACHE = load_horse_cache_map()
+HORSE_CACHE_DIRTY_IDS = set()
 
-if os.path.exists(HORSE_DICT_FILE):
-    with open(HORSE_DICT_FILE, "r", encoding="utf-8") as f:
-        HORSE_CACHE = json.load(f)
-else:
-    HORSE_CACHE = {}
+
+def clear_horse_runtime_cache():
+    cleared_count = len(HORSE_CACHE)
+    HORSE_CACHE.clear()
+    HORSE_CACHE_DIRTY_IDS.clear()
+    return cleared_count
 
 def safe_request(url, timeout=None, retries=None):
     """Make HTTP request with automatic retry and error handling."""
@@ -53,12 +53,23 @@ def safe_request(url, timeout=None, retries=None):
     return None
 
 def save_horse_dict():
-    target = HORSE_DICT_FILE
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", dir=target.parent) as tmp:
-        json.dump(HORSE_CACHE, tmp, indent=4, ensure_ascii=False)
-        tmp_path = tmp.name
-    os.replace(tmp_path, target)
+    if not HORSE_CACHE_DIRTY_IDS:
+        return
+    payload = {
+        horse_id: HORSE_CACHE[horse_id]
+        for horse_id in list(HORSE_CACHE_DIRTY_IDS)
+        if horse_id in HORSE_CACHE
+    }
+    upsert_horse_cache_entries(payload)
+    HORSE_CACHE_DIRTY_IDS.clear()
+
+
+def _set_horse_cache_entry(horse_id, data):
+    clean_horse_id = str(horse_id or "").replace('.0', '').strip()
+    if not clean_horse_id:
+        return
+    HORSE_CACHE[clean_horse_id] = data
+    HORSE_CACHE_DIRTY_IDS.add(clean_horse_id)
 
 def romanize(text):
     if not text or pd.isna(text): return ""
@@ -111,11 +122,11 @@ def fetch_official_name_by_id(horse_id, jp_fallback):
     except Exception as e:
         logger.debug(f"Failed to fetch official name for {str_id}: {e}")
         
-    HORSE_CACHE[str_id] = {
+    _set_horse_cache_entry(str_id, {
         "name": official_name,
         "sire": "", "dam": "", "bms": "",
         "sire_id": "", "dam_id": "", "bms_id": ""
-    }
+    })
     return official_name
 
 def get_horse_data(horse_id, jp_name):
@@ -132,7 +143,7 @@ def get_horse_data(horse_id, jp_name):
                 except Exception as e:
                     logger.debug(f"Failed to refresh cached record for {str_id}: {e}")
                 if "record" not in cached: cached["record"] = "0/0"
-                HORSE_CACHE[str_id] = cached
+                _set_horse_cache_entry(str_id, cached)
             return cached
 
     data = {
@@ -194,7 +205,7 @@ def get_horse_data(horse_id, jp_name):
                     data["bms"] = fetch_official_name_by_id(data["bms_id"], bms_a.text.strip() if bms_a else "")
     except Exception as e: logger.error(f"Error fetching pedigree: {e}")
 
-    HORSE_CACHE[str_id] = data
+    _set_horse_cache_entry(str_id, data)
     return data
 
 def get_upcoming_weekend_dates(weeks_ahead=None):
@@ -459,9 +470,8 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
     })
     
     cached_races = []
-    if mode in ["load", "new"] and os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, "rb") as f:
-            cached_races = pickle.load(f)
+    if mode in ["load", "new"]:
+        cached_races = load_race_cache()
             
     if mode == "load" and cached_races: return cached_races
 
@@ -577,7 +587,7 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
         x["info"].get("place", "")
     ))
     
-    with open(CACHE_FILE, "wb") as f: pickle.dump(weekend_races, f)
+    save_race_cache(weekend_races)
     return weekend_races
 
 def fetch_race_history_by_id(race_id):

@@ -405,31 +405,34 @@ function buildListHTML(rawText, listType) {
     let html = "";
     const lines = rawText.split('\n');
     lines.forEach(line => {
-        const parts = line.split('#');
-        if (parts.length >= 2) {
-            const id = parts[0].trim();
-            const name = parts[1].trim();
-            if (id && name) {
-                const escapedName = escapeHtml(name);
-                const escapedId = escapeHtml(id);
-                
-                // Find this horse in searchableHorses to get date and race_id
-                const horseData = searchableHorses.find(h => h.h_id === id);
-                if (horseData) {
-                    html += `
+        const cleanLine = (line || '').trim();
+        if (!cleanLine) return;
+
+        const parts = cleanLine.split('#');
+        const id = (parts[0] || '').trim();
+        if (!id) return;
+
+        const horseData = searchableHorses.find(h => h.h_id === id);
+        const parsedName = parts.length >= 2 ? (parts.slice(1).join('#') || '').trim() : '';
+        const name = parsedName || (horseData ? horseData.name : '') || id;
+
+        const escapedName = escapeHtml(name);
+        const escapedId = escapeHtml(id);
+
+        // Find this horse in searchableHorses to get date and race_id
+        if (horseData) {
+            html += `
                 <div class="horse-item">
                     <span class="horse-item-name" style="cursor: pointer;" onclick="jumpToHorse('${horseData.date}', '${horseData.r_id}', '${horseData.h_id}', '${horseData.timeline || "upcoming"}')" title="Click to view in race">${escapedName}</span>
                     <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapeHtml(listType)}', '${escapedId}')">✖</button>
                 </div>`;
-                } else {
-                    // Fallback if not found in searchableHorses
-                    html += `
+        } else {
+            // Fallback if not found in searchableHorses
+            html += `
                 <div class="horse-item">
                     <span class="horse-item-name" style="color: #888;">${escapedName}</span>
                     <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapeHtml(listType)}', '${escapedId}')">✖</button>
                 </div>`;
-                }
-            }
         }
     });
     return html;
@@ -2151,7 +2154,19 @@ function appendConsoleLine(message) {
 async function triggerPost(url) {
     try {
         const res = await fetch(url, { method: 'POST' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.message || `HTTP ${res.status}`);
+        if (url === '/api/dict/wipe') {
+            const runtimeCount = Number(data?.cleared?.runtimeEntries || 0);
+            const dbCount = Number(data?.cleared?.dbEntries || 0);
+            const fileDeleted = Boolean(data?.cleared?.legacyFileDeleted);
+            alert(
+                `${data.message || 'Translation memory cleared.'}\n\n` +
+                `Runtime entries cleared: ${runtimeCount}\n` +
+                `DB entries cleared: ${dbCount}\n` +
+                `Legacy file deleted: ${fileDeleted ? 'yes' : 'no'}`
+            );
+        }
         await refreshDataAndUI();
     } catch (err) {
         alert(`Request failed: ${err.message}`);
@@ -2200,6 +2215,58 @@ async function restoreLatestBackup() {
         await refreshDataAndUI();
     } catch (err) {
         alert(`Restore failed: ${err.message}`);
+    }
+}
+
+async function exportLegacyBundle() {
+    try {
+        const result = await postJson('/api/data/legacy/export', {});
+        alert(
+            `Legacy recovery bundle created: backups/${result.filename}\n` +
+            `Files exported: ${Array.isArray(result.files) ? result.files.length : 0}`
+        );
+    } catch (err) {
+        alert(`Legacy export failed: ${err.message}`);
+    }
+}
+
+async function importLegacyBundle() {
+    const proceed = confirm(
+        'Import deprecated legacy files from the data/ folder into SQLite now?\n\n' +
+        'This is only needed for one-off recovery from old JSON/TXT/PKL storage.'
+    );
+    if (!proceed) return;
+
+    try {
+        const result = await postJson('/api/data/legacy/import', { overwrite_existing: false });
+        const imported = result.imported || {};
+        const totalImported =
+            (imported.config ? 1 : 0) +
+            Number(imported.favorites || 0) +
+            Number(imported.watchlist || 0) +
+            Number(imported.marks || 0) +
+            Number(imported.raceMeta || 0) +
+            Number(imported.horses || 0) +
+            Number(imported.races || 0) +
+            Number(imported.oreproDays || 0);
+        const footer = totalImported === 0
+            ? '\n\nNo legacy data was imported. This usually means the old JSON/TXT/PKL files are missing, empty, or SQLite already has the data.'
+            : '';
+        alert(
+            'Legacy import complete.\n\n' +
+            `Config: ${imported.config ? 'imported' : 'skipped'}\n` +
+            `Favorites: ${imported.favorites || 0}\n` +
+            `Watchlist: ${imported.watchlist || 0}\n` +
+            `Marks: ${imported.marks || 0}\n` +
+            `Race meta: ${imported.raceMeta || 0}\n` +
+            `Horses: ${imported.horses || 0}\n` +
+            `Races: ${imported.races || 0}\n` +
+            `OrePro days: ${imported.oreproDays || 0}` +
+            footer
+        );
+        await refreshDataAndUI();
+    } catch (err) {
+        alert(`Legacy import failed: ${err.message}`);
     }
 }
 
@@ -2280,6 +2347,13 @@ async function deleteDayData() {
     try {
         const result = await postJson('/api/day/delete', { date: targetDate, scope: scope });
         alert(`Done. Races removed: ${result.removed_races}, marks removed: ${result.removed_marks}, horse dict entries removed: ${result.removed_horse_entries}`);
+        if (scope === 'marks' || scope === 'all') {
+            const marksRes = await fetch('/api/marks');
+            const marksPayload = normalizeMarksPayload(await marksRes.json());
+            globalMarks = marksPayload.marks;
+            globalRaceMeta = marksPayload.raceMeta;
+            globalMarksVersion = marksPayload.version;
+        }
         await refreshDataAndUI();
         switchMainTab(targetDate);
     } catch (err) {
@@ -2339,19 +2413,30 @@ async function triggerScrape(mode) {
     
     // Start pinging the Python server for console text every 500 milliseconds
     logInterval = setInterval(fetchLogs, 500);
-    
-    await fetch('/api/scrape', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({mode: mode})
-    });
-    
-    // The scrape is completely finished!
-    clearInterval(logInterval);
-    await fetchLogs(); // Grab any final lines
-    
-    document.getElementById('btn-new-race').disabled = false;
-    document.getElementById('btn-all-race').disabled = false;
-    loadRaces(); 
+
+    try {
+        const scrapeRes = await fetch('/api/scrape', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({mode: mode})
+        });
+        const scrapeData = await scrapeRes.json().catch(() => ({}));
+        if (!scrapeRes.ok) {
+            throw new Error(scrapeData.detail || scrapeData.message || `HTTP ${scrapeRes.status}`);
+        }
+
+        await fetchLogs(); // Grab any final lines
+        await loadRaces();
+
+        if (Number(scrapeData.cached_races || 0) === 0) {
+            alert('Scrape completed but cached 0 races. This usually means no races matched the current discovery window. Try Full Re-Scrape and check scrape console logs.');
+        }
+    } catch (err) {
+        alert(`Scrape failed: ${err.message}`);
+    } finally {
+        clearInterval(logInterval);
+        document.getElementById('btn-new-race').disabled = false;
+        document.getElementById('btn-all-race').disabled = false;
+    }
 }
 
 async function fetchLogs() {
@@ -2945,7 +3030,7 @@ function renderOreProSyncPayload(payload) {
     } else {
         const accountLoggedIn = payload?.debug?.accountLoggedIn;
         const hint = accountLoggedIn === false
-            ? 'No personal bet cards detected because mydata login was not confirmed for this cookie (nkauth alone may be insufficient).'
+            ? 'No personal bet cards detected because mydata login was not confirmed.'
             : 'No personal bet cards were detected for this sync/day.';
         mySummaryHtml = `<div class="orepro-sync-title">My Bets Summary</div><div class="orepro-sync-list">${escapeHtml(hint)}</div>`;
     }
@@ -2994,68 +3079,22 @@ function updateOreProSyncDateDisplay() {
 async function loadOreProSessionStatus() {
     updateOreProSyncDateDisplay();
     try {
-        const [sessionRes, lastRes, historyRes] = await Promise.all([
-            fetch('/api/orepro/session'),
+        const [lastRes, historyRes] = await Promise.all([
             fetch('/api/orepro/results/last'),
             fetch('/api/orepro/results/history'),
         ]);
-        const session = await sessionRes.json();
         const last = await lastRes.json();
         const history = await historyRes.json();
 
         const meta = document.getElementById('orepro-sync-meta');
         if (meta) {
-            if (session.configured) {
-                const stamp = session.updatedAt ? ` (updated ${escapeHtml(session.updatedAt)})` : '';
-                meta.textContent = `Cookie saved: ${session.masked || 'set'}${stamp}`;
-            } else {
-                meta.textContent = 'No cookie saved yet.';
-            }
+            meta.textContent = 'Cookie storage is disabled. Sync uses public OrePro endpoints/profile ID.';
         }
 
         renderOreProSyncPayload(last || {});
         renderOreProHistorySummary(last?.historySummary || history || {});
     } catch (err) {
         setOreProSessionStatus(`Failed loading OrePro sync state: ${err?.message || err}`, 'warn');
-    }
-}
-
-async function saveOreProSessionCookie() {
-    const input = document.getElementById('orepro-nkauth-input');
-    const value = String(input?.value || '').trim();
-    if (!value) {
-        setOreProSessionStatus('Paste your current nkauth cookie value first.', 'warn');
-        return;
-    }
-
-    try {
-        const res = await fetch('/api/orepro/session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ nkauth: value }),
-        });
-        const data = await res.json();
-        if (data.status !== 'success') {
-            throw new Error(data.message || 'Failed to save cookie');
-        }
-        if (input) input.value = '';
-        const msg = data.stripped
-            ? 'Cookie saved (non-ASCII characters were stripped — make sure you copied only the cookie value).'
-            : 'nkauth cookie saved. You can now sync post-race results.';
-        setOreProSessionStatus(msg, data.stripped ? 'warn' : 'ok');
-        await loadOreProSessionStatus();
-    } catch (err) {
-        setOreProSessionStatus(`Could not save nkauth cookie: ${err?.message || err}`, 'error');
-    }
-}
-
-async function clearOreProSessionCookie() {
-    try {
-        await fetch('/api/orepro/session/clear', { method: 'POST' });
-        setOreProSessionStatus('Stored nkauth cookie cleared.', 'warn');
-        await loadOreProSessionStatus();
-    } catch (err) {
-        setOreProSessionStatus(`Could not clear nkauth cookie: ${err?.message || err}`, 'error');
     }
 }
 

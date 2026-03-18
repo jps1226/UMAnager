@@ -4,11 +4,22 @@ import datetime
 import os
 from pathlib import Path
 import shutil
+import time
 from typing import Optional
 import zipfile
 from pydantic import BaseModel
 
 import config
+from data_manager import clear_horse_runtime_cache
+from storage import (
+    build_legacy_export_payloads,
+    clear_race_cache,
+    count_horse_cache_entries,
+    clear_horse_cache_entries,
+    dispose_storage_connections,
+    import_legacy_storage,
+    init_storage_foundation,
+)
 
 router = APIRouter(tags=["maintenance"])
 
@@ -24,10 +35,8 @@ class RestoreBackupPayload(BaseModel):
     create_safety_backup: bool = True
 
 
-def _iter_data_files():
-    if not DATA_DIR.exists() or not DATA_DIR.is_dir():
-        return []
-    return [p for p in DATA_DIR.rglob("*") if p.is_file()]
+class LegacyImportPayload(BaseModel):
+    overwrite_existing: bool = False
 
 
 def _has_data_files() -> bool:
@@ -77,6 +86,7 @@ def _clear_data_dir():
 
 @router.post("/api/cache/clear")
 def clear_cache():
+    clear_race_cache()
     if os.path.exists(CACHE_FILE):
         os.remove(CACHE_FILE)
     return {"status": "success"}
@@ -84,9 +94,25 @@ def clear_cache():
 
 @router.post("/api/dict/wipe")
 def wipe_dict():
+    runtime_cleared = clear_horse_runtime_cache()
+    db_cleared = count_horse_cache_entries()
+    clear_horse_cache_entries()
+    legacy_file_deleted = False
     if os.path.exists(HORSE_DICT_FILE):
         os.remove(HORSE_DICT_FILE)
-    return {"status": "success"}
+        legacy_file_deleted = True
+    return {
+        "status": "success",
+        "message": (
+            "Translation memory cleared. Existing loaded race cards may still show prior translated names "
+            "until races are refreshed/re-scraped."
+        ),
+        "cleared": {
+            "runtimeEntries": runtime_cleared,
+            "dbEntries": db_cleared,
+            "legacyFileDeleted": legacy_file_deleted,
+        },
+    }
 
 
 @router.post("/api/data/backup")
@@ -97,6 +123,36 @@ def create_data_backup():
         "status": "success",
         "filename": backup_name,
         "download_url": f"/api/data/backup/{backup_name}",
+    }
+
+
+@router.post("/api/data/legacy/export")
+def export_legacy_bundle():
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    bundle_name = f"umanager_legacy_export_{stamp}.zip"
+    bundle_path = BACKUP_DIR / bundle_name
+
+    payloads = build_legacy_export_payloads()
+    with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for relative_path, content_bytes in payloads.items():
+            zf.writestr(relative_path, content_bytes)
+
+    return {
+        "status": "success",
+        "filename": bundle_name,
+        "download_url": f"/api/data/backup/{bundle_name}",
+        "files": sorted(payloads.keys()),
+    }
+
+
+@router.post("/api/data/legacy/import")
+def import_legacy_bundle(payload: LegacyImportPayload):
+    results = import_legacy_storage(overwrite_existing=payload.overwrite_existing)
+    return {
+        "status": "success",
+        "overwrite_existing": payload.overwrite_existing,
+        "imported": results,
     }
 
 
@@ -138,7 +194,26 @@ def restore_data_backup(payload: RestoreBackupPayload):
     if payload.create_safety_backup and _has_data_files():
         safety_backup_name = _create_backup_archive("umanager_safety_pre_restore")
 
-    _clear_data_dir()
+    # Ensure SQLite files are not held open while data/ is replaced.
+    dispose_storage_connections()
+    clear_error = None
+    for _ in range(3):
+        try:
+            _clear_data_dir()
+            clear_error = None
+            break
+        except PermissionError as exc:
+            clear_error = exc
+            dispose_storage_connections()
+            time.sleep(0.25)
+    if clear_error is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Could not restore because data files are locked by another process "
+                "(likely another UMAnager/server instance). Close other instances and retry."
+            ),
+        )
 
     extracted_files = 0
     with zipfile.ZipFile(target, "r") as zf:
@@ -153,6 +228,9 @@ def restore_data_backup(payload: RestoreBackupPayload):
             zf.extract(member, path=DATA_DIR.parent)
             if not member.endswith("/"):
                 extracted_files += 1
+
+    # Reinitialize DB engine/schema after restore so the app can continue safely.
+    init_storage_foundation()
 
     return {
         "status": "success",

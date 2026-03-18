@@ -7,12 +7,18 @@ from pydantic import BaseModel
 
 import config
 import data_manager
-from storage import atomic_write_text, load_app_config, load_text_file, save_app_config
+from storage import (
+    _parse_horse_lines_from_text,
+    add_horse_to_list,
+    horse_ids_to_text,
+    load_app_config,
+    load_horse_list,
+    save_app_config,
+    save_horse_list,
+)
 
 router = APIRouter(tags=["lists-config"])
 
-TRACKING_FILE = config.TRACKING_FILE
-WATCHLIST_FILE = config.WATCHLIST_FILE
 
 
 class ListsPayload(BaseModel):
@@ -46,15 +52,15 @@ def validate_url(url_str):
 @router.get("/api/lists")
 def get_lists():
     return {
-        "favorites": load_text_file(TRACKING_FILE),
-        "watchlist": load_text_file(WATCHLIST_FILE),
+        "favorites": horse_ids_to_text(load_horse_list("favorites")),
+        "watchlist": horse_ids_to_text(load_horse_list("watchlist")),
     }
 
 
 @router.post("/api/lists")
 async def save_lists(payload: ListsPayload):
-    atomic_write_text(TRACKING_FILE, payload.favorites)
-    atomic_write_text(WATCHLIST_FILE, payload.watchlist)
+    save_horse_list("favorites", _parse_horse_lines_from_text(payload.favorites))
+    save_horse_list("watchlist", _parse_horse_lines_from_text(payload.watchlist))
     return {"status": "success"}
 
 
@@ -77,22 +83,16 @@ async def snipe_horse(payload: SnipeRequest):
     else:
         return {"status": "error", "message": "Either URL or ID must be provided"}
 
-    current_favorites = load_text_file(TRACKING_FILE)
-    current_watchlist = load_text_file(WATCHLIST_FILE)
+    tracked_ids = {h for h, _n in load_horse_list("favorites")}
+    watchlist_ids = {h for h, _n in load_horse_list("watchlist")}
 
-    if new_id in current_favorites or new_id in current_watchlist:
+    if new_id in tracked_ids or new_id in watchlist_ids:
         return {"status": "error", "message": "ID already tracked."}
-
-    target_f = TRACKING_FILE if list_type == "favorites" else WATCHLIST_FILE
-    current_c = load_text_file(target_f)
 
     try:
         h_data = data_manager.get_horse_data(new_id, "Unknown")
         h_name = h_data.get("name", "Unknown")
-
-        prefix = "\n" if current_c and not current_c.endswith("\n") else ""
-        with open(target_f, "a", encoding="utf-8") as f:
-            f.write(f"{prefix}{new_id} # {h_name}\n")
+        add_horse_to_list(list_type, new_id, h_name)
         return {"status": "success", "message": f"Added {h_name}!"}
     except Exception:
         return {"status": "error", "message": "Failed to add horse"}

@@ -2,15 +2,13 @@ import datetime
 import json
 import logging
 import re
-from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-import config
-from storage import atomic_write_json, safe_read_json
+from storage import orepro_get_history_summary, orepro_get_last_sync_payload, orepro_upsert_history_from_payload
 
 router = APIRouter(tags=["orepro"])
 logger = logging.getLogger(__name__)
@@ -22,48 +20,12 @@ GOODS_LIST_API_URL = "https://orepro.netkeiba.com/api/api_get_goods_list.html"
 MYTOP_URL = "https://orepro.netkeiba.com/mydata/mytop.html"
 YOSOKA_KAISAI_NAVI_URL = "https://orepro.netkeiba.com/mydata/api_get_yosoka_kaisai_navi.html"
 MYDATA_API_URL = "https://orepro.netkeiba.com/mydata/api_get_mydata.html"
-SESSION_FILE = Path(config.DATA_DIR) / "orepro_session.json"
-LAST_SYNC_FILE = Path(config.DATA_DIR) / "orepro_last_sync.json"
-HISTORY_FILE = Path(config.DATA_DIR) / "orepro_results_history.json"
-
-
-class OreProSessionPayload(BaseModel):
-    nkauth: str = ""
 
 
 class OreProSyncRequest(BaseModel):
     kaisai_date: str = ""   # YYYYMMDD, e.g. "20260314"
     kaisai_id: str = ""     # optional venue ID, e.g. "2026060205"
     yosoka_id: str = ""     # optional public OrePro profile ID (e.g. 20021241)
-
-
-def _read_session():
-    return safe_read_json(SESSION_FILE, {"nkauth": "", "updatedAt": ""})
-
-
-def _read_history():
-    history = safe_read_json(HISTORY_FILE, {"entries": []})
-    entries = history.get("entries", []) if isinstance(history, dict) else []
-    entries = entries if isinstance(entries, list) else []
-    if entries:
-        return entries
-
-    last_payload = safe_read_json(LAST_SYNC_FILE, {})
-    seeded_entry = _build_history_entry(last_payload)
-    if seeded_entry is None:
-        return []
-
-    atomic_write_json(HISTORY_FILE, {"entries": [seeded_entry]})
-    return [seeded_entry]
-
-
-def _mask_cookie(value: str):
-    if not value:
-        return ""
-    value = str(value)
-    if len(value) <= 8:
-        return "*" * len(value)
-    return f"{value[:4]}...{value[-4:]}"
 
 
 def _extract_summary_lines(text: str):
@@ -133,110 +95,6 @@ def _format_yen(value):
     return f"{sign}{value:,}円"
 
 
-def _build_history_entry(payload):
-    if not isinstance(payload, dict):
-        return None
-    summary = payload.get("myBetSummary") or {}
-    date_key = str(payload.get("kaisai_date") or "").strip()
-    profile_id = str(((payload.get("debug") or {}).get("yosokaIdUsed") or payload.get("memberId") or "")).strip()
-    races = int(summary.get("races") or 0)
-    if not date_key or not profile_id or races <= 0:
-        return None
-
-    purchase = int(summary.get("purchase") or 0)
-    payout = int(summary.get("payout") or 0)
-    profit = int(summary.get("profit") or 0)
-    return {
-        "date": date_key,
-        "profileId": profile_id,
-        "username": str(payload.get("username") or ((payload.get("debug") or {}).get("username") or "")).strip(),
-        "kaisaiId": str(payload.get("kaisai_id") or "").strip(),
-        "resolvedKaisaiIds": payload.get("resolvedKaisaiIds") or [],
-        "isPartial": bool(payload.get("kaisai_id")),
-        "races": races,
-        "purchase": purchase,
-        "purchaseLabel": _format_yen(purchase),
-        "payout": payout,
-        "payoutLabel": _format_yen(payout),
-        "profit": profit,
-        "profitLabel": _format_yen(profit),
-        "fetchedAt": str(payload.get("fetchedAt") or ""),
-        "myRaceResults": payload.get("myRaceResults") or [],
-    }
-
-
-def _should_replace_history_entry(existing, incoming):
-    if not isinstance(existing, dict):
-        return True
-    existing_partial = bool(existing.get("isPartial"))
-    incoming_partial = bool(incoming.get("isPartial"))
-    if existing_partial and not incoming_partial:
-        return True
-    if not existing_partial and incoming_partial:
-        return False
-
-    existing_races = int(existing.get("races") or 0)
-    incoming_races = int(incoming.get("races") or 0)
-    if incoming_races != existing_races:
-        return incoming_races > existing_races
-
-    return str(incoming.get("fetchedAt") or "") >= str(existing.get("fetchedAt") or "")
-
-
-def _summarize_history(entries):
-    valid_entries = [entry for entry in entries if isinstance(entry, dict)]
-    sorted_entries = sorted(valid_entries, key=lambda item: (str(item.get("date") or ""), str(item.get("fetchedAt") or "")), reverse=True)
-    purchase = sum(int(entry.get("purchase") or 0) for entry in sorted_entries)
-    payout = sum(int(entry.get("payout") or 0) for entry in sorted_entries)
-    profit = sum(int(entry.get("profit") or 0) for entry in sorted_entries)
-    races = sum(int(entry.get("races") or 0) for entry in sorted_entries)
-    roi_pct = round((payout / purchase) * 100, 1) if purchase > 0 else 0.0
-    best_day = max(sorted_entries, key=lambda entry: int(entry.get("profit") or 0), default=None)
-    worst_day = min(sorted_entries, key=lambda entry: int(entry.get("profit") or 0), default=None)
-
-    return {
-        "status": "success",
-        "entries": sorted_entries,
-        "totals": {
-            "days": len(sorted_entries),
-            "races": races,
-            "purchase": purchase,
-            "purchaseLabel": _format_yen(purchase),
-            "payout": payout,
-            "payoutLabel": _format_yen(payout),
-            "profit": profit,
-            "profitLabel": _format_yen(profit),
-            "roiPct": roi_pct,
-            "bestDay": best_day,
-            "worstDay": worst_day,
-            "lastUpdatedAt": sorted_entries[0].get("fetchedAt", "") if sorted_entries else "",
-        },
-    }
-
-
-def _upsert_history_from_payload(payload):
-    history_entry = _build_history_entry(payload)
-    current_entries = _read_history()
-    if history_entry is None:
-        return _summarize_history(current_entries)
-
-    match_index = None
-    for index, entry in enumerate(current_entries):
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("date") or "") == history_entry["date"] and str(entry.get("profileId") or "") == history_entry["profileId"]:
-            match_index = index
-            break
-
-    if match_index is None:
-        current_entries.append(history_entry)
-    elif _should_replace_history_entry(current_entries[match_index], history_entry):
-        current_entries[match_index] = history_entry
-
-    atomic_write_json(HISTORY_FILE, {"entries": current_entries})
-    return _summarize_history(current_entries)
-
-
 def _decode_goods_list_payload(raw_text: str):
     txt = (raw_text or "").strip()
     # Expected wrapper: ("...escaped html...")
@@ -286,76 +144,22 @@ def _extract_member_id_from_race_page_html(html_text: str):
     return m.group(1) if m else ""
 
 
-@router.get("/api/orepro/session")
-def get_orepro_session():
-    session = _read_session()
-    nkauth = str(session.get("nkauth", "")).strip()
-    return {
-        "configured": bool(nkauth),
-        "masked": _mask_cookie(nkauth),
-        "updatedAt": session.get("updatedAt", ""),
-    }
-
-
-@router.post("/api/orepro/session")
-def save_orepro_session(payload: OreProSessionPayload):
-    nkauth = str(payload.nkauth or "").strip()
-    if not nkauth:
-        return {"status": "error", "message": "nkauth is required"}
-
-    # Strip any non-ASCII characters — cookie header values must be latin-1 safe.
-    # Non-ASCII can sneak in when copying from Japanese browser pages.
-    sanitized = nkauth.encode("ascii", errors="ignore").decode("ascii").strip()
-    if not sanitized:
-        return {"status": "error", "message": "Cookie value contained only non-ASCII characters. Copy just the cookie value (alphanumeric/symbols only)."}
-    if sanitized != nkauth:
-        logger.warning("nkauth contained non-ASCII characters that were stripped.")
-
-    atomic_write_json(
-        SESSION_FILE,
-        {
-            "nkauth": sanitized,
-            "updatedAt": datetime.datetime.now().isoformat(timespec="seconds"),
-        },
-    )
-    return {"status": "success", "masked": _mask_cookie(sanitized), "stripped": sanitized != nkauth}
-
-
-@router.post("/api/orepro/session/clear")
-def clear_orepro_session():
-    atomic_write_json(SESSION_FILE, {"nkauth": "", "updatedAt": ""})
-    return {"status": "success"}
-
-
 @router.post("/api/orepro/results/sync")
 def sync_orepro_results(req: OreProSyncRequest = None):
     if req is None:
         req = OreProSyncRequest()
-    session = _read_session()
-    nkauth = str(session.get("nkauth", "")).strip()
-    # Ensure the stored value is still ASCII-safe (guard against old bad values)
-    nkauth = nkauth.encode("ascii", errors="ignore").decode("ascii").strip()
-    if not nkauth:
-        return {
-            "status": "error",
-            "loggedIn": False,
-            "message": "No nkauth configured. Save your cookie first.",
-            "raceIds": [],
-            "betData": {},
-            "summaryLines": [],
-            "yenValues": [],
-        }
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Referer": OREPRO_URL,
     }
-    cookies = {"nkauth": nkauth}
+    # Public profile endpoints can be read without storing a user cookie.
+    cookies = {}
     logger.warning(
-        "OrePro sync start: date=%s kaisai_id=%s cookie=%s",
+        "OrePro sync start: date=%s kaisai_id=%s yosoka_id=%s",
         req.kaisai_date or "(none)",
         req.kaisai_id or "(auto)",
-        _mask_cookie(nkauth),
+        req.yosoka_id or "(auto)",
     )
 
     # Build URL params for the specific date/venue if provided
@@ -399,7 +203,7 @@ def sync_orepro_results(req: OreProSyncRequest = None):
         username = raw_nick.removesuffix("さん").strip()
     member_id = _extract_member_id_from_race_page_html(resp.text or "")
 
-    # Check whether the same cookie is recognized as logged in on mydata pages.
+    # Check whether mydata pages indicate a logged-in account.
     account_logged_in = None
     account_member_rank = ""
     try:
@@ -809,8 +613,8 @@ def sync_orepro_results(req: OreProSyncRequest = None):
     }
     if payload["myBetSummary"]["races"] == 0 and account_logged_in is False:
         payload["message"] = (
-            "No personal bet cards found: mydata account appears not logged in with current cookie. "
-            "nkauth can load race pages but not your personal bet feed."
+            "No personal bet cards found: mydata account does not appear logged in. "
+            "Open OrePro and sign in, then sync again."
         )
     elif payload["myBetSummary"]["races"] == 0:
         payload["message"] = (
@@ -827,25 +631,15 @@ def sync_orepro_results(req: OreProSyncRequest = None):
         member_id or "(empty)",
         len(my_race_results),
     )
-    payload["historySummary"] = _upsert_history_from_payload(payload)
-    atomic_write_json(LAST_SYNC_FILE, payload)
+    payload["historySummary"] = orepro_upsert_history_from_payload(payload)
     return payload
 
 
 @router.get("/api/orepro/results/last")
 def get_last_orepro_sync():
-    return safe_read_json(
-        LAST_SYNC_FILE,
-        {
-            "status": "idle",
-            "loggedIn": False,
-            "message": "No OrePro sync has been run yet.",
-            "summaryLines": [],
-            "yenValues": [],
-        },
-    )
+    return orepro_get_last_sync_payload()
 
 
 @router.get("/api/orepro/results/history")
 def get_orepro_history():
-    return _summarize_history(_read_history())
+    return orepro_get_history_summary()

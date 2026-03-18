@@ -14,9 +14,11 @@ watchlist_horses.txt
 # Ignore generated data backups
 backups/
 data/*.zip
+data/*.sqlite3
 
 # Ignore environment variables or virtual environments (if you use them)
 .env
+.venv/
 venv/
 env/
 
@@ -33,3 +35,9 @@ tmp_*
 orepro profile example.html
 orepro sample.html
 orepro single race sample.html
+
+# Ignore generated compendium folders
+compendium_txt/
+project_full_contents.md
+generate_compendium.ps1
+generate_compendium_folder.ps1

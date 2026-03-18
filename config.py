@@ -8,6 +8,8 @@ from pathlib import Path
 
 # File paths
 DATA_DIR = Path(__file__).parent / "data"
+DB_FILE = DATA_DIR / "umanager.sqlite3"
+DB_URL = f"sqlite:///{DB_FILE.as_posix()}"
 CACHE_FILE = DATA_DIR / "race_cache.pkl"
 MARKS_FILE = DATA_DIR / "saved_marks.json"
 TRACKING_FILE = DATA_DIR / "tracked_horses.txt"
