@@ -60,6 +60,8 @@
                     <button class="btn-full btn-danger btn-micro" onclick="triggerPost('/api/dict/wipe')">🚨 Reset Translation Memory</button>
                     <button class="btn-full btn-micro" onclick="createDataBackup()">💾 Backup Data Folder</button>
                     <button class="btn-full btn-micro" onclick="restoreLatestBackup()">♻️ Restore Latest Backup</button>
+                    <button class="btn-full btn-micro" onclick="exportLegacyBundle()">📦 Export Legacy Recovery Bundle</button>
+                    <button class="btn-full btn-danger btn-micro" onclick="importLegacyBundle()">📥 Import Legacy Files To DB</button>
 
                     <div class="tool-block">
                         <label class="tool-block-label">Import Results For Day</label>
@@ -298,6 +300,6 @@
     </div>
 </div>
 </div>
-<script src="/static/script.js"></script>
+<script src="/static/script.js?v=20260318-1"></script>
 </body>
 </html>

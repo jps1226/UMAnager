@@ -2,7 +2,7 @@
 
 UMAnager is a local FastAPI dashboard for tracking Japanese horse racing cards, pedigree angles, manual marks, and lightweight race-day workflow data from Netkeiba.
 
-It is built as a personal tool first: scrape upcoming cards, keep pedigree watchlists, mark runners quickly, import completed results for a day, and keep everything in local files under `data/`.
+It is built as a personal tool first: scrape upcoming cards, keep pedigree watchlists, mark runners quickly, import completed results for a day, and persist app state locally under `data/` with SQLite-backed storage.
 
 ## What It Does
 
@@ -28,18 +28,17 @@ It is built as a personal tool first: scrape upcoming cards, keep pedigree watch
 
 ## Storage Model
 
-UMAnager is local-file based. It does not use a database.
+UMAnager now uses a local SQLite database as the primary persistence layer.
 
-Important files under `data/`:
+Primary runtime state under `data/`:
 
-- `race_cache.pkl`: cached race cards and entry data
-- `saved_marks.json`: saved per-horse marks
-- `tracked_horses.txt`: Favorites list
-- `watchlist_horses.txt`: Watchlist list
-- `horse_names.json`: cached horse/pedigree translation data
-- `config.json`: UI and behavior settings
+- `umanager.sqlite3`: SQLite database for config, lists, marks, OrePro history, horse cache, and race cache
 
-Backups are written to `backups/`.
+Supporting storage behavior:
+
+- Backups are written to `backups/` and snapshot the local `data/` directory.
+- Legacy JSON/TXT/PKL files are no longer read automatically during normal app use.
+- Recovery tooling is available in-app to export a legacy-format bundle or import old legacy files into SQLite explicitly when needed.
 
 ## Tech Stack
 

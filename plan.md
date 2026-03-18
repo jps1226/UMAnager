@@ -70,12 +70,13 @@ Replace the current mixed file-based persistence model with a local SQLite-backe
 - 2026-03-17 — Step 9 bugfix: `Reset Translation Memory` now clears runtime in-memory horse cache (`data_manager.HORSE_CACHE`) in addition to DB/file storage, so reset takes effect immediately without requiring server restart.
 - 2026-03-17 — Step 9 UX clarification fix (committed): `POST /api/dict/wipe` now returns explicit cleared counts (`runtimeEntries`, `dbEntries`, legacy file flag) and a message clarifying that already-loaded race cards may still display previously translated names until race data is refreshed/re-scraped; UI now shows this result in an alert.
 - 2026-03-17 — Step 10 complete: Replaced `race_cache.pkl` as the primary persistence path with DB-backed race cache repositories in `storage.py` (`load_race_cache`, `save_race_cache`, `clear_race_cache`) plus one-time import from legacy pickle when DB `races` is empty. Updated `data_manager.py`, `routers/races.py`, and `routers/maintenance.py` to use DB race cache reads/writes and DB-backed cache clear while preserving the existing API payload shape. Added scrape visibility/reliability improvements: `routers/scrape.py` now returns `cached_races`, and `static/script.js` surfaces scrape failures, awaits reload, and warns when scrape caches zero races.
+- 2026-03-18 — Step 11 complete: Removed automatic legacy fallback reads from DB-backed runtime paths in `storage.py` so SQLite is the sole source of truth during normal app operation. Added explicit maintenance recovery tooling instead: `POST /api/data/legacy/export` builds a legacy-format recovery zip from current DB state, and `POST /api/data/legacy/import` imports deprecated JSON/TXT/PKL files from `data/` into SQLite on demand. Added matching UI buttons in `index.html`/`static/script.js`, fixed stale-script caching with a versioned script URL, corrected the import control-flow bug, and updated `readme.md` to describe SQLite-backed storage accurately.
 
 ---
 
 **Current Resume Point**
-- Next implementation target: **Step 10** (replace `race_cache.pkl` with relational `races` + `race_entries` storage and migrate read/write codepaths).
-- Testing priority before Step 10 expansion: validate horse-name/pedigree cache behavior fully from DB-backed storage.
+- Next implementation target: **Step 12** (final phased API/regression verification and any last documentation cleanup).
+- Testing priority before push: run a short final regression pass across config, lists, marks, race cache, backup/restore, and OrePro history.
 
 **Backup Testing Playbook (App-only)**
 1. Open the app and navigate to **Maintenance**.

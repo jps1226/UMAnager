@@ -497,7 +497,6 @@ def _import_legacy_race_cache_if_needed(session):
 
 def load_race_cache():
     with db_session_scope() as session:
-        _import_legacy_race_cache_if_needed(session)
         race_rows = session.execute(races_table.select()).all()
         if not race_rows:
             return []
@@ -566,6 +565,58 @@ def clear_race_cache():
         session.execute(races_table.delete())
 
 
+def _load_legacy_marks_store_from_file(path):
+    raw = safe_read_json(path, {})
+    if not raw:
+        return {"version": 2, "marks": {}, "raceMeta": {}}
+
+    is_versioned = any(k in raw for k in ("version", "marks", "raceMeta"))
+    raw_marks = raw.get("marks", {}) if is_versioned else raw
+    raw_meta = raw.get("raceMeta", {}) if is_versioned else {}
+
+    marks = {str(k).strip(): str(v).strip() for k, v in raw_marks.items() if k and v}
+    race_meta = {}
+    for race_id, meta in (raw_meta.items() if isinstance(raw_meta, dict) else []):
+        if not isinstance(meta, dict):
+            continue
+        race_meta[str(race_id).strip()] = {
+            "savedAt": str(meta.get("savedAt") or "").strip() or None,
+            "updatedAt": str(meta.get("updatedAt") or "").strip() or None,
+            "markSource": str(meta.get("markSource") or "").strip() or None,
+            "strategySnapshot": meta.get("strategySnapshot") if isinstance(meta.get("strategySnapshot"), dict) else {},
+            "manualAdjustments": int(meta.get("manualAdjustments") or 0),
+            "lockStateAtSave": meta.get("lockStateAtSave"),
+            "activeSymbols": meta.get("activeSymbols") if isinstance(meta.get("activeSymbols"), list) else [],
+        }
+    return {"version": 2, "marks": marks, "raceMeta": race_meta}
+
+
+def _import_legacy_orepro_files_if_present(session):
+    history_path = config.DATA_DIR / "orepro_results_history.json"
+    last_sync_path = config.DATA_DIR / "orepro_last_sync.json"
+
+    history = safe_read_json(history_path, {"entries": []})
+    entries = history.get("entries", []) if isinstance(history, dict) else []
+    if not isinstance(entries, list):
+        entries = []
+
+    imported = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        _orepro_write_history_entry(session, entry)
+        imported += 1
+
+    if imported == 0:
+        last_payload = safe_read_json(last_sync_path, {})
+        seeded_entry = _orepro_build_history_entry_from_payload(last_payload)
+        if seeded_entry is not None:
+            _orepro_write_history_entry(session, seeded_entry)
+            imported = 1
+
+    return imported
+
+
 def _merge_dicts(defaults, override):
     if not isinstance(defaults, dict):
         return copy.deepcopy(override) if override is not None else copy.deepcopy(defaults)
@@ -594,7 +645,7 @@ def _upsert_app_config(session, config_data):
 
 
 def load_app_config(path=None):
-    """Load app config from DB, with a one-time import from config.json on first run.
+    """Load app config from DB.
     The optional `path` argument is accepted for backward compatibility."""
     with db_session_scope() as session:
         row = session.execute(
@@ -602,13 +653,7 @@ def load_app_config(path=None):
         ).first()
         if row is not None:
             return _merge_dicts(APP_CONFIG_DEFAULTS, row.config_value)
-        # One-time import from legacy JSON file
-        json_path = path or (config.DATA_DIR / "config.json")
-        stored = safe_read_json(json_path, {})
-        merged = _merge_dicts(APP_CONFIG_DEFAULTS, stored)
-        _upsert_app_config(session, merged)
-        logger.info("Imported app config from %s into DB", json_path)
-        return merged
+        return copy.deepcopy(APP_CONFIG_DEFAULTS)
 
 
 def save_app_config(config_data, path=None):
@@ -641,28 +686,14 @@ def _parse_horse_ids_from_text(raw_text):
 
 def load_horse_list(list_type):
     """Load (horse_id, display_name) pairs for 'favorites' or 'watchlist' from DB.
-    Performs a one-time import from the legacy .txt file when the table is empty.
     Returns an ordered list of (horse_id, display_name) tuples."""
     if list_type == "favorites":
         table = tracked_horses_table
-        txt_path = config.TRACKING_FILE
     else:
         table = watchlist_horses_table
-        txt_path = config.WATCHLIST_FILE
     with db_session_scope() as session:
         rows = session.execute(table.select().order_by(table.c.added_at)).all()
-        if rows:
-            return [(row.horse_id, getattr(row, 'display_name', '')) for row in rows]
-        # One-time import from legacy txt file
-        raw = load_text_file(txt_path)
-        pairs = _parse_horse_lines_from_text(raw)
-        if pairs:
-            session.execute(
-                table.insert(),
-                [{"horse_id": h, "display_name": n} for h, n in pairs],
-            )
-            logger.info("Imported %d horse IDs into %s list from %s", len(pairs), list_type, txt_path)
-        return pairs
+        return [(row.horse_id, getattr(row, 'display_name', '')) for row in rows]
 
 
 def save_horse_list(list_type, horse_ids):
@@ -789,30 +820,8 @@ def _upsert_horse_cache_entry(session, horse_id, entry):
     session.execute(stmt)
 
 
-def _import_legacy_horse_cache_if_needed(session):
-    existing_count = session.execute(text("SELECT COUNT(1) FROM horses")).scalar_one()
-    if int(existing_count or 0) > 0:
-        return
-
-    legacy_data = safe_read_json(config.HORSE_DICT_FILE, {})
-    if not isinstance(legacy_data, dict) or not legacy_data:
-        return
-
-    imported = 0
-    for horse_id, payload in legacy_data.items():
-        clean_horse_id = str(horse_id or "").replace(".0", "").strip()
-        if not clean_horse_id:
-            continue
-        _upsert_horse_cache_entry(session, clean_horse_id, payload)
-        imported += 1
-
-    if imported:
-        logger.info("Imported %d horse cache entries from %s", imported, config.HORSE_DICT_FILE)
-
-
 def load_horse_cache_map():
     with db_session_scope() as session:
-        _import_legacy_horse_cache_if_needed(session)
         rows = session.execute(horses_table.select()).all()
         return {row.horse_id: _horse_cache_row_to_entry(row) for row in rows if row.horse_id}
 
@@ -854,8 +863,7 @@ def delete_horse_cache_entries_by_ids(horse_ids):
 # --- Marks and race metadata repositories ---
 
 def load_marks_store():
-    """Load the full marks store from DB in the canonical {version, marks, raceMeta} shape.
-    Performs a one-time import from saved_marks.json on first run."""
+    """Load the full marks store from DB in the canonical {version, marks, raceMeta} shape."""
     with db_session_scope() as session:
         mark_rows = session.execute(race_marks_table.select()).all()
         meta_rows = session.execute(race_metadata_table.select()).all()
@@ -875,34 +883,7 @@ def load_marks_store():
                 }
             return {"version": 2, "marks": marks, "raceMeta": race_meta}
 
-        # One-time import from legacy JSON file — parse without importing races.py
-        raw = safe_read_json(config.MARKS_FILE, {})
-        if not raw:
-            return {"version": 2, "marks": {}, "raceMeta": {}}
-
-        is_versioned = any(k in raw for k in ("version", "marks", "raceMeta"))
-        raw_marks = raw.get("marks", {}) if is_versioned else raw
-        raw_meta = raw.get("raceMeta", {}) if is_versioned else {}
-
-        marks = {str(k).strip(): str(v).strip() for k, v in raw_marks.items() if k and v}
-        race_meta = {}
-        for race_id, meta in (raw_meta.items() if isinstance(raw_meta, dict) else []):
-            if not isinstance(meta, dict):
-                continue
-            race_meta[str(race_id).strip()] = {
-                "savedAt": str(meta.get("savedAt") or "").strip() or None,
-                "updatedAt": str(meta.get("updatedAt") or "").strip() or None,
-                "markSource": str(meta.get("markSource") or "").strip() or None,
-                "strategySnapshot": meta.get("strategySnapshot") if isinstance(meta.get("strategySnapshot"), dict) else {},
-                "manualAdjustments": int(meta.get("manualAdjustments") or 0),
-                "lockStateAtSave": meta.get("lockStateAtSave"),
-                "activeSymbols": meta.get("activeSymbols") if isinstance(meta.get("activeSymbols"), list) else [],
-            }
-
-        store = {"version": 2, "marks": marks, "raceMeta": race_meta}
-        _write_marks_store_to_db(session, store)
-        logger.info("Imported %d marks and %d raceMeta entries from %s", len(marks), len(race_meta), config.MARKS_FILE)
-        return store
+        return {"version": 2, "marks": {}, "raceMeta": {}}
 
 
 def _write_marks_store_to_db(session, store):
@@ -1214,41 +1195,9 @@ def _load_orepro_history_entries_from_db(session):
     return entries
 
 
-def _import_legacy_orepro_files_if_needed(session):
-    if session.execute(orepro_daily_results_table.select().limit(1)).first() is not None:
-        return
-
-    history_path = config.DATA_DIR / "orepro_results_history.json"
-    last_sync_path = config.DATA_DIR / "orepro_last_sync.json"
-
-    history = safe_read_json(history_path, {"entries": []})
-    entries = history.get("entries", []) if isinstance(history, dict) else []
-    if not isinstance(entries, list):
-        entries = []
-
-    imported = 0
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        _orepro_write_history_entry(session, entry)
-        imported += 1
-
-    # Backfill from last sync file if history file did not exist/was empty.
-    if imported == 0:
-        last_payload = safe_read_json(last_sync_path, {})
-        seeded_entry = _orepro_build_history_entry_from_payload(last_payload)
-        if seeded_entry is not None:
-            _orepro_write_history_entry(session, seeded_entry)
-            imported = 1
-
-    if imported:
-        logger.info("Imported %d OrePro history entries from legacy files", imported)
-
-
 def orepro_upsert_history_from_payload(payload):
     """Upsert one history entry derived from a sync payload, then return summary."""
     with db_session_scope() as session:
-        _import_legacy_orepro_files_if_needed(session)
         entry = _orepro_build_history_entry_from_payload(payload)
         if entry is not None:
             _orepro_write_history_entry(session, entry)
@@ -1258,7 +1207,6 @@ def orepro_upsert_history_from_payload(payload):
 
 def orepro_get_history_summary():
     with db_session_scope() as session:
-        _import_legacy_orepro_files_if_needed(session)
         entries = _load_orepro_history_entries_from_db(session)
     return _orepro_summary_from_entries(entries)
 
@@ -1276,6 +1224,7 @@ def orepro_get_last_sync_payload():
             "yenValues": [],
             "historySummary": history,
         }
+
 
     last = entries[0]
     return {
@@ -1303,3 +1252,105 @@ def orepro_get_last_sync_payload():
         "historySummary": history,
         "debug": {"yosokaIdUsed": last.get("profileId", "")},
     }
+
+
+def import_legacy_storage(overwrite_existing=False):
+    """Explicitly import deprecated file-based storage into SQLite.
+    This is intended for one-off recovery/migration, not normal runtime reads."""
+    results = {
+        "config": False,
+        "favorites": 0,
+        "watchlist": 0,
+        "marks": 0,
+        "raceMeta": 0,
+        "horses": 0,
+        "races": 0,
+        "oreproDays": 0,
+    }
+
+    with db_session_scope() as session:
+        config_payload = safe_read_json(config.DATA_DIR / "config.json", {})
+        has_config = session.execute(
+            app_config_table.select().where(app_config_table.c.config_key == "app_config")
+        ).first() is not None
+        if isinstance(config_payload, dict) and (overwrite_existing or (config_payload and not has_config)):
+            _upsert_app_config(session, _merge_dicts(APP_CONFIG_DEFAULTS, config_payload))
+            results["config"] = True
+
+        tracked_pairs = _parse_horse_lines_from_text(load_text_file(config.TRACKING_FILE))
+        existing_tracked = session.execute(text("SELECT COUNT(1) FROM tracked_horses")).scalar_one()
+        if tracked_pairs and (overwrite_existing or int(existing_tracked or 0) == 0):
+            session.execute(tracked_horses_table.delete())
+            session.execute(tracked_horses_table.insert(), [{"horse_id": h, "display_name": n} for h, n in tracked_pairs])
+            results["favorites"] = len(tracked_pairs)
+
+        watch_pairs = _parse_horse_lines_from_text(load_text_file(config.WATCHLIST_FILE))
+        existing_watch = session.execute(text("SELECT COUNT(1) FROM watchlist_horses")).scalar_one()
+        if watch_pairs and (overwrite_existing or int(existing_watch or 0) == 0):
+            session.execute(watchlist_horses_table.delete())
+            session.execute(watchlist_horses_table.insert(), [{"horse_id": h, "display_name": n} for h, n in watch_pairs])
+            results["watchlist"] = len(watch_pairs)
+
+        marks_store = _load_legacy_marks_store_from_file(config.MARKS_FILE)
+        existing_marks = session.execute(text("SELECT COUNT(1) FROM race_marks")).scalar_one()
+        existing_meta = session.execute(text("SELECT COUNT(1) FROM race_metadata")).scalar_one()
+        if (marks_store["marks"] or marks_store["raceMeta"]) and (
+            overwrite_existing or (int(existing_marks or 0) == 0 and int(existing_meta or 0) == 0)
+        ):
+            _write_marks_store_to_db(session, marks_store)
+            results["marks"] = len(marks_store["marks"])
+            results["raceMeta"] = len(marks_store["raceMeta"])
+
+        horse_cache = safe_read_json(config.HORSE_DICT_FILE, {})
+        existing_horses = session.execute(text("SELECT COUNT(1) FROM horses")).scalar_one()
+        if isinstance(horse_cache, dict) and horse_cache and (overwrite_existing or int(existing_horses or 0) == 0):
+            if overwrite_existing:
+                session.execute(horses_table.delete())
+            imported_horses = 0
+            for horse_id, payload in horse_cache.items():
+                clean_horse_id = str(horse_id or "").replace(".0", "").strip()
+                if not clean_horse_id:
+                    continue
+                _upsert_horse_cache_entry(session, clean_horse_id, payload)
+                imported_horses += 1
+            results["horses"] = imported_horses
+
+        legacy_races = load_pickle(config.CACHE_FILE, [])
+        existing_races = session.execute(text("SELECT COUNT(1) FROM races")).scalar_one()
+        if isinstance(legacy_races, list) and legacy_races and (overwrite_existing or int(existing_races or 0) == 0):
+            _write_race_cache_to_db(session, legacy_races)
+            results["races"] = len(legacy_races)
+
+        existing_orepro = session.execute(text("SELECT COUNT(1) FROM orepro_daily_results")).scalar_one()
+        if overwrite_existing or int(existing_orepro or 0) == 0:
+            if overwrite_existing:
+                session.execute(orepro_race_results_table.delete())
+                session.execute(orepro_daily_results_table.delete())
+                session.execute(orepro_profiles_table.delete())
+            results["oreproDays"] = _import_legacy_orepro_files_if_present(session)
+
+    return results
+
+
+def build_legacy_export_payloads():
+    """Return a mapping of legacy file names to serialized bytes for recovery export."""
+    payloads = {}
+
+    payloads["data/config.json"] = json.dumps(load_app_config(), ensure_ascii=False, indent=4).encode("utf-8")
+    payloads["data/tracked_horses.txt"] = horse_ids_to_text(load_horse_list("favorites")).encode("utf-8")
+    payloads["data/watchlist_horses.txt"] = horse_ids_to_text(load_horse_list("watchlist")).encode("utf-8")
+    payloads["data/saved_marks.json"] = json.dumps(load_marks_store(), ensure_ascii=False, indent=4).encode("utf-8")
+    payloads["data/horse_names.json"] = json.dumps(load_horse_cache_map(), ensure_ascii=False, indent=4).encode("utf-8")
+    payloads["data/race_cache.pkl"] = pickle.dumps(load_race_cache())
+
+    orepro_history = orepro_get_history_summary()
+    payloads["data/orepro_results_history.json"] = json.dumps(
+        {"entries": orepro_history.get("entries", [])}, ensure_ascii=False, indent=4
+    ).encode("utf-8")
+    payloads["data/orepro_last_sync.json"] = json.dumps(
+        orepro_get_last_sync_payload(), ensure_ascii=False, indent=4
+    ).encode("utf-8")
+    payloads["data/orepro_session.json"] = json.dumps(
+        {"nkauth": "", "updatedAt": ""}, ensure_ascii=False, indent=4
+    ).encode("utf-8")
+    return payloads

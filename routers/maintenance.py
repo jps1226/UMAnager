@@ -11,7 +11,15 @@ from pydantic import BaseModel
 
 import config
 from data_manager import clear_horse_runtime_cache
-from storage import clear_race_cache, count_horse_cache_entries, clear_horse_cache_entries, dispose_storage_connections, init_storage_foundation
+from storage import (
+    build_legacy_export_payloads,
+    clear_race_cache,
+    count_horse_cache_entries,
+    clear_horse_cache_entries,
+    dispose_storage_connections,
+    import_legacy_storage,
+    init_storage_foundation,
+)
 
 router = APIRouter(tags=["maintenance"])
 
@@ -25,6 +33,10 @@ class RestoreBackupPayload(BaseModel):
     backup_name: Optional[str] = None
     use_latest: bool = True
     create_safety_backup: bool = True
+
+
+class LegacyImportPayload(BaseModel):
+    overwrite_existing: bool = False
 
 
 def _iter_data_files():
@@ -117,6 +129,36 @@ def create_data_backup():
         "status": "success",
         "filename": backup_name,
         "download_url": f"/api/data/backup/{backup_name}",
+    }
+
+
+@router.post("/api/data/legacy/export")
+def export_legacy_bundle():
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    bundle_name = f"umanager_legacy_export_{stamp}.zip"
+    bundle_path = BACKUP_DIR / bundle_name
+
+    payloads = build_legacy_export_payloads()
+    with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for relative_path, content_bytes in payloads.items():
+            zf.writestr(relative_path, content_bytes)
+
+    return {
+        "status": "success",
+        "filename": bundle_name,
+        "download_url": f"/api/data/backup/{bundle_name}",
+        "files": sorted(payloads.keys()),
+    }
+
+
+@router.post("/api/data/legacy/import")
+def import_legacy_bundle(payload: LegacyImportPayload):
+    results = import_legacy_storage(overwrite_existing=payload.overwrite_existing)
+    return {
+        "status": "success",
+        "overwrite_existing": payload.overwrite_existing,
+        "imported": results,
     }
 
 

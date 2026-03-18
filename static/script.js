@@ -2218,6 +2218,58 @@ async function restoreLatestBackup() {
     }
 }
 
+async function exportLegacyBundle() {
+    try {
+        const result = await postJson('/api/data/legacy/export', {});
+        alert(
+            `Legacy recovery bundle created: backups/${result.filename}\n` +
+            `Files exported: ${Array.isArray(result.files) ? result.files.length : 0}`
+        );
+    } catch (err) {
+        alert(`Legacy export failed: ${err.message}`);
+    }
+}
+
+async function importLegacyBundle() {
+    const proceed = confirm(
+        'Import deprecated legacy files from the data/ folder into SQLite now?\n\n' +
+        'This is only needed for one-off recovery from old JSON/TXT/PKL storage.'
+    );
+    if (!proceed) return;
+
+    try {
+        const result = await postJson('/api/data/legacy/import', { overwrite_existing: false });
+        const imported = result.imported || {};
+        const totalImported =
+            (imported.config ? 1 : 0) +
+            Number(imported.favorites || 0) +
+            Number(imported.watchlist || 0) +
+            Number(imported.marks || 0) +
+            Number(imported.raceMeta || 0) +
+            Number(imported.horses || 0) +
+            Number(imported.races || 0) +
+            Number(imported.oreproDays || 0);
+        const footer = totalImported === 0
+            ? '\n\nNo legacy data was imported. This usually means the old JSON/TXT/PKL files are missing, empty, or SQLite already has the data.'
+            : '';
+        alert(
+            'Legacy import complete.\n\n' +
+            `Config: ${imported.config ? 'imported' : 'skipped'}\n` +
+            `Favorites: ${imported.favorites || 0}\n` +
+            `Watchlist: ${imported.watchlist || 0}\n` +
+            `Marks: ${imported.marks || 0}\n` +
+            `Race meta: ${imported.raceMeta || 0}\n` +
+            `Horses: ${imported.horses || 0}\n` +
+            `Races: ${imported.races || 0}\n` +
+            `OrePro days: ${imported.oreproDays || 0}` +
+            footer
+        );
+        await refreshDataAndUI();
+    } catch (err) {
+        alert(`Legacy import failed: ${err.message}`);
+    }
+}
+
 async function refreshUpcomingRacesLite() {
     const btn = document.getElementById('btn-upcoming-refresh');
     if (btn) btn.disabled = true;
