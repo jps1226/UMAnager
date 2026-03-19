@@ -13,6 +13,8 @@ let currentTimelineTab = "upcoming";
 let currentActiveDate = null;
 let currentCalendarMonth = null;
 let currentMainView = 'races';
+let lastPrefetchAwarenessKey = "";
+let globalPrefetchUpdates = null; // { updatesByDate: {...}, hasUpdates: bool, ... } from /api/prefetch-check
 let raceSorts = {}; // NEW: Remembers which column is sorted for each race
 let winningVotesFocusEnabled = false;
 let searchableHorses = []; // Stores the database for the search bar
@@ -83,6 +85,14 @@ function isVoteSortingEnabled() {
 
 function isAutoFetchPastResultsEnabled() {
     return appConfig.ui?.autoFetchPastResults ?? true;
+}
+
+function isPrefetchRaceCheckEnabled() {
+    return appConfig.ui?.prefetchRaceCheck ?? false;
+}
+
+function isDebugConsoleEnabled() {
+    return appConfig.ui?.debugConsole ?? false;
 }
 
 function isAutoLockPastVotesEnabled() {
@@ -1429,6 +1439,166 @@ function normalizeRacesPayload(data) {
     };
 }
 
+function getPrefetchPendingUpdateTypes(prefetch = globalPrefetchUpdates) {
+    const updatesByDate = prefetch?.updatesByDate || {};
+    const types = new Set();
+    Object.values(updatesByDate).forEach(items => {
+        if (!Array.isArray(items)) return;
+        items.forEach(item => {
+            if (item) types.add(item);
+        });
+    });
+    return types;
+}
+
+function syncUpcomingRefreshButtonState() {
+    const btn = document.getElementById('btn-upcoming-refresh');
+    if (!btn) return;
+
+    if (!isPrefetchRaceCheckEnabled()) {
+        btn.dataset.action = 'legacy-refresh';
+        btn.textContent = '🛰️ Update Upcoming Cards';
+        return;
+    }
+
+    if (!globalPrefetchUpdates || !globalPrefetchUpdates.enabled) {
+        btn.dataset.action = 'check';
+        btn.textContent = '🛰️ Check Pending Updates';
+        return;
+    }
+
+    if (globalPrefetchUpdates.error) {
+        btn.dataset.action = 'check';
+        btn.textContent = '🛰️ Recheck Pending Updates';
+        return;
+    }
+
+    if (globalPrefetchUpdates.hasUpdates) {
+        btn.dataset.action = 'apply';
+        btn.textContent = '⬇️ Apply Pending Updates';
+        return;
+    }
+
+    btn.dataset.action = 'check';
+    btn.textContent = '🛰️ Check Pending Updates';
+}
+
+function updatePrefetchStatusBanner(prefetch) {
+    const banner = document.getElementById('prefetch-status-banner');
+    if (!banner) return;
+
+    if (!isPrefetchRaceCheckEnabled()) {
+        banner.style.display = 'none';
+        banner.textContent = '';
+        banner.classList.remove('status-ok', 'status-warn', 'status-error');
+        syncUpcomingRefreshButtonState();
+        return;
+    }
+
+    banner.style.display = 'block';
+    banner.classList.remove('status-ok', 'status-warn', 'status-error');
+
+    if (!prefetch || !prefetch.enabled) {
+        banner.classList.add('status-warn');
+        banner.textContent = 'Prefetch check enabled • checking…';
+        syncUpcomingRefreshButtonState();
+        return;
+    }
+
+    if (prefetch.error) {
+        banner.classList.add('status-error');
+        banner.textContent = `Prefetch error: ${prefetch.error}`;
+        syncUpcomingRefreshButtonState();
+        return;
+    }
+
+    if (!prefetch.hasUpdates) {
+        banner.classList.add('status-ok');
+        const ts = prefetch.checkedAt ? ` (${prefetch.checkedAt.slice(11, 16)})` : '';
+        banner.textContent = `✓ All up to date${ts}`;
+        syncUpcomingRefreshButtonState();
+        return;
+    }
+
+    const datesWithUpdates = Object.keys(prefetch.updatesByDate || {}).length;
+    banner.classList.add('status-warn');
+    banner.textContent = `Updates on ${datesWithUpdates} day${datesWithUpdates !== 1 ? 's' : ''} — see calendar`;
+    syncUpcomingRefreshButtonState();
+}
+
+function notifyPrefetchRaceCheck(data) {
+    if (!isPrefetchRaceCheckEnabled()) {
+        updatePrefetchStatusBanner(null);
+        syncUpcomingRefreshButtonState();
+        return;
+    }
+
+    const prefetch = data;
+    updatePrefetchStatusBanner(prefetch || null);
+    if (!prefetch || !prefetch.enabled) return;
+
+    if (prefetch.error) {
+        appendConsoleLine(`[Prefetch] Check failed: ${prefetch.error}`);
+        appendDebugLine(`Prefetch check error: ${prefetch.error}`);
+        return;
+    }
+
+    const awarenessKey = JSON.stringify(prefetch.updatesByDate || {});
+    if (awarenessKey && awarenessKey === lastPrefetchAwarenessKey) return;
+    lastPrefetchAwarenessKey = awarenessKey;
+
+    const summary = prefetch.summary || {};
+    appendDebugLine(
+        `Prefetch: newRaceDates=${summary.newRaceDates || 0}, newEntries=${summary.newEntryRaces || 0}, ` +
+        `postPositions=${summary.postPositionRaces || 0}, finishPositions=${summary.finishPositionRaces || 0}, ` +
+        `futureChecked=${summary.checkedFutureRaces || 0}, pastChecked=${summary.checkedPastRaces || 0}`
+    );
+
+    if (!prefetch.hasUpdates) {
+        appendConsoleLine('[Prefetch] No updates detected.');
+        return;
+    }
+
+    const datesWithUpdates = Object.keys(prefetch.updatesByDate || {});
+    appendConsoleLine(`[Prefetch] Updates available on ${datesWithUpdates.length} date(s): ${datesWithUpdates.join(', ')}`);
+}
+
+async function loadPrefetchCheck() {
+    if (!isPrefetchRaceCheckEnabled()) {
+        globalPrefetchUpdates = null;
+        updatePrefetchStatusBanner(null);
+        renderRaceCalendar();
+        syncUpcomingRefreshButtonState();
+        return null;
+    }
+    try {
+        globalPrefetchUpdates = { enabled: true, hasUpdates: false, updatesByDate: {} };
+        updatePrefetchStatusBanner(null); // Show "checking" state immediately
+        appendDebugLine('loadPrefetchCheck started');
+        const res = await fetch('/api/prefetch-check');
+        if (!res.ok) {
+            appendDebugLine(`Prefetch check HTTP ${res.status}`);
+            syncUpcomingRefreshButtonState();
+            return null;
+        }
+        const data = await res.json().catch(() => null);
+        if (!data) {
+            syncUpcomingRefreshButtonState();
+            return null;
+        }
+        globalPrefetchUpdates = data;
+        notifyPrefetchRaceCheck(data);
+        renderRaceCalendar();
+        appendDebugLine(`Prefetch check done: hasUpdates=${data.hasUpdates}, dates=${Object.keys(data.updatesByDate || {}).length}`);
+        return data;
+    } catch (e) {
+        appendDebugLine(`Prefetch check exception: ${e.message}`);
+        return null;
+    } finally {
+        syncUpcomingRefreshButtonState();
+    }
+}
+
 function getSortedActiveDates() {
     return Object.keys(globalRacesByDate).sort();
 }
@@ -1438,7 +1608,9 @@ function getMonthKey(dateStr) {
 }
 
 function getAvailableCalendarMonths() {
-    return [...new Set(getSortedActiveDates().map(getMonthKey).filter(Boolean))].sort();
+    const raceDates = getSortedActiveDates();
+    const updateDates = Object.keys(globalPrefetchUpdates?.updatesByDate || {});
+    return [...new Set([...raceDates, ...updateDates].map(getMonthKey).filter(Boolean))].sort();
 }
 
 function formatCalendarMonth(monthKey) {
@@ -1516,15 +1688,15 @@ function renderRaceCalendar() {
     const dates = getSortedActiveDates();
     const months = getAvailableCalendarMonths();
 
-    if (!dates.length || !months.length) {
+    if (!months.length) {
         calendar.innerHTML = '<div class="race-calendar-empty-note">No race days loaded.</div>';
         updateActiveDateNavigator();
         return;
     }
 
-    const selectedDate = findNearestAvailableDate(currentActiveDate, dates) || dates[0];
+    const selectedDate = findNearestAvailableDate(currentActiveDate, dates) || dates[0] || null;
     currentActiveDate = selectedDate;
-    currentTimelineTab = globalDateTimelineByDate[selectedDate] || 'upcoming';
+    currentTimelineTab = selectedDate ? (globalDateTimelineByDate[selectedDate] || 'upcoming') : 'upcoming';
 
     const selectedMonth = getMonthKey(selectedDate);
     if (!currentCalendarMonth || !months.includes(currentCalendarMonth)) {
@@ -1549,19 +1721,29 @@ function renderRaceCalendar() {
     for (let day = 1; day <= daysInMonth; day += 1) {
         const dateStr = `${monthKey}-${String(day).padStart(2, '0')}`;
         const races = globalRacesByDate[dateStr];
+        const updateTypes = globalPrefetchUpdates?.updatesByDate?.[dateStr];
+        const hasUpdates = Array.isArray(updateTypes) && updateTypes.length > 0;
+        const updateTitle = hasUpdates ? ` \u2022 updates: ${updateTypes.join(', ')}` : '';
 
         if (!races) {
-            cells.push(`<div class="race-calendar-cell"><div class="race-calendar-daynum" style="padding: 8px; color: #4b5565;">${day}</div></div>`);
+            cells.push(`
+                <div class="race-calendar-cell${hasUpdates ? ' has-prefetch-updates' : ''}" title="${dateStr}${updateTitle}">
+                    <div class="race-calendar-daynum" style="padding: 8px; color: #4b5565;">${day}</div>
+                    ${hasUpdates ? '<div class="race-calendar-cell-update-pip"></div>' : ''}
+                </div>
+            `);
             continue;
         }
 
         const timeline = globalDateTimelineByDate[dateStr] || 'upcoming';
         const activeClass = dateStr === currentActiveDate ? ' is-selected' : '';
+        const updateClass = hasUpdates ? ' has-prefetch-updates' : '';
         cells.push(`
-            <button type="button" class="race-calendar-day timeline-${timeline}${activeClass}" onclick="selectCalendarDate('${dateStr}')" title="${dateStr} • ${races.length} races">
+            <button type="button" class="race-calendar-day timeline-${timeline}${activeClass}${updateClass}" onclick="selectCalendarDate('${dateStr}')" title="${dateStr} \u2022 ${races.length} race${races.length === 1 ? '' : 's'}${updateTitle}">
                 <div class="race-calendar-daynum">${day}</div>
                 <div class="race-calendar-meta">
                     <span class="race-calendar-count">${races.length}</span>
+                    ${hasUpdates ? '<span class="race-calendar-update-pip"></span>' : ''}
                 </div>
             </button>
         `);
@@ -1757,10 +1939,22 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 
 // --- RENDER DASHBOARD ---
 async function loadRaces() {
+    const t0 = performance.now();
+    appendDebugLine('loadRaces started');
     const racesRes = await fetch('/api/races');
-    const data = await racesRes.json();
+    appendDebugLine(`/api/races status=${racesRes.status}`);
+    const data = await racesRes.json().catch(() => ({}));
+    if (!racesRes.ok) {
+        const detail = data?.detail || data?.message || `HTTP ${racesRes.status}`;
+        appendConsoleLine(`[Races] Failed to load races: ${detail}`);
+        appendDebugLine(`loadRaces failed in ${(performance.now() - t0).toFixed(0)}ms`);
+        throw new Error(detail);
+    }
+    appendDebugLine(
+        `Payload days: upcoming=${Object.keys(data.upcoming_races_by_date || data.races_by_date || {}).length}, ` +
+        `past=${Object.keys(data.past_races_by_date || {}).length}`
+    );
     const timelineData = normalizeRacesPayload(data);
-
     // Reset cached structures for a clean rebuild.
     upcomingRaces = [];
     searchableHorses = [];
@@ -1891,6 +2085,10 @@ async function loadRaces() {
     updateAllRiskBadges();
 
     isFirstLoad = false;
+    appendDebugLine(`loadRaces completed in ${(performance.now() - t0).toFixed(0)}ms`);
+
+    // Fire prefetch check in the background — does not block the race list from rendering.
+    loadPrefetchCheck();
 }
 
 // --- TAB SWITCHING ---
@@ -2151,6 +2349,12 @@ function appendConsoleLine(message) {
     consoleBox.scrollTop = consoleBox.scrollHeight;
 }
 
+function appendDebugLine(message) {
+    if (!isDebugConsoleEnabled()) return;
+    const stamp = new Date().toTimeString().split(' ')[0];
+    appendConsoleLine(`[Debug ${stamp}] ${message}`);
+}
+
 async function triggerPost(url) {
     try {
         const res = await fetch(url, { method: 'POST' });
@@ -2272,21 +2476,83 @@ async function importLegacyBundle() {
 
 async function refreshUpcomingRacesLite() {
     const btn = document.getElementById('btn-upcoming-refresh');
-    if (btn) btn.disabled = true;
+    const action = btn?.dataset?.action || 'check';
+    const originalLabel = btn?.textContent || '';
+    const startedAt = performance.now();
+    let progressTimer = null;
+    if (btn) {
+        btn.disabled = true;
+        if (action === 'apply') btn.textContent = '⏳ Applying Pending Updates...';
+        if (action === 'check') btn.textContent = '⏳ Checking Pending Updates...';
+        if (action === 'legacy-refresh') btn.textContent = '⏳ Updating Upcoming Cards...';
+    }
 
     try {
-        const data = await postJson('/api/races/upcoming/refresh', {});
+        appendConsoleLine(`[Prefetch] Button clicked. Action: ${action}`);
+        if (action === 'apply') {
+            appendConsoleLine('[Prefetch] Applying pending updates. This can take a while if many races are checked.');
+            progressTimer = setInterval(() => {
+                appendConsoleLine('[Prefetch] Apply still running...');
+            }, 12000);
+        }
+
+        if (action === 'legacy-refresh') {
+            const data = await postJson('/api/races/upcoming/refresh', {});
+            await refreshDataAndUI();
+            const failedCount = Array.isArray(data.failed_races) ? data.failed_races.length : 0;
+            appendConsoleLine(
+                `[Prefetch] Legacy upcoming refresh complete in ${(performance.now() - startedAt).toFixed(0)}ms ` +
+                `(races=${data.updated_races || 0}, rows=${data.updated_rows || 0}, failed=${failedCount}).`
+            );
+            alert(`Upcoming refresh complete. Races updated: ${data.updated_races || 0}, rows updated: ${data.updated_rows || 0}, failed races: ${failedCount}.`);
+            return;
+        }
+
+        if (action === 'check') {
+            await loadPrefetchCheck();
+            if (globalPrefetchUpdates?.hasUpdates) {
+                const dates = Object.keys(globalPrefetchUpdates.updatesByDate || {}).sort();
+                appendConsoleLine(`[Prefetch] Check complete in ${(performance.now() - startedAt).toFixed(0)}ms. Pending dates: ${dates.length}.`);
+                alert(`Pending updates found on ${dates.length} date(s):\n${dates.join('\n')}\n\nClick the button again to apply them.`);
+            } else {
+                appendConsoleLine(`[Prefetch] Check complete in ${(performance.now() - startedAt).toFixed(0)}ms. No pending updates.`);
+                alert('No pending updates found.');
+            }
+            return;
+        }
+
+        const data = await postJson('/api/races/prefetch/apply', {});
+        appendConsoleLine('[Prefetch] Server apply completed. Refreshing local UI and re-checking status...');
         await refreshDataAndUI();
+        const latestPrefetch = await loadPrefetchCheck();
 
-        const nextUpcomingDate = Object.keys(globalAllRacesByDate.upcoming || {}).sort()[0];
-        if (nextUpcomingDate) switchMainTab(nextUpcomingDate);
-
-        const failedCount = Array.isArray(data.failed_races) ? data.failed_races.length : 0;
-        alert(`Upcoming refresh complete. Races updated: ${data.updated_races || 0}, rows updated: ${data.updated_rows || 0}, failed races: ${failedCount}.`);
+        const applied = data.applied || {};
+        const remainingDates = Object.keys(latestPrefetch?.updatesByDate || {});
+        const remainingLine = latestPrefetch?.hasUpdates
+            ? `\n\nStill pending after apply: ${remainingDates.length} date(s)`
+            : '\n\nAll pending updates are now cleared.';
+        alert(
+            `Pending updates applied.\n\n` +
+            `Types: ${(applied.pendingUpdateTypes || []).join(', ') || 'none'}\n` +
+            `New race cache size: ${applied.newRaceCachedCount || 0}\n` +
+            `Upcoming races updated: ${applied.updatedUpcomingRaces || 0}\n` +
+            `Upcoming rows updated: ${applied.updatedUpcomingRows || 0}\n` +
+            `Past races refreshed: ${applied.updatedPastRaces || 0}\n` +
+            `Past entries updated: ${applied.updatedPastEntries || 0}` +
+            remainingLine
+        );
+        appendConsoleLine(
+            `[Prefetch] Apply complete in ${(performance.now() - startedAt).toFixed(0)}ms. ` +
+            `Remaining pending dates: ${remainingDates.length}.`
+        );
     } catch (err) {
-        alert(`Upcoming refresh failed: ${err.message}`);
+        appendConsoleLine(`[Prefetch] Update action failed: ${err.message}`);
+        alert(`Update action failed: ${err.message}`);
     } finally {
+        if (progressTimer) clearInterval(progressTimer);
         if (btn) btn.disabled = false;
+        if (btn) btn.textContent = originalLabel;
+        syncUpcomingRefreshButtonState();
     }
 }
 
@@ -3659,6 +3925,8 @@ function showSettingsModal() {
     document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
     document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
     document.getElementById('setting-autoFetchPastResults').checked = isAutoFetchPastResultsEnabled();
+    document.getElementById('setting-prefetchRaceCheck').checked = isPrefetchRaceCheckEnabled();
+    document.getElementById('setting-debugConsole').checked = isDebugConsoleEnabled();
     document.getElementById('setting-autoLockPastVotes').checked = isAutoLockPastVotesEnabled();
         document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     // Populate formula weight inputs
@@ -3688,6 +3956,7 @@ function resetFormulaWeights() {
 
 async function updateSidebarSettings() {
     const previousAutoFetchPastResults = isAutoFetchPastResultsEnabled();
+    const previousPrefetchRaceCheck = isPrefetchRaceCheckEnabled();
     // Update config from checkbox values
     appConfig.sidebarTabs = {
         raceDatabase: document.getElementById('setting-raceDatabase').checked,
@@ -3701,6 +3970,8 @@ async function updateSidebarSettings() {
         betSafetyIndicator: document.getElementById('setting-betSafetyIndicator').checked,
         voteSortingTop: document.getElementById('setting-voteSortingTop').checked,
         autoFetchPastResults: document.getElementById('setting-autoFetchPastResults').checked,
+        prefetchRaceCheck: document.getElementById('setting-prefetchRaceCheck').checked,
+        debugConsole: document.getElementById('setting-debugConsole').checked,
         autoLockPastVotes: document.getElementById('setting-autoLockPastVotes').checked,
             showConsole: document.getElementById('setting-showConsole').checked,
         formulaWeights: {
@@ -3718,6 +3989,11 @@ async function updateSidebarSettings() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(appConfig)
     });
+
+    appendDebugLine(
+        `Settings saved: showConsole=${appConfig.ui?.showConsole ?? true}, debugConsole=${appConfig.ui?.debugConsole ?? false}, ` +
+        `prefetchRaceCheck=${appConfig.ui?.prefetchRaceCheck ?? false}`
+    );
     
     // Apply settings immediately to sidebar
     applySidebarSettings();
@@ -3726,6 +4002,10 @@ async function updateSidebarSettings() {
 
     if (!previousAutoFetchPastResults && isAutoFetchPastResultsEnabled()) {
         await refreshDataAndUI();
+    }
+    if (!previousPrefetchRaceCheck && isPrefetchRaceCheckEnabled()) {
+        appendConsoleLine('[Prefetch] Race prefetch check enabled. Running lightweight scan on next refresh...');
+        await loadRaces();
     }
 }
 
@@ -3819,6 +4099,12 @@ function applySidebarSettings() {
     if (consoleEl) {
         consoleEl.style.display = (appConfig.ui?.showConsole ?? true) ? 'block' : 'none';
     }
+    if (!isPrefetchRaceCheckEnabled()) {
+        globalPrefetchUpdates = null;
+        renderRaceCalendar();
+    }
+    updatePrefetchStatusBanner(globalPrefetchUpdates);
+    appendDebugLine('Sidebar settings applied');
 
     // Keep lock behavior and header controls in sync when settings change.
     Object.keys(globalRaceInfo).forEach(r_id => {

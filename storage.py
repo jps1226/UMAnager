@@ -44,6 +44,8 @@ APP_CONFIG_DEFAULTS = {
         "betSafetyIndicator": True,
         "voteSortingTop": True,
         "autoFetchPastResults": True,
+        "prefetchRaceCheck": False,
+        "debugConsole": False,
         "autoLockPastVotes": False,
         "showConsole": True,
     },

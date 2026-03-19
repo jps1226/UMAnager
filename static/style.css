@@ -17,17 +17,43 @@
     color: #000;
 }
 
-        .sidebar { width: 380px; background-color: #1a1c23; padding: 20px; overflow-y: auto; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 0; }
-        .sidebar-footer { margin-top: auto; padding-top: 10px; position: sticky; bottom: 0; background: linear-gradient(180deg, rgba(26, 28, 35, 0), rgba(26, 28, 35, 0.92) 16px, rgba(26, 28, 35, 1) 100%); }
-        .sidebar-brand-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 15px; }
+        .sidebar { width: 380px; background-color: #1a1c23; padding: 20px; overflow: hidden; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 0; }
+        .sidebar-scroll { flex: 1; overflow-y: auto; min-height: 0; padding-right: 4px; margin-right: -4px; }
+        .sidebar-footer { margin-top: 10px; padding-top: 10px; flex-shrink: 0; background: linear-gradient(180deg, rgba(26, 28, 35, 0), rgba(26, 28, 35, 0.92) 16px, rgba(26, 28, 35, 1) 100%); }
+        .sidebar-brand-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 15px; flex-shrink: 0; }
         .sidebar-brand-title { margin: 0; color: #1dd1a1; }
         .sidebar-brand-actions { display: flex; align-items: center; gap: 8px; }
         .app-version-badge { font-size: 10px; color: #666; font-weight: bold; letter-spacing: 1px; }
         .settings-icon-btn { background: #262730; border: 1px solid #444; color: #1dd1a1; font-size: 16px; width: 28px; height: 28px; padding: 0; border-radius: 4px; }
-        .sidebar-top-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+        .sidebar-top-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; flex-shrink: 0; }
         .view-switcher-sidebar { margin-right: 0; }
         .view-switcher-sidebar .toolbar-btn { flex: 1; }
         .active-date-nav-sidebar { width: 100%; min-width: 0; box-sizing: border-box; }
+        .prefetch-status-banner {
+            font-size: 11px;
+            border: 1px solid #3f495d;
+            border-radius: 8px;
+            padding: 7px 9px;
+            background: #121926;
+            color: #b7c4e3;
+            line-height: 1.35;
+            white-space: pre-wrap;
+        }
+        .prefetch-status-banner.status-ok {
+            border-color: #35624e;
+            background: #17342b;
+            color: #c6ffe3;
+        }
+        .prefetch-status-banner.status-warn {
+            border-color: #8d6d2c;
+            background: #362b16;
+            color: #ffeab5;
+        }
+        .prefetch-status-banner.status-error {
+            border-color: #9e4656;
+            background: #3a1f25;
+            color: #ffd0d0;
+        }
         .btn-primary-prominent { background: #1dd1a1; color: #000; font-weight: bold; border-color: #1dd1a1; font-size: 15px; padding: 10px; }
         .btn-compact { font-size: 12px; padding: 8px; }
         .btn-micro { font-size: 12px; padding: 6px; }
@@ -576,9 +602,23 @@
         .race-calendar-cell {
             background: rgba(255, 255, 255, 0.02);
             border: 1px solid transparent;
+            position: relative;
         }
         .race-calendar-cell.is-empty {
             background: transparent;
+        }
+        .race-calendar-cell.has-prefetch-updates {
+            border-color: #a07528;
+            box-shadow: 0 0 0 1px rgba(251, 178, 36, 0.15) inset;
+        }
+        .race-calendar-cell-update-pip {
+            position: absolute;
+            right: 8px;
+            bottom: 7px;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: #f59e0b;
         }
         .race-calendar-day {
             width: 100%;
@@ -613,6 +653,21 @@
         .race-calendar-day.timeline-past:hover {
             background: #1a1f27;
             border-color: #39414f;
+        }
+        .race-calendar-day.has-prefetch-updates {
+            border-color: #a07528;
+            box-shadow: 0 0 0 1px rgba(251, 178, 36, 0.18) inset;
+        }
+        .race-calendar-day.has-prefetch-updates.is-selected {
+            border-color: #1dd1a1;
+        }
+        .race-calendar-update-pip {
+            display: inline-block;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: #f59e0b;
+            flex-shrink: 0;
         }
         .race-calendar-daynum {
             font-size: 12px;
@@ -1066,10 +1121,20 @@ td.finish-pos-3 { color: #cd7f32; }
     box-shadow: 0 10px 25px rgba(0,0,0,0.8);
 }
 .modal-content-wide { width: 800px; max-width: 95vw; }
-.modal-content-settings { width: 400px; max-width: 95vw; }
+.modal-content-settings {
+    width: min(760px, 96vw);
+    max-height: 92vh;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+}
 .modal-header {
     display: flex; justify-content: space-between; align-items: center;
     border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 15px;
+}
+.modal-content-settings .modal-header {
+    padding: 16px 20px 10px 20px;
+    margin-bottom: 0;
 }
 .modal-title { margin: 0; }
 .modal-header-actions { display: flex; align-items: center; gap: 15px; }
@@ -1090,12 +1155,36 @@ td.finish-pos-3 { color: #cd7f32; }
     border-color: #546071;
 }
 .modal-close-btn { background: #333; color: white; }
-.settings-body { padding: 20px; }
+.modal-content-settings .modal-close-btn {
+    margin: 0 20px 16px 20px;
+    width: calc(100% - 40px);
+    flex-shrink: 0;
+}
+.settings-body {
+    padding: 16px 20px;
+    overflow-y: auto;
+    min-height: 0;
+}
+.settings-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+.settings-card {
+    border: 1px solid #333;
+    border-radius: 8px;
+    background: #171a22;
+    padding: 12px;
+}
+.settings-card-full {
+    grid-column: 1 / -1;
+}
 .settings-section-title { color: #1dd1a1; margin-top: 18px; margin-bottom: 12px; }
 .settings-section-title-first { margin-top: 0; }
 .settings-section-title-tight { margin-bottom: 8px; }
 .settings-option-list { display: flex; flex-direction: column; gap: 10px; }
 .settings-option-row { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; }
+.settings-card .settings-section-title { margin-top: 0; }
 .settings-helper-text { font-size: 12px; color: #999; margin-bottom: 10px; }
 .settings-helper-text-tight { margin-bottom: 8px; }
 .settings-formula-grid { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; font-size: 13px; }
@@ -1442,4 +1531,9 @@ input[type=range]::-webkit-slider-runnable-track {
 @keyframes flash-row {
     0% { background-color: rgba(29, 209, 161, 0.6); }
     100% { background-color: transparent; }
+}
+@media (max-width: 900px) {
+    .settings-grid {
+        grid-template-columns: 1fr;
+    }
 }

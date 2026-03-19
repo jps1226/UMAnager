@@ -29,16 +29,18 @@
             </div>
             <button type="button" id="active-date-next" class="active-date-nav-btn" onclick="shiftActiveDate(1)">▶</button>
         </div>
+        <div id="prefetch-status-banner" class="prefetch-status-banner" style="display:none;"></div>
     </div>
 
-    <div id="voting-sidebar-panel" class="voting-sidebar-panel" style="display:none;">
-        <div class="voting-sidebar-head">
-            <h3 id="voting-sidebar-title">By Racecourse</h3>
+    <div class="sidebar-scroll">
+        <div id="voting-sidebar-panel" class="voting-sidebar-panel" style="display:none;">
+            <div class="voting-sidebar-head">
+                <h3 id="voting-sidebar-title">By Racecourse</h3>
+            </div>
+            <div id="voting-sidebar-display" class="voting-sidebar-display"></div>
         </div>
-        <div id="voting-sidebar-display" class="voting-sidebar-display"></div>
-    </div>
 
-    <details id="calendar-group" class="sidebar-group calendar-group" open>
+        <details id="calendar-group" class="sidebar-group calendar-group" open>
         <summary>🗓️ Race Calendar</summary>
         <div class="sidebar-group-content">
             <div id="race-calendar" class="race-calendar-panel race-calendar-sidebar"></div>
@@ -50,7 +52,7 @@
         <div class="sidebar-group-content">
             
             <button class="btn-full btn-primary-prominent" onclick="triggerScrape('new')" id="btn-new-race">🔍 Fetch Upcoming Races</button>
-            <button class="btn-full btn-compact" onclick="refreshUpcomingRacesLite()" id="btn-upcoming-refresh">🛰️ Update Upcoming Cards</button>
+            <button class="btn-full btn-compact" onclick="refreshUpcomingRacesLite()" id="btn-upcoming-refresh" data-action="check">🛰️ Check Pending Updates</button>
             
             <details class="advanced-tools-panel">
                 <summary class="advanced-tools-summary">⚙️ Advanced Tools</summary>
@@ -131,6 +133,7 @@
             <div class="sidebar-group-content" id="sidebar-weekend-watchlist">
                 </div>
         </details>
+    </div>
 
     <div class="sidebar-footer">
         <button id="global-close-server-btn" class="global-close-server-btn" onclick="closeServerInstances()" title="Close all running UMAnager server instances">⏻ Close Server</button>
@@ -229,77 +232,96 @@
             <button onclick="closeSettingsModal()" class="close-btn">✖</button>
         </div>
         <div class="settings-body">
-            <h4 class="settings-section-title settings-section-title-first">Default Sidebar Sections</h4>
-            <div class="settings-option-list">
-                <label class="settings-option-row">
-                    <input type="checkbox" id="setting-raceDatabase" onchange="updateSidebarSettings()">
-                    <span>🔄 Race Database</span>
-                </label>
-                <label class="settings-option-row">
-                    <input type="checkbox" id="setting-pedigreeLists" onchange="updateSidebarSettings()">
-                    <span>🎯 Pedigree Lists</span>
-                </label>
-                <label class="settings-option-row">
-                    <input type="checkbox" id="setting-autoPickStrategy" onchange="updateSidebarSettings()">
-                    <span>⚙️ Auto-Pick Strategy</span>
-                </label>
-                <label class="settings-option-row">
-                    <input type="checkbox" id="setting-weekendWatchlist" onchange="updateSidebarSettings()">
-                    <span>🏆 Weekend Watchlist</span>
-                </label>
+            <div class="settings-grid">
+                <div class="settings-card">
+                    <h4 class="settings-section-title settings-section-title-first">Default Sidebar Sections</h4>
+                    <div class="settings-option-list">
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-raceDatabase" onchange="updateSidebarSettings()">
+                            <span>🔄 Race Database</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-pedigreeLists" onchange="updateSidebarSettings()">
+                            <span>🎯 Pedigree Lists</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-autoPickStrategy" onchange="updateSidebarSettings()">
+                            <span>⚙️ Auto-Pick Strategy</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-weekendWatchlist" onchange="updateSidebarSettings()">
+                            <span>🏆 Weekend Watchlist</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="settings-card">
+                    <h4 class="settings-section-title">Display & Automation</h4>
+                    <div class="settings-option-list">
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-betSafetyIndicator" onchange="updateSidebarSettings()">
+                            <span>⚡ Bet Safety Indicator</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-voteSortingTop" onchange="updateSidebarSettings()">
+                            <span>🗳️ Float Votes To Top</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-autoFetchPastResults" onchange="updateSidebarSettings()">
+                            <span>🏁 Auto-Fetch Past Results</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-prefetchRaceCheck" onchange="updateSidebarSettings()">
+                            <span>🔎 Prefetch Race Check Alerts</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-autoLockPastVotes" onchange="updateSidebarSettings()">
+                            <span>🔒 Auto-Lock Past Race Votes</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-showConsole" onchange="updateSidebarSettings()">
+                            <span>🖥️ Show Console Log</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-debugConsole" onchange="updateSidebarSettings()">
+                            <span>🧪 Debug Console Mode</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="settings-card settings-card-full">
+                    <h4 class="settings-section-title settings-section-title-tight">⚗️ Auto-Pick Formula</h4>
+                    <div class="settings-helper-text">Tune the scoring engine weights. Changes affect new auto-picks and the Bet Safety indicator.</div>
+                    <div class="settings-formula-grid">
+                        <label title="Max points a horse can earn from odds (formula: oddsCap ÷ odds). Higher = odds have bigger absolute impact.">Odds Cap</label>
+                        <input type="number" id="fw-oddsCap" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
+
+                        <label title="Max points from win rate (wins÷starts × scale). Higher = race record matters more.">Win Rate Scale</label>
+                        <input type="number" id="fw-formMultiplier" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
+
+                        <label title="Points awarded per start below the breakeven count. Set to 0 to disable the freshness bonus entirely.">Freshness Bonus</label>
+                        <input type="number" id="fw-freshnessBonus" min="-20" max="20" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
+
+                        <label title="Starts count where freshness is neutral (neither bonus nor penalty). Horses with fewer starts get the bonus; more get a penalty.">Freshness Breakeven</label>
+                        <input type="number" id="fw-freshnessBreakeven" min="0" max="50" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
+
+                        <label title="Multiplier on pedigree score from tracked bloodlines. Higher = pedigree matters more at higher risk settings.">Pedigree Scale</label>
+                        <input type="number" id="fw-pedigreeMultiplier" min="0" max="500" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
+                    </div>
+                    <button onclick="resetFormulaWeights()" class="settings-reset-btn">↺ Reset to Defaults</button>
+                </div>
+
+                <div class="settings-card settings-card-full">
+                    <h4 class="settings-section-title">Race Table Columns</h4>
+                    <div class="settings-helper-text settings-helper-text-tight">Toggle visibility and move columns up/down. This applies globally.</div>
+                    <div id="setting-race-columns" class="setting-columns-wrap"></div>
+                </div>
             </div>
-            <h4 class="settings-section-title">Display Options</h4>
-            <div class="settings-option-list">
-                <label class="settings-option-row">
-                    <input type="checkbox" id="setting-betSafetyIndicator" onchange="updateSidebarSettings()">
-                    <span>⚡ Bet Safety Indicator</span>
-                </label>
-                <label class="settings-option-row">
-                    <input type="checkbox" id="setting-voteSortingTop" onchange="updateSidebarSettings()">
-                    <span>🗳️ Float Votes To Top</span>
-                </label>
-                <label class="settings-option-row">
-                    <input type="checkbox" id="setting-autoFetchPastResults" onchange="updateSidebarSettings()">
-                    <span>🏁 Auto-Fetch Past Results</span>
-                </label>
-                <label class="settings-option-row">
-                    <input type="checkbox" id="setting-autoLockPastVotes" onchange="updateSidebarSettings()">
-                    <span>🔒 Auto-Lock Past Race Votes</span>
-                </label>
-                <label class="settings-option-row">
-                    <input type="checkbox" id="setting-showConsole" onchange="updateSidebarSettings()">
-                    <span>🖥️ Show Console Log</span>
-                </label>
-            </div>
-
-            <h4 class="settings-section-title settings-section-title-tight">⚗️ Auto-Pick Formula</h4>
-            <div class="settings-helper-text">Tune the scoring engine weights. Changes affect new auto-picks and the Bet Safety indicator.</div>
-            <div class="settings-formula-grid">
-                <label title="Max points a horse can earn from odds (formula: oddsCap ÷ odds). Higher = odds have bigger absolute impact.">Odds Cap</label>
-                <input type="number" id="fw-oddsCap" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
-
-                <label title="Max points from win rate (wins÷starts × scale). Higher = race record matters more.">Win Rate Scale</label>
-                <input type="number" id="fw-formMultiplier" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
-
-                <label title="Points awarded per start below the breakeven count. Set to 0 to disable the freshness bonus entirely.">Freshness Bonus</label>
-                <input type="number" id="fw-freshnessBonus" min="-20" max="20" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
-
-                <label title="Starts count where freshness is neutral (neither bonus nor penalty). Horses with fewer starts get the bonus; more get a penalty.">Freshness Breakeven</label>
-                <input type="number" id="fw-freshnessBreakeven" min="0" max="50" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
-
-                <label title="Multiplier on pedigree score from tracked bloodlines. Higher = pedigree matters more at higher risk settings.">Pedigree Scale</label>
-                <input type="number" id="fw-pedigreeMultiplier" min="0" max="500" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
-            </div>
-            <button onclick="resetFormulaWeights()" class="settings-reset-btn">↺ Reset to Defaults</button>
-
-            <h4 class="settings-section-title">Race Table Columns</h4>
-            <div class="settings-helper-text settings-helper-text-tight">Toggle visibility and move columns up/down. This applies globally.</div>
-            <div id="setting-race-columns" class="setting-columns-wrap"></div>
         </div>
         <button onclick="closeSettingsModal()" class="btn-full modal-close-btn">Close</button>
     </div>
 </div>
 </div>
-<script src="/static/script.js?v=20260318-1"></script>
+<script src="/static/script.js?v=20260319-1"></script>
 </body>
 </html>

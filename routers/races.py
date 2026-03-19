@@ -3,6 +3,7 @@ import datetime
 import logging
 import os
 from typing import Any, Dict, List, Literal, Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -24,6 +25,14 @@ router = APIRouter(tags=["races"])
 logger = logging.getLogger(__name__)
 
 _progress_logger = None
+_PREFETCH_CHECK_MAX_FUTURE_RACES = 8
+_PREFETCH_CHECK_MAX_PAST_RACES = 5
+_PREFETCH_CHECK_CACHE_TTL_SECONDS = 240
+_prefetch_check_cache = {
+    "raceSignature": "",
+    "expiresAt": None,
+    "result": None,
+}
 
 MARKS_SCHEMA_VERSION = 2
 DEFAULT_MARKS_STORE = {
@@ -345,6 +354,202 @@ def refresh_missing_past_race_history(weekend_races):
     return refreshed_races, refreshed_entries
 
 
+def _parse_clean_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.datetime.strptime(text[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _extract_entry_horse_ids(entries_df):
+    horse_ids = set()
+    if entries_df is None or entries_df.empty:
+        return horse_ids
+    if "Horse_ID" not in entries_df.columns:
+        return horse_ids
+
+    for raw_val in entries_df["Horse_ID"].tolist():
+        horse_id = force_str(raw_val)
+        if horse_id:
+            horse_ids.add(horse_id)
+    return horse_ids
+
+
+def _race_id_to_date_str(race_id: str) -> Optional[str]:
+    """Extract YYYY-MM-DD from a race ID whose first 8 chars are YYYYMMDD."""
+    s = str(race_id).strip()
+    if len(s) >= 8 and s[:8].isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    return None
+
+
+def run_prefetch_race_check(weekend_races):
+    now_jst = datetime.datetime.now(ZoneInfo("Asia/Tokyo"))
+    today_jst = now_jst.date()
+    lookahead_days = max(1, int(getattr(config, "UPCOMING_LOOKAHEAD_DAYS", 28)))
+    end_date = today_jst + datetime.timedelta(days=lookahead_days)
+
+    updates_by_date: Dict[str, List[str]] = {}
+
+    def _add_update(date_str: str, update_type: str) -> None:
+        updates_by_date.setdefault(date_str, [])
+        if update_type not in updates_by_date[date_str]:
+            updates_by_date[date_str].append(update_type)
+
+    # --- 1. New races: actionable (today..lookahead) IDs not present in local cache ---
+    cached_race_ids = {
+        str(race.get("info", {}).get("race_id", "")).strip()
+        for race in weekend_races
+        if str(race.get("info", {}).get("race_id", "")).strip()
+    }
+    month_targets = sorted({(today_jst.year, today_jst.month), (end_date.year, end_date.month)})
+    actionable_ids = set()
+    for y, m in month_targets:
+        actionable_ids.update(data_manager.get_month_race_ids(y, m))
+
+    for rid in actionable_ids - cached_race_ids:
+        date_str = _race_id_to_date_str(rid)
+        if not date_str:
+            continue
+        race_date = _parse_clean_date(date_str)
+        if race_date is None or race_date < today_jst or race_date > end_date:
+            continue
+        _add_update(date_str, "new_race")
+
+    # --- 2. Future races: new entries and newly-published post positions ---
+    eligible_future: List = []
+    for race in weekend_races:
+        info = race.get("info", {})
+        race_id = str(info.get("race_id", "")).strip()
+        if not race_id:
+            continue
+        race_date = _parse_clean_date(info.get("clean_date"))
+        if race_date is None or race_date < today_jst:
+            continue
+        sort_time = parse_sort_time(info.get("sort_time"))
+        eligible_future.append((race_date, sort_time, race))
+
+    eligible_future.sort(key=lambda item: (item[0], item[1] or datetime.datetime.max))
+    limited_future = eligible_future[:_PREFETCH_CHECK_MAX_FUTURE_RACES]
+
+    new_entry_races = 0
+    post_position_races = 0
+
+    for race_date, _sort_time, race in limited_future:
+        info = race.get("info", {})
+        race_id = str(info.get("race_id", "")).strip()
+        date_str = str(race_date)
+        if not race_id:
+            continue
+
+        live_horse_ids, live_pp_set = data_manager.fetch_entry_quick_data(race_id)
+        if not live_horse_ids:
+            continue
+
+        cached_entries = race.get("entries")
+        cached_horse_ids = _extract_entry_horse_ids(cached_entries)
+
+        # Build the set of horses that already have a PP stored in the cache.
+        cached_pp_set: set = set()
+        if cached_entries is not None and not cached_entries.empty and "PP" in cached_entries.columns:
+            for _, row in cached_entries.iterrows():
+                pp_val = force_str(row.get("PP", ""))
+                horse_id = force_str(row.get("Horse_ID", ""))
+                if horse_id and pp_val and pp_val.lower() not in ("", "0", "nan", "none"):
+                    cached_pp_set.add(horse_id)
+
+        # New horse entries not yet in the local cache.
+        if live_horse_ids - cached_horse_ids:
+            _add_update(date_str, "new_entries")
+            new_entry_races += 1
+
+        # Post positions now assigned for horses already in the cache.
+        newly_pp = (live_pp_set & cached_horse_ids) - cached_pp_set
+        if newly_pp:
+            _add_update(date_str, "post_positions")
+            post_position_races += 1
+
+    # --- 3. Past races: finish positions now available from live results ---
+    eligible_past: List = []
+    for race in weekend_races:
+        info = race.get("info", {})
+        race_id = str(info.get("race_id", "")).strip()
+        if not race_id:
+            continue
+        race_date = _parse_clean_date(info.get("clean_date"))
+        if race_date is None or race_date >= today_jst:
+            continue
+        entries_df = race.get("entries")
+        if race_has_history_data(entries_df):
+            continue  # Already has finish data stored.
+        sort_time = parse_sort_time(info.get("sort_time"))
+        eligible_past.append((race_date, sort_time, race))
+
+    # Check most recent past races first.
+    eligible_past.sort(key=lambda item: (item[0], item[1] or datetime.datetime.max), reverse=True)
+    limited_past = eligible_past[:_PREFETCH_CHECK_MAX_PAST_RACES]
+
+    finish_position_races = 0
+    for race_date, _sort_time, race in limited_past:
+        info = race.get("info", {})
+        race_id = str(info.get("race_id", "")).strip()
+        date_str = str(race_date)
+        if not race_id:
+            continue
+        try:
+            history_map = data_manager.fetch_race_history_by_id(race_id)
+        except Exception:
+            continue
+        if history_map:
+            _add_update(date_str, "finish_positions")
+            finish_position_races += 1
+
+    return {
+        "enabled": True,
+        "checkedAt": now_jst.isoformat(timespec="seconds"),
+        "hasUpdates": bool(updates_by_date),
+        "updatesByDate": updates_by_date,
+        "summary": {
+            "newRaceDates": len([d for d, ts in updates_by_date.items() if "new_race" in ts]),
+            "newEntryRaces": new_entry_races,
+            "postPositionRaces": post_position_races,
+            "finishPositionRaces": finish_position_races,
+            "checkedFutureRaces": len(limited_future),
+            "checkedPastRaces": len(limited_past),
+        },
+    }
+
+
+def run_prefetch_race_check_cached(weekend_races):
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cached_race_ids = sorted(
+        {
+            str(race.get("info", {}).get("race_id", "")).strip()
+            for race in weekend_races
+            if str(race.get("info", {}).get("race_id", "")).strip()
+        }
+    )
+    race_signature = "|".join(cached_race_ids)
+
+    cache_expiry = _prefetch_check_cache.get("expiresAt")
+    if (
+        _prefetch_check_cache.get("result") is not None
+        and _prefetch_check_cache.get("raceSignature") == race_signature
+        and isinstance(cache_expiry, datetime.datetime)
+        and cache_expiry > now
+    ):
+        return _prefetch_check_cache.get("result")
+
+    result = run_prefetch_race_check(weekend_races)
+    _prefetch_check_cache["raceSignature"] = race_signature
+    _prefetch_check_cache["result"] = result
+    _prefetch_check_cache["expiresAt"] = now + datetime.timedelta(seconds=_PREFETCH_CHECK_CACHE_TTL_SECONDS)
+    return result
+
+
 @router.get("/api/marks")
 def get_marks():
     return load_marks_store()
@@ -362,9 +567,32 @@ async def save_marks(payload: MarksSavePayload):
     return {"status": "success"}
 
 
+@router.get("/api/prefetch-check")
+def get_prefetch_check():
+    """Background prefetch check — called asynchronously after race data loads."""
+    app_cfg = load_config()
+    if not bool(app_cfg.get("ui", {}).get("prefetchRaceCheck", False)):
+        return {"enabled": False, "hasUpdates": False, "updatesByDate": {}}
+    try:
+        weekend_races = load_cached_races()
+        return run_prefetch_race_check_cached(weekend_races)
+    except Exception as exc:
+        logger.warning("Prefetch race check failed: %s", exc)
+        return {
+            "enabled": True,
+            "checkedAt": datetime.datetime.now(ZoneInfo("Asia/Tokyo")).isoformat(timespec="seconds"),
+            "error": str(exc),
+            "hasUpdates": False,
+            "updatesByDate": {},
+        }
+
+
 @router.get("/api/races")
 def get_races():
+    app_cfg = load_config()
+
     weekend_races = load_cached_races()
+
     if not weekend_races:
         return {
             "top_picks": [],
@@ -373,7 +601,6 @@ def get_races():
             "past_races_by_date": {},
         }
 
-    app_cfg = load_config()
     auto_history_enabled = app_cfg.get("ui", {}).get("autoFetchPastResults", True)
     if auto_history_enabled:
         auto_refreshed_races, auto_refreshed_entries = refresh_missing_past_race_history(weekend_races)
@@ -453,12 +680,7 @@ def refresh_race_history(race_id: str):
     return {"status": "success", "updated_entries": updated_count}
 
 
-@router.post("/api/races/upcoming/refresh")
-def refresh_upcoming_races():
-    weekend_races = load_cached_races()
-    if not weekend_races:
-        raise HTTPException(status_code=404, detail="No cached races found")
-
+def _refresh_upcoming_races_in_memory(weekend_races):
     races_by_date = {}
     for race in weekend_races:
         info = race.get("info", {})
@@ -523,12 +745,105 @@ def refresh_upcoming_races():
         updated_races += 1
         updated_rows += row_updates_in_race
 
-    save_cached_races(weekend_races)
     return {
-        "status": "success",
         "updated_races": updated_races,
         "updated_rows": updated_rows,
         "failed_races": failed_races,
+    }
+
+
+@router.post("/api/races/upcoming/refresh")
+def refresh_upcoming_races():
+    weekend_races = load_cached_races()
+    if not weekend_races:
+        raise HTTPException(status_code=404, detail="No cached races found")
+    result = _refresh_upcoming_races_in_memory(weekend_races)
+    save_cached_races(weekend_races)
+    return {
+        "status": "success",
+        "updated_races": result["updated_races"],
+        "updated_rows": result["updated_rows"],
+        "failed_races": result["failed_races"],
+    }
+
+
+@router.post("/api/races/prefetch/apply")
+def apply_prefetch_updates():
+    """Apply pending updates discovered by the prefetch check."""
+    weekend_races = load_cached_races()
+    if not weekend_races:
+        raise HTTPException(status_code=404, detail="No cached races found")
+
+    prefetch = run_prefetch_race_check_cached(weekend_races)
+    if not prefetch or not prefetch.get("enabled"):
+        return {
+            "status": "success",
+            "message": "Prefetch check is disabled.",
+            "applied": {
+                "newRaceCheckTriggered": False,
+                "upcomingRefreshed": False,
+                "pastHistoryRefreshed": False,
+                "newRaceCachedCount": 0,
+                "updatedUpcomingRaces": 0,
+                "updatedUpcomingRows": 0,
+                "updatedPastRaces": 0,
+                "updatedPastEntries": 0,
+            },
+        }
+
+    updates_by_date = prefetch.get("updatesByDate") or {}
+    pending_types = {u for items in updates_by_date.values() for u in (items or [])}
+    if not pending_types:
+        return {
+            "status": "success",
+            "message": "No pending updates found.",
+            "applied": {
+                "newRaceCheckTriggered": False,
+                "upcomingRefreshed": False,
+                "pastHistoryRefreshed": False,
+                "newRaceCachedCount": 0,
+                "updatedUpcomingRaces": 0,
+                "updatedUpcomingRows": 0,
+                "updatedPastRaces": 0,
+                "updatedPastEntries": 0,
+            },
+        }
+
+    new_race_cached_count = 0
+    upcoming_result = {"updated_races": 0, "updated_rows": 0, "failed_races": []}
+    refreshed_past_races = 0
+    refreshed_past_entries = 0
+
+    if "new_race" in pending_types:
+        refreshed = data_manager.fetch_weekend_timeline(mode="new") or []
+        new_race_cached_count = len(refreshed)
+        weekend_races = load_cached_races()
+
+    if "new_entries" in pending_types or "post_positions" in pending_types:
+        upcoming_result = _refresh_upcoming_races_in_memory(weekend_races)
+
+    if "finish_positions" in pending_types:
+        refreshed_past_races, refreshed_past_entries = refresh_missing_past_race_history(weekend_races)
+
+    save_cached_races(weekend_races)
+    _prefetch_check_cache["raceSignature"] = ""
+    _prefetch_check_cache["result"] = None
+    _prefetch_check_cache["expiresAt"] = None
+
+    return {
+        "status": "success",
+        "applied": {
+            "newRaceCheckTriggered": "new_race" in pending_types,
+            "upcomingRefreshed": ("new_entries" in pending_types or "post_positions" in pending_types),
+            "pastHistoryRefreshed": "finish_positions" in pending_types,
+            "newRaceCachedCount": new_race_cached_count,
+            "updatedUpcomingRaces": upcoming_result["updated_races"],
+            "updatedUpcomingRows": upcoming_result["updated_rows"],
+            "failedUpcomingRaceCount": len(upcoming_result["failed_races"]),
+            "updatedPastRaces": refreshed_past_races,
+            "updatedPastEntries": refreshed_past_entries,
+            "pendingUpdateTypes": sorted(list(pending_types)),
+        },
     }
 
 

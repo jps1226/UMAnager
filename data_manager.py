@@ -247,6 +247,12 @@ def _get_month_race_ids(year: int, month: int):
         return []
 
 
+def get_month_race_ids(year: int, month: int):
+    """Public wrapper for month race-list discovery used by check-only prefetch scans."""
+    race_ids = _get_month_race_ids(year, month)
+    return sorted({str(rid).strip() for rid in race_ids if str(rid).strip()})
+
+
 def _get_race_ids_from_daily_list(target_date):
     """Fallback race-id discovery from Netkeiba daily race list page."""
     if isinstance(target_date, datetime.datetime):
@@ -837,3 +843,50 @@ def fetch_upcoming_race_snapshot(race_id):
         "info": race_info,
         "entries": formatted_entries
     }
+
+
+def fetch_entry_horse_ids_quick(race_id):
+    """Lightweight entry check for race-card changes.
+    Returns a set of horse IDs from the current entry list without fetching odds/predictions.
+    """
+    horse_ids, _ = fetch_entry_quick_data(race_id)
+    return horse_ids
+
+
+def fetch_entry_quick_data(race_id):
+    """Lightweight entry check. Returns (horse_ids, pp_set).
+    horse_ids: set of all horse IDs in the current live entry list.
+    pp_set: subset of horse_ids where a post position (horse_number / 馬番) is already assigned.
+    """
+    try:
+        result = keibascraper.load("entry", race_id)
+    except Exception as e:
+        logger.info(f"Quick entry data fetch unavailable for race {race_id}: {e}")
+        return set(), set()
+
+    if not (isinstance(result, tuple) and len(result) == 2):
+        return set(), set()
+
+    entry_list = result[1]
+    if not isinstance(entry_list, list) or not entry_list:
+        return set(), set()
+
+    _pp_keys = ["horse_number", "pp", "num", "馬番"]
+    horse_ids = set()
+    pp_set = set()
+
+    for row in entry_list:
+        if not isinstance(row, dict):
+            continue
+        raw_horse_id = row.get("horse_id") or row.get("Horse_ID") or row.get("id")
+        horse_id = str(raw_horse_id or "").split(".")[0].strip()
+        if not horse_id or horse_id.lower() == "nan":
+            continue
+        horse_ids.add(horse_id)
+        for pp_key in _pp_keys:
+            raw_pp = str(row.get(pp_key, "")).split(".")[0].strip()
+            if raw_pp and raw_pp not in ("", "0", "nan", "none"):
+                pp_set.add(horse_id)
+                break
+
+    return horse_ids, pp_set
