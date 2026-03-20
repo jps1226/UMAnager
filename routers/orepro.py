@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Dict, List
 
 import requests
 from bs4 import BeautifulSoup
@@ -33,6 +34,24 @@ class OreProSyncRequest(BaseModel):
 
 class OreProCompanionWindowRequest(BaseModel):
     action: str = "open"
+
+
+class OreProVoteMark(BaseModel):
+    symbol: str = ""
+    post: int = 0
+    mark_code: str = ""
+
+
+class OreProRaceVotesRequest(BaseModel):
+    race_id: str = ""
+    marks: List[OreProVoteMark] = []
+
+
+class OreProApplyVotesRequest(BaseModel):
+    races: List[OreProRaceVotesRequest] = []
+    dry_run: bool = False
+    use_companion_session: bool = True
+    force_refresh: bool = True
 
 
 def _extract_summary_lines(text: str):
@@ -151,8 +170,45 @@ def _extract_member_id_from_race_page_html(html_text: str):
     return m.group(1) if m else ""
 
 
+def _extract_seq_by_post_from_shutuba_html(html_text: str) -> Dict[str, str]:
+    soup = BeautifulSoup(html_text or "", "html.parser", from_encoding="euc-jp")
+    post_to_seq: Dict[str, str] = {}
+    for row in soup.select("tr.HorseList[id^='tr_']"):
+        row_id = str(row.get("id", "")).strip()
+        m = re.match(r"tr_(\d+)$", row_id)
+        if not m:
+            continue
+        seq = m.group(1)
+        post_cell = row.select_one("td[id^='act_waku_']")
+        if not post_cell:
+            continue
+        post_raw = re.sub(r"\D", "", post_cell.get_text(" ", strip=True) or "")
+        if post_raw:
+            post_to_seq[post_raw] = seq
+    return post_to_seq
+
+
+def _extract_plain_bet_summary_from_html(html_fragment: str) -> List[str]:
+    if not html_fragment:
+        return []
+    soup = BeautifulSoup(html_fragment, "html.parser")
+    lines = []
+    for raw in soup.get_text("\n", strip=True).split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        lines.append(line)
+        if len(lines) >= 24:
+            break
+    return lines
+
+
 def _orepro_window_helper_path() -> Path:
     return Path(__file__).resolve().parent.parent / "open_orepro_topmost.ps1"
+
+
+def _orepro_companion_vote_helper_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "orepro_apply_votes_companion.ps1"
 
 
 @router.post("/api/orepro/companion/window")
@@ -232,6 +288,305 @@ def control_orepro_companion_window(req: OreProCompanionWindowRequest = None):
         "status": "ok",
         "action": action,
         "message": raw_output or f"OrePro companion {action} request completed.",
+    }
+
+
+@router.post("/api/orepro/votes/apply")
+def apply_orepro_votes(req: OreProApplyVotesRequest = None):
+    if req is None:
+        req = OreProApplyVotesRequest()
+
+    if req.use_companion_session:
+        if os.name != "nt":
+            return {
+                "status": "error",
+                "message": "Companion-session vote apply is only supported on Windows.",
+                "dryRun": bool(req.dry_run),
+                "results": [],
+            }
+
+        helper_path = _orepro_companion_vote_helper_path()
+        if not helper_path.exists():
+            return {
+                "status": "error",
+                "message": f"Companion vote helper script is missing: {helper_path}",
+                "dryRun": bool(req.dry_run),
+                "results": [],
+            }
+
+        try:
+            req_payload = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(helper_path),
+                    "-PayloadJson",
+                    json.dumps(req_payload, ensure_ascii=False),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+        except Exception as exc:
+            return {
+                "status": "error",
+                "message": f"Failed launching companion vote helper: {exc}",
+                "dryRun": bool(req.dry_run),
+                "results": [],
+            }
+
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+        raw = stdout or stderr
+
+        if result.returncode != 0:
+            return {
+                "status": "error",
+                "message": raw or "Companion vote helper failed. Click Open OrePro once, then retry.",
+                "dryRun": bool(req.dry_run),
+                "results": [],
+            }
+
+        if raw:
+            cleaned = raw.replace("\ufeff", "").strip()
+            candidates = [cleaned]
+            for line in cleaned.splitlines():
+                stripped = line.strip()
+                if stripped:
+                    candidates.append(stripped)
+
+            # Extract balanced JSON object fragments from noisy/mixed stdout.
+            def _extract_json_object_fragments(text: str) -> List[str]:
+                fragments: List[str] = []
+                starts = [idx for idx, ch in enumerate(text) if ch == "{"]
+                for start in starts:
+                    depth = 0
+                    in_string = False
+                    escaped = False
+                    for idx in range(start, len(text)):
+                        ch = text[idx]
+                        if escaped:
+                            escaped = False
+                            continue
+                        if ch == "\\":
+                            escaped = True
+                            continue
+                        if ch == '"':
+                            in_string = not in_string
+                            continue
+                        if in_string:
+                            continue
+                        if ch == "{":
+                            depth += 1
+                        elif ch == "}":
+                            depth -= 1
+                            if depth == 0:
+                                fragments.append(text[start:idx + 1].strip())
+                                break
+                return fragments
+
+            candidates.extend(_extract_json_object_fragments(cleaned))
+
+            for candidate in reversed(candidates):
+                try:
+                    parsed = json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
+
+                if isinstance(parsed, str):
+                    nested = parsed.replace("\ufeff", "").strip()
+                    try:
+                        parsed = json.loads(nested)
+                    except json.JSONDecodeError:
+                        continue
+
+                if isinstance(parsed, dict):
+                    parsed.setdefault("dryRun", bool(req.dry_run))
+                    return parsed
+
+        return {
+            "status": "error",
+            "message": f"Companion helper returned no parseable JSON output. Raw: {(raw or '')[:300]}",
+            "dryRun": bool(req.dry_run),
+            "results": [],
+        }
+
+    symbol_to_mark_code = {"◎": "1", "〇": "2", "▲": "3", "△": "4"}
+    mark_sort = {"1": 1, "2": 2, "3": 3, "4": 4}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer": OREPRO_URL,
+    }
+
+    session = requests.Session()
+    race_results = []
+
+    for race_item in req.races or []:
+        race_id = str(race_item.race_id or "").strip()
+        if not race_id:
+            race_results.append({
+                "raceId": race_id,
+                "status": "error",
+                "message": "race_id is required.",
+            })
+            continue
+
+        dedup_by_mark: Dict[str, str] = {}
+        for mark in race_item.marks or []:
+            raw_code = str(getattr(mark, "mark_code", "") or "").strip()
+            mark_code = raw_code if raw_code in {"1", "2", "3", "4"} else symbol_to_mark_code.get(str(mark.symbol or "").strip())
+            post_num = str(int(mark.post or 0))
+            if not mark_code or post_num == "0" or mark_code in dedup_by_mark:
+                continue
+            dedup_by_mark[mark_code] = post_num
+
+        requested = [
+            {"symbol": {"1": "◎", "2": "〇", "3": "▲", "4": "△"}[code], "post": int(post)}
+            for code, post in sorted(dedup_by_mark.items(), key=lambda x: mark_sort.get(x[0], 99))
+        ]
+        if not requested:
+            race_results.append({
+                "raceId": race_id,
+                "status": "skipped",
+                "message": "No valid main marks (1-4) to apply for this race.",
+                "requested": [],
+                "resolved": [],
+                "unmatchedPosts": [],
+            })
+            continue
+
+        try:
+            shutuba_resp = session.get(
+                "https://orepro.netkeiba.com/bet/shutuba.html",
+                params={"race_id": race_id},
+                headers=headers,
+                timeout=20,
+            )
+            shutuba_html = shutuba_resp.text or ""
+            post_to_seq = _extract_seq_by_post_from_shutuba_html(shutuba_html)
+        except requests.RequestException as exc:
+            race_results.append({
+                "raceId": race_id,
+                "status": "error",
+                "message": f"Failed fetching shutuba page: {exc}",
+                "requested": requested,
+                "resolved": [],
+                "unmatchedPosts": [r["post"] for r in requested],
+            })
+            continue
+
+        resolved = []
+        unmatched = []
+        for mark_code, post in sorted(dedup_by_mark.items(), key=lambda x: mark_sort.get(x[0], 99)):
+            seq = post_to_seq.get(post)
+            if not seq:
+                unmatched.append(int(post))
+                continue
+            resolved.append({
+                "symbol": {"1": "◎", "2": "〇", "3": "▲", "4": "△"}[mark_code],
+                "post": int(post),
+                "seq": int(seq),
+                "markCode": int(mark_code),
+            })
+
+        if not resolved:
+            race_results.append({
+                "raceId": race_id,
+                "status": "error",
+                "message": "None of the requested post numbers were found in OrePro shutuba rows.",
+                "requested": requested,
+                "resolved": [],
+                "unmatchedPosts": unmatched,
+            })
+            continue
+
+        if req.dry_run:
+            race_results.append({
+                "raceId": race_id,
+                "status": "dry-run",
+                "message": "Dry run only. No OrePro cart updates were sent.",
+                "requested": requested,
+                "resolved": resolved,
+                "unmatchedPosts": unmatched,
+            })
+            continue
+
+        cart_payload = [
+            ("input", "UTF-8"),
+            ("output", "json"),
+            ("action", "replace"),
+            ("group", f"oremark_{race_id}"),
+        ]
+        for row in resolved:
+            cart_payload.append(("item_id[]", str(row["seq"])))
+            cart_payload.append(("item_value[]", "1"))
+            cart_payload.append(("item_price[]", "0"))
+            cart_payload.append(("client_data[]", f"_{row['markCode']}"))
+
+        try:
+            cart_resp = session.post(
+                "https://orepro.netkeiba.com/cart/",
+                data=cart_payload,
+                headers={**headers, "Referer": f"https://orepro.netkeiba.com/bet/shutuba.html?race_id={race_id}"},
+                timeout=20,
+            )
+            try:
+                cart_json = cart_resp.json()
+            except Exception:
+                cart_json = {"raw": (cart_resp.text or "")[:1000]}
+
+            session.post(
+                BET_API_URL,
+                data={"input": "UTF-8", "output": "jsonp", "race_id": race_id},
+                headers=headers,
+                timeout=20,
+            )
+            bet_view_resp = session.post(
+                "https://orepro.netkeiba.com/bet/api_get_bet_view.html",
+                data={"input": "UTF-8", "output": "jsonp", "race_id": race_id, "src": "session"},
+                headers=headers,
+                timeout=20,
+            )
+            bet_view_json = _decode_jsonp_object(bet_view_resp.text or "")
+            bet_view_html = ""
+            if isinstance(bet_view_json, dict):
+                bet_view_html = str(bet_view_json.get("data") or "")
+            preview_lines = _extract_plain_bet_summary_from_html(bet_view_html)
+
+            race_results.append({
+                "raceId": race_id,
+                "status": "ok",
+                "message": "Marks applied to OrePro cart session (no money action).",
+                "requested": requested,
+                "resolved": resolved,
+                "unmatchedPosts": unmatched,
+                "cartResponse": cart_json,
+                "betPreviewLines": preview_lines,
+            })
+        except requests.RequestException as exc:
+            race_results.append({
+                "raceId": race_id,
+                "status": "error",
+                "message": f"Failed applying marks via OrePro API: {exc}",
+                "requested": requested,
+                "resolved": resolved,
+                "unmatchedPosts": unmatched,
+            })
+
+    ok_count = len([r for r in race_results if r.get("status") == "ok"])
+    return {
+        "status": "ok" if ok_count else "warn",
+        "message": (
+            f"Applied marks for {ok_count}/{len(race_results)} races. "
+            "This endpoint only updates OrePro mark/cart state and does not submit paid bets."
+        ),
+        "dryRun": bool(req.dry_run),
+        "results": race_results,
     }
 
 

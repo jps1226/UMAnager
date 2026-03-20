@@ -3172,7 +3172,7 @@ function buildRacecourseCheatHtml(targetDate) {
             const isCollapsed = !!sidebarRaceCollapseState[raceCard.r_id];
             const arrow = isCollapsed ? '▶' : '▼';
             html += `<div class="export-race-card voting-race-card${isCollapsed ? ' is-collapsed' : ''}" data-rid="${escapeHtml(raceCard.r_id)}">`;
-            html += `<div class="export-race-title voting-race-title" onclick="toggleVotingSidebarRace('${escapeHtml(raceCard.r_id)}')" title="Click to collapse/expand this race"><span class="voting-race-arrow">${arrow}</span> 🕒 ${escapeHtml(raceCard.time)} | Race ${raceCard.raceNum}: ${escapeHtml(raceCard.raceName || '')} ${raceCard.winBadgesHtml}</div>`;
+            html += `<div class="export-race-title voting-race-title" onclick="toggleVotingSidebarRace('${escapeHtml(raceCard.r_id)}')" title="Click to collapse/expand this race"><span class="voting-race-arrow">${arrow}</span><span class="voting-race-title-text">🕒 ${escapeHtml(raceCard.time)} | Race ${raceCard.raceNum}: ${escapeHtml(raceCard.raceName || '')} ${raceCard.winBadgesHtml}</span><button class="toolbar-btn toolbar-btn-muted voting-race-apply-btn" onclick="applySingleRaceVotesToOrePro(event, '${escapeHtml(raceCard.r_id)}')" title="Apply only this race to OrePro">Apply</button></div>`;
             html += `<div class="voting-race-body">`;
 
             if (raceCard.orepro) {
@@ -3303,6 +3303,204 @@ async function openOreProCompanion() {
 
 async function focusOreProCompanion() {
     return controlOreProCompanion('focus');
+}
+
+function buildOreProApplyVotesPayload(targetDate) {
+    const date = String(targetDate || '').trim();
+    const markPriority = { '◎': 1, '〇': 2, '▲': 3, '△': 4 };
+    const raceMap = {};
+
+    for (const [key, symbol] of Object.entries(globalMarks)) {
+        if (!markPriority[symbol]) continue;
+
+        const [r_id, h_id] = key.split('_');
+        const info = globalRaceInfo[r_id];
+        if (!info) continue;
+        if (date && String(info.clean_date || '').trim() !== date) continue;
+
+        const entries = globalRaceEntries[r_id] || [];
+        const row = entries.find(r => String(r.Horse_ID).split('.')[0] === String(h_id));
+        const post = row ? parseInt(row.PP, 10) : 0;
+        if (!Number.isFinite(post) || post <= 0) continue;
+
+        if (!raceMap[r_id]) raceMap[r_id] = {};
+        // Keep first occurrence per symbol for safety.
+        if (!raceMap[r_id][symbol]) {
+            raceMap[r_id][symbol] = post;
+        }
+    }
+
+    const races = Object.entries(raceMap).map(([raceId, markObj]) => {
+        const marks = Object.entries(markObj)
+            .map(([symbol, post]) => ({ symbol, post, mark_code: String(markPriority[symbol] || '') }))
+            .sort((a, b) => (markPriority[a.symbol] || 99) - (markPriority[b.symbol] || 99));
+        return {
+            race_id: raceId,
+            marks,
+        };
+    }).filter(r => r.marks.length > 0);
+
+    return { races, dry_run: false, force_refresh: true };
+}
+
+function buildOreProApplyVotesPayloadForRace(raceId) {
+    const targetRaceId = String(raceId || '').trim();
+    const markPriority = { '◎': 1, '〇': 2, '▲': 3, '△': 4 };
+    const raceMarks = {};
+
+    if (!targetRaceId) {
+        return { races: [], dry_run: false, force_refresh: true };
+    }
+
+    for (const [key, symbol] of Object.entries(globalMarks)) {
+        if (!markPriority[symbol]) continue;
+
+        const [r_id, h_id] = key.split('_');
+        if (String(r_id || '').trim() !== targetRaceId) continue;
+
+        const entries = globalRaceEntries[r_id] || [];
+        const row = entries.find(r => String(r.Horse_ID).split('.')[0] === String(h_id));
+        const post = row ? parseInt(row.PP, 10) : 0;
+        if (!Number.isFinite(post) || post <= 0) continue;
+
+        if (!raceMarks[symbol]) {
+            raceMarks[symbol] = post;
+        }
+    }
+
+    const marks = Object.entries(raceMarks)
+        .map(([symbol, post]) => ({ symbol, post, mark_code: String(markPriority[symbol] || '') }))
+        .sort((a, b) => (markPriority[a.symbol] || 99) - (markPriority[b.symbol] || 99));
+
+    if (!marks.length) {
+        return { races: [], dry_run: false, force_refresh: true };
+    }
+
+    return {
+        races: [{ race_id: targetRaceId, marks }],
+        dry_run: false,
+        force_refresh: true
+    };
+}
+
+async function applyVotesToOrePro() {
+    const payload = buildOreProApplyVotesPayload(currentActiveDate);
+    if (!payload.races.length) {
+        setOreProSessionStatus('No valid ◎〇▲△ marks found for the active day to apply.', 'warn');
+        return;
+    }
+
+    setOreProSessionStatus(`Preparing OrePro companion session...`, 'info');
+
+    const companion = await controlOreProCompanion('open');
+    if (!companion || companion.status !== 'ok') {
+        setOreProSessionStatus(
+            companion?.message || 'Could not initialize companion OrePro session. Click Open OrePro and retry.',
+            'warn'
+        );
+        return;
+    }
+
+    setOreProSessionStatus(`Applying marks to OrePro for ${payload.races.length} race(s)...`, 'info');
+
+    try {
+        const res = await fetch('/api/orepro/votes/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+
+        const okCount = Array.isArray(data?.results)
+            ? data.results.filter(r => r?.status === 'ok').length
+            : 0;
+        const totalCount = Array.isArray(data?.results) ? data.results.length : 0;
+        const mode = okCount > 0 ? 'ok' : 'warn';
+
+        let serverMessage = data?.message || `Applied votes for ${okCount}/${totalCount} race(s).`;
+        try {
+            const nested = JSON.parse(serverMessage || '{}');
+            if (nested?.message) serverMessage = nested.message;
+        } catch (_) {}
+
+        setOreProSessionStatus(serverMessage, mode);
+
+        const out = document.getElementById('orepro-sync-results');
+        if (out && Array.isArray(data?.results)) {
+            const lines = data.results.map(r => {
+                const rid = escapeHtml(String(r?.raceId || '-'));
+                const stat = escapeHtml(String(r?.status || 'unknown'));
+                const msg = escapeHtml(String(r?.message || ''));
+                return `<div class="orepro-sync-list">[${stat}] race ${rid}: ${msg}</div>`;
+            }).join('');
+
+            out.innerHTML = `
+                <div class="orepro-sync-title">Apply Votes (Marks Only)</div>
+                <div class="orepro-sync-list">Requested ${totalCount} race(s), succeeded ${okCount}.</div>
+                ${lines}
+            `;
+        }
+    } catch (err) {
+        setOreProSessionStatus(`Failed applying votes: ${err?.message || err}`, 'error');
+    }
+}
+
+async function applySingleRaceVotesToOrePro(event, raceId) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    const payload = buildOreProApplyVotesPayloadForRace(raceId);
+    if (!payload.races.length) {
+        setOreProSessionStatus(`No valid marks found for race ${raceId}.`, 'warn');
+        return;
+    }
+
+    setOreProSessionStatus(`Preparing OrePro companion session...`, 'info');
+
+    const companion = await controlOreProCompanion('open');
+    if (!companion || companion.status !== 'ok') {
+        setOreProSessionStatus(
+            companion?.message || 'Could not initialize companion OrePro session. Click Open OrePro and retry.',
+            'warn'
+        );
+        return;
+    }
+
+    setOreProSessionStatus(`Applying marks to OrePro for race ${raceId}...`, 'info');
+
+    try {
+        const res = await fetch('/api/orepro/votes/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+
+        const result = Array.isArray(data?.results) ? data.results[0] : null;
+        const mode = result?.status === 'ok' ? 'ok' : 'warn';
+        let serverMessage = result?.message || data?.message || `Applied votes for race ${raceId}.`;
+        try {
+            const nested = JSON.parse(serverMessage || '{}');
+            if (nested?.message) serverMessage = nested.message;
+        } catch (_) {}
+
+        setOreProSessionStatus(serverMessage, mode);
+
+        const out = document.getElementById('orepro-sync-results');
+        if (out && result) {
+            const rid = escapeHtml(String(result?.raceId || raceId));
+            const stat = escapeHtml(String(result?.status || 'unknown'));
+            const msg = escapeHtml(String(result?.message || ''));
+            out.innerHTML = `
+                <div class="orepro-sync-title">Apply Votes (Single Race)</div>
+                <div class="orepro-sync-list">[${stat}] race ${rid}: ${msg}</div>
+            `;
+        }
+    } catch (err) {
+        setOreProSessionStatus(`Failed applying race votes: ${err?.message || err}`, 'error');
+    }
 }
 
 function setOreProSessionStatus(message, mode = 'info') {

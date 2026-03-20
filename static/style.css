@@ -1257,6 +1257,17 @@ td.finish-pos-3 { color: #cd7f32; }
     flex-wrap: wrap;
 }
 
+.voting-race-title-text {
+    min-width: 0;
+}
+
+.voting-race-apply-btn {
+    margin-left: auto;
+    padding: 2px 8px;
+    font-size: 11px;
+    line-height: 1.2;
+}
+
 .voting-line-right-meta {
     display: inline-flex;
     align-items: center;

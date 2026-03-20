@@ -6,6 +6,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $statePath = Join-Path $env:TEMP 'umanager-orepro-window.json'
+$debugPort = 9222
+$userDataDir = Join-Path $env:TEMP 'umanager-orepro-browser-profile'
 
 Add-Type @"
 using System;
@@ -29,7 +31,7 @@ function Write-JsonAndExit {
         [string]$Status,
         [string]$Message,
         [bool]$Reused = $false,
-        [int]$Pid = 0
+        [int]$ProcessId = 0
     )
 
     @{
@@ -37,7 +39,7 @@ function Write-JsonAndExit {
         action = $Action
         message = $Message
         reused = $Reused
-        pid = $Pid
+        pid = $ProcessId
     } | ConvertTo-Json -Compress
     exit $Code
 }
@@ -157,19 +159,46 @@ function Promote-Window {
     return $true
 }
 
+function Test-CdpReady {
+    param([int]$Port = 9222)
+
+    try {
+        $resp = Invoke-WebRequest -Uri ("http://127.0.0.1:{0}/json/version" -f $Port) -UseBasicParsing -TimeoutSec 1
+        return ($resp.StatusCode -eq 200)
+    } catch {
+        return $false
+    }
+}
+
 $existing = Get-OreProWindow
-if ($existing) {
+if ($existing -and $Action -eq 'focus') {
     Save-WindowState -Process $existing
     [void](Promote-Window -Process $existing)
-    Write-JsonAndExit -Code 0 -Status 'ok' -Message 'Focused the existing OrePro companion window and kept it topmost.' -Reused $true -Pid $existing.Id
+    Write-JsonAndExit -Code 0 -Status 'ok' -Message 'Focused the existing OrePro companion window and kept it topmost.' -Reused $true -ProcessId $existing.Id
+}
+
+# For "open", if a compatible managed window/debug target is already alive, just reuse it.
+if ($existing -and $Action -eq 'open' -and (Test-CdpReady -Port $debugPort)) {
+    Save-WindowState -Process $existing
+    [void](Promote-Window -Process $existing)
+    Write-JsonAndExit -Code 0 -Status 'ok' -Message 'Reused existing managed OrePro companion window.' -Reused $true -ProcessId $existing.Id
 }
 
 $browserPath = Find-ChromiumBrowserPath
 $browserNames = @('msedge', 'chrome', 'brave')
 $launchTime = Get-Date
 
+if (-not (Test-Path $userDataDir)) {
+    New-Item -ItemType Directory -Path $userDataDir -Force | Out-Null
+}
+
 if ($browserPath) {
-    Start-Process -FilePath $browserPath -ArgumentList @('--new-window', "--app=$Url") | Out-Null
+    Start-Process -FilePath $browserPath -ArgumentList @(
+        "--remote-debugging-port=$debugPort",
+        "--user-data-dir=$userDataDir",
+        '--new-window',
+        "--app=$Url"
+    ) | Out-Null
 } else {
     Start-Process $Url | Out-Null
 }
@@ -185,8 +214,8 @@ for ($i = 0; $i -lt 40; $i++) {
     if ($window) {
         Save-WindowState -Process $window
         [void](Promote-Window -Process $window)
-        Write-JsonAndExit -Code 0 -Status 'ok' -Message 'Opened OrePro in a native topmost companion window.' -Reused $false -Pid $window.Id
+        Write-JsonAndExit -Code 0 -Status 'ok' -Message 'Opened OrePro in a native topmost companion window.' -Reused $false -ProcessId $window.Id
     }
 }
 
-Write-JsonAndExit -Code 1 -Status 'error' -Message 'Timed out waiting for the OrePro companion window to appear.' -Reused $false -Pid 0
+    Write-JsonAndExit -Code 1 -Status 'error' -Message 'Timed out waiting for the OrePro companion window to appear.' -Reused $false -ProcessId 0
