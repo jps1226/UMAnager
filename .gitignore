@@ -13,8 +13,7 @@ watchlist_horses.txt
 
 # Ignore generated data backups
 backups/
-data/*.zip
-data/*.sqlite3
+data/
 
 # Ignore environment variables or virtual environments (if you use them)
 .env
