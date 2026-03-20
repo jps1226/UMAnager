@@ -1,7 +1,10 @@
 import datetime
 import json
 import logging
+import os
 import re
+import subprocess
+from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
@@ -26,6 +29,10 @@ class OreProSyncRequest(BaseModel):
     kaisai_date: str = ""   # YYYYMMDD, e.g. "20260314"
     kaisai_id: str = ""     # optional venue ID, e.g. "2026060205"
     yosoka_id: str = ""     # optional public OrePro profile ID (e.g. 20021241)
+
+
+class OreProCompanionWindowRequest(BaseModel):
+    action: str = "open"
 
 
 def _extract_summary_lines(text: str):
@@ -142,6 +149,90 @@ def _extract_goods_entry_metrics(li_node):
 def _extract_member_id_from_race_page_html(html_text: str):
     m = re.search(r"memberId'\s*:\s*'?(\d+)'?", html_text or "")
     return m.group(1) if m else ""
+
+
+def _orepro_window_helper_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "open_orepro_topmost.ps1"
+
+
+@router.post("/api/orepro/companion/window")
+def control_orepro_companion_window(req: OreProCompanionWindowRequest = None):
+    if req is None:
+        req = OreProCompanionWindowRequest()
+
+    action = str(req.action or "open").strip().lower()
+    if action not in {"open", "focus"}:
+        action = "open"
+
+    if os.name != "nt":
+        return {
+            "status": "error",
+            "action": action,
+            "message": "Native OrePro always-on-top launching is only supported on Windows.",
+        }
+
+    script_path = _orepro_window_helper_path()
+    if not script_path.exists():
+        return {
+            "status": "error",
+            "action": action,
+            "message": f"OrePro helper script is missing: {script_path}",
+        }
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script_path),
+                "-Action",
+                action,
+                "-Url",
+                OREPRO_URL,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except Exception as exc:
+        logger.warning("OrePro native helper failed to launch: %s", exc)
+        return {
+            "status": "error",
+            "action": action,
+            "message": f"Failed to launch OrePro helper: {exc}",
+        }
+
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    raw_output = stdout or stderr
+
+    if result.returncode != 0:
+        logger.warning("OrePro native helper returned %s: %s", result.returncode, raw_output or "(no output)")
+        return {
+            "status": "error",
+            "action": action,
+            "message": raw_output or "OrePro native helper failed.",
+        }
+
+    if raw_output:
+        try:
+            payload = json.loads(raw_output)
+            if isinstance(payload, dict):
+                payload.setdefault("status", "ok")
+                payload.setdefault("action", action)
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+    return {
+        "status": "ok",
+        "action": action,
+        "message": raw_output or f"OrePro companion {action} request completed.",
+    }
 
 
 @router.post("/api/orepro/results/sync")

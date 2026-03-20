@@ -13,6 +13,7 @@ let currentTimelineTab = "upcoming";
 let currentActiveDate = null;
 let currentCalendarMonth = null;
 let currentMainView = 'races';
+let sidebarRaceCollapseState = {};
 let lastPrefetchAwarenessKey = "";
 let globalPrefetchUpdates = null; // { updatesByDate: {...}, hasUpdates: bool, ... } from /api/prefetch-check
 let raceSorts = {}; // NEW: Remembers which column is sorted for each race
@@ -3082,38 +3083,68 @@ function buildRaceWinBadgesHtml(race) {
     return `<span class="race-hit-wrap">${badges.join('')}</span>`;
 }
 
+function toggleVotingSidebarRace(raceId) {
+    const card = document.querySelector(`.voting-race-card[data-rid="${CSS.escape(String(raceId || ''))}"]`);
+    if (!card) return;
+
+    const nextCollapsed = !card.classList.contains('is-collapsed');
+    sidebarRaceCollapseState[String(raceId)] = nextCollapsed;
+    card.classList.toggle('is-collapsed', nextCollapsed);
+
+    const arrow = card.querySelector('.voting-race-arrow');
+    if (arrow) {
+        arrow.textContent = nextCollapsed ? '▶' : '▼';
+    }
+}
+
 function buildRacecourseCheatHtml(targetDate) {
     const date = String(targetDate || '').trim();
     const timeline = globalDateTimelineByDate[date] || '';
-    const races = Array.isArray(globalRacesByDate[date]) ? globalRacesByDate[date] : [];
-    const byTrack = {};
     const sMap = { "◎": 1, "〇": 2, "▲": 3, "△": 4, "☆": 5, "消": 6 };
     const oreproRaceMap = getOreProRaceResultMapForActiveDate();
+    const bColors = {
+        1: { bg: '#f8f9fa', color: '#000', border: '#ccc' },
+        2: { bg: '#212529', color: '#fff', border: '#444' },
+        3: { bg: '#d26363', color: '#fff', border: '#d26363' },
+        4: { bg: '#5970b0', color: '#fff', border: '#5970b0' },
+        5: { bg: '#b8b053', color: '#000', border: '#b8b053' },
+        6: { bg: '#72af68', color: '#fff', border: '#72af68' },
+        7: { bg: '#efa65e', color: '#000', border: '#efa65e' },
+        8: { bg: '#dc809a', color: '#000', border: '#dc809a' }
+    };
 
-    races.forEach(race => {
-        const r_id = String(race?.info?.race_id || '').trim();
-        if (!r_id) return;
+    // Collect all non-X marks for this date, grouped by race
+    const raceMarkGroups = {};
+    for (const [key, symbol] of Object.entries(globalMarks)) {
+        if (!symbol || symbol === 'X') continue;
+        const [r_id, h_id] = key.split('_');
+        const info = globalRaceInfo[r_id];
+        if (!info || (info.clean_date || '') !== date) continue;
 
-        const marks = collectRaceMainMarks(r_id);
-        if (!Object.keys(marks).length) return;
+        if (!raceMarkGroups[r_id]) raceMarkGroups[r_id] = { info, marks: [] };
+        const entries = globalRaceEntries[r_id] || [];
+        const row = entries.find(r => String(r.Horse_ID).split('.')[0] === h_id);
+        raceMarkGroups[r_id].marks.push({
+            symbol,
+            rank: sMap[symbol] || 99,
+            horse: row ? row.Horse : 'Unknown Horse',
+            pp: row ? parseInt(row.PP) || 99 : 99,
+            bk: row ? parseInt(row.BK) || 0 : 0,
+            fav: row ? String(row.Fav || '').trim() : '',
+            finishRank: parseFinishRank(row?.Finish)
+        });
+    }
 
-        const info = race.info || {};
+    // Group races by track
+    const byTrack = {};
+    for (const [r_id, group] of Object.entries(raceMarkGroups)) {
+        group.marks.sort((a, b) => a.rank - b.rank);
+        const info = group.info;
         const track = String(info.place || '').toUpperCase();
         const raceNum = parseInt(info.race_number, 10) || 0;
-        const entries = Array.isArray(race.entries) ? race.entries : [];
-        const recap = evaluateRaceRecap(race);
-
-        const markRows = Object.entries(marks).map(([symbol, horseId]) => {
-            const row = entries.find(r => String(r.Horse_ID).split('.')[0] === String(horseId));
-            const finishRank = parseFinishRank(row?.Finish);
-            return {
-                symbol,
-                rank: sMap[symbol] || 99,
-                horse: row ? row.Horse : 'Unknown Horse',
-                fav: row ? String(row.Fav || '').trim() : '',
-                finishRank
-            };
-        }).sort((a, b) => a.rank - b.rank);
+        // Build a minimal race object for win-badge evaluation
+        const entriesArr = globalRaceEntries[r_id] || [];
+        const raceObj = { info, entries: entriesArr };
 
         if (!byTrack[track]) byTrack[track] = [];
         byTrack[track].push({
@@ -3121,11 +3152,11 @@ function buildRacecourseCheatHtml(targetDate) {
             raceNum,
             time: String(info.time || 'TBA'),
             raceName: localizeRaceName(info.race_name),
-            winBadgesHtml: timeline === 'past' ? buildRaceWinBadgesHtml(race) : '',
+            winBadgesHtml: timeline === 'past' ? buildRaceWinBadgesHtml(raceObj) : '',
             orepro: oreproRaceMap.get(r_id) || null,
-            marks: markRows
+            marks: group.marks
         });
-    });
+    }
 
     const tracks = Object.keys(byTrack).sort();
     if (!tracks.length) {
@@ -3138,8 +3169,10 @@ function buildRacecourseCheatHtml(targetDate) {
         html += `<div class="export-track-grid">`;
 
         byTrack[track].sort((a, b) => a.raceNum - b.raceNum).forEach(raceCard => {
-            html += `<div class="export-race-card voting-race-card" data-rid="${escapeHtml(raceCard.r_id)}">`;
-            html += `<div class="export-race-title voting-race-title">🕒 ${escapeHtml(raceCard.time)} | Race ${raceCard.raceNum}: ${escapeHtml(raceCard.raceName || '')} ${raceCard.winBadgesHtml}</div>`;
+            const isCollapsed = !!sidebarRaceCollapseState[raceCard.r_id];
+            const arrow = isCollapsed ? '▶' : '▼';
+            html += `<div class="export-race-card voting-race-card${isCollapsed ? ' is-collapsed' : ''}" data-rid="${escapeHtml(raceCard.r_id)}">`;
+            html += `<div class="export-race-title voting-race-title" onclick="toggleVotingSidebarRace('${escapeHtml(raceCard.r_id)}')" title="Click to collapse/expand this race"><span class="voting-race-arrow">${arrow}</span> 🕒 ${escapeHtml(raceCard.time)} | Race ${raceCard.raceNum}: ${escapeHtml(raceCard.raceName || '')} ${raceCard.winBadgesHtml}</div>`;
             html += `<div class="voting-race-body">`;
 
             if (raceCard.orepro) {
@@ -3152,18 +3185,23 @@ function buildRacecourseCheatHtml(targetDate) {
             }
 
             raceCard.marks.forEach(m => {
+                const c = bColors[m.bk] || { bg: '#444', color: '#fff', border: '#444' };
+                const symSize = m.symbol === '◎' ? '19px' : '16px';
+                const ppBadge = m.pp !== 99
+                    ? `<span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;font-size:12px;font-weight:bold;background:${c.bg};color:${c.color};border:1px solid ${c.border};border-radius:4px;margin-right:4px;">${m.pp}</span>`
+                    : `<span style="display:inline-block;width:22px;height:22px;margin-right:4px;"></span>`;
+                const markBadge = `<span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;font-size:${symSize};font-weight:bold;background:${c.bg};color:${c.color};border:1px solid ${c.border};border-radius:4px;margin-right:8px;">${escapeHtml(m.symbol)}</span>`;
                 const favBadge = m.fav ? `Fav ${escapeHtml(String(m.fav))}` : 'Fav -';
                 const finishBadge = timeline === 'past'
                     ? `<span class="voting-finish-badge${m.finishRank ? ` rank-${m.finishRank}` : ''}">Fin ${m.finishRank || '-'}</span>`
                     : '';
 
                 html += `
-                <div class="export-horse-line" style="margin-bottom: 8px;">
-                    <span class="export-symbol" style="font-weight:bold; margin-right:8px; width:22px; text-align:center;">${escapeHtml(m.symbol)}</span>
-                    <div style="flex: 1; min-width: 0; display:flex; justify-content:space-between; gap:10px;">
+                <div class="export-horse-line" style="margin-bottom:8px;">
+                    ${ppBadge}${markBadge}<div style="flex:1;min-width:0;display:flex;justify-content:space-between;gap:10px;">
                         <span style="font-weight:500;">${escapeHtml(String(m.horse || 'Unknown Horse'))}</span>
                         <div class="voting-line-right-meta">
-                            <span style="font-size:11px; color:#ddd; border:1px solid #555; border-radius:4px; padding:2px 6px; white-space:nowrap;">${favBadge}</span>
+                            <span style="font-size:11px;color:#ddd;border:1px solid #555;border-radius:4px;padding:2px 6px;white-space:nowrap;">${favBadge}</span>
                             ${finishBadge}
                         </div>
                     </div>
@@ -3240,23 +3278,31 @@ function isOreProCompanionOpen() {
     return !!(oreproCompanionWindow && !oreproCompanionWindow.closed);
 }
 
-function openOreProCompanion() {
-    const win = window.open(OREPRO_URL, OREPRO_COMPANION_WINDOW_NAME, 'width=1320,height=920,menubar=no,toolbar=no,location=yes,status=no');
-    if (!win) {
-        setOreProSessionStatus('Popup blocked. Allow popups for localhost, then retry Open OrePro.', 'warn');
-        return;
+async function controlOreProCompanion(action) {
+    const normalizedAction = action === 'focus' ? 'focus' : 'open';
+
+    try {
+        const res = await fetch('/api/orepro/companion/window', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: normalizedAction })
+        });
+        const payload = await res.json();
+        const status = payload?.status === 'ok' ? 'ok' : 'warn';
+        setOreProSessionStatus(payload?.message || 'OrePro companion request completed.', status);
+        return payload;
+    } catch (err) {
+        setOreProSessionStatus(`OrePro companion request failed: ${err?.message || err}`, 'error');
+        return null;
     }
-    oreproCompanionWindow = win;
-    setOreProSessionStatus('OrePro companion opened. Place bets there, then use Sync Results here.', 'ok');
 }
 
-function focusOreProCompanion() {
-    if (isOreProCompanionOpen()) {
-        oreproCompanionWindow.focus();
-        setOreProSessionStatus('Focused OrePro companion window.', 'ok');
-        return;
-    }
-    openOreProCompanion();
+async function openOreProCompanion() {
+    return controlOreProCompanion('open');
+}
+
+async function focusOreProCompanion() {
+    return controlOreProCompanion('focus');
 }
 
 function setOreProSessionStatus(message, mode = 'info') {
@@ -3779,195 +3825,174 @@ function buildDailyRecapHtml(targetDate) {
 
 async function showExportModal() {
     const targetDate = String(currentActiveDate || '').trim();
-    const summaryByDate = {};
     const sMap = {"◎": 1, "〇": 2, "▲": 3, "△": 4, "☆": 5, "消": 6};
+    const bColors = {
+        1: { bg: '#f8f9fa', color: '#000', border: '#ccc' },
+        2: { bg: '#212529', color: '#fff', border: '#444' },
+        3: { bg: '#d26363', color: '#fff', border: '#d26363' },
+        4: { bg: '#5970b0', color: '#fff', border: '#5970b0' },
+        5: { bg: '#b8b053', color: '#000', border: '#b8b053' },
+        6: { bg: '#72af68', color: '#fff', border: '#72af68' },
+        7: { bg: '#efa65e', color: '#000', border: '#efa65e' },
+        8: { bg: '#dc809a', color: '#000', border: '#dc809a' }
+    };
 
+    // Collect all non-X marks for this date, grouped by race
+    const raceMarkGroups = {};
     for (const [key, symbol] of Object.entries(globalMarks)) {
         if (!symbol || symbol === 'X') continue;
-
         const [r_id, h_id] = key.split('_');
         const info = globalRaceInfo[r_id];
         if (!info) continue;
-
-        const dateStr = info.clean_date || "Unknown Date";
+        const dateStr = info.clean_date || '';
         if (!targetDate || dateStr !== targetDate) continue;
-        const track = info.place.toUpperCase();
-        const raceNum = parseInt(info.race_number);
 
-        if (!summaryByDate[dateStr]) summaryByDate[dateStr] = {};
-        if (!summaryByDate[dateStr][track]) summaryByDate[dateStr][track] = {};
-        if (!summaryByDate[dateStr][track][raceNum]) summaryByDate[dateStr][track][raceNum] = [];
-
+        if (!raceMarkGroups[r_id]) raceMarkGroups[r_id] = { info, marks: [] };
         const entries = globalRaceEntries[r_id] || [];
         const horseRow = entries.find(r => String(r.Horse_ID).split('.')[0] === h_id);
-        const horseName = horseRow ? horseRow.Horse : "Unknown Horse";
-        const pp = horseRow ? parseInt(horseRow.PP) || 99 : 99;
-        const bk = horseRow ? parseInt(horseRow.BK) || 0 : 0;
-        const fav = horseRow ? String(horseRow.Fav || "").trim() : "";
-
-        summaryByDate[dateStr][track][raceNum].push({
-            symbol: symbol,
+        raceMarkGroups[r_id].marks.push({
+            symbol,
             rank: sMap[symbol] || 99,
-            horse: horseName,
-            pp: pp,
-            bk: bk,
-            fav: fav
+            horse: horseRow ? horseRow.Horse : 'Unknown Horse',
+            pp: horseRow ? parseInt(horseRow.PP) || 99 : 99,
+            bk: horseRow ? parseInt(horseRow.BK) || 0 : 0,
+            fav: horseRow ? String(horseRow.Fav || '').trim() : ''
         });
     }
+
+    // Sort races chronologically by sort_time, then by race number for ties
+    const sortedRaces = Object.entries(raceMarkGroups).sort(([, a], [, b]) => {
+        const at = a.info.sort_time || '';
+        const bt = b.info.sort_time || '';
+        if (at !== bt) return at.localeCompare(bt);
+        return (parseInt(a.info.race_number) || 0) - (parseInt(b.info.race_number) || 0);
+    });
+
+    // Build race-time data array for auto-collapse (embedded as JSON in the popup)
+    const raceTimeData = sortedRaces.map(([r_id, group]) => ({
+        safeId: r_id.replace(/[^a-zA-Z0-9-]/g, ''),
+        sortTime: group.info.sort_time || ''
+    }));
 
     let html = "";
-    const dates = Object.keys(summaryByDate).sort();
-
-    if (dates.length === 0) {
+    if (!sortedRaces.length) {
         html = "<p style='text-align:center; color:#888; margin-top:50px;'>No votes cast yet! Make your selections in the grid first.</p>";
     } else {
-        dates.forEach(date => {
-            const safeDate = escapeHtml(String(date));
-            html += `<h2 style="color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px;">📅 ${safeDate}</h2>`;
-            
-            const tracks = Object.keys(summaryByDate[date]).sort();
-            tracks.forEach(track => {
+        sortedRaces.forEach(([r_id, group]) => {
+            const info = group.info;
+            const track = String(info.place || '').toUpperCase();
+            const raceNum = parseInt(info.race_number, 10) || 0;
+            const time = String(info.time || 'TBA');
+            const safeId = r_id.replace(/[^a-zA-Z0-9-]/g, '');
 
-                const safeTrackId = `${date}-${track}`.replace(/[^a-zA-Z0-9-]/g, '');
+            group.marks.sort((a, b) => a.rank - b.rank);
 
-                const safeTrack = escapeHtml(String(track));
-                html += `<div class="export-track-header" onclick="toggleExportTrack('${safeTrackId}')" title="Click to collapse/expand track">
-                                <span id="arrow-track-${safeTrackId}" style="display:inline-block; width:20px; font-size: 14px; vertical-align: middle;">▼</span>${safeTrack}
-                    </div>`;
+            html += `<div class="race-wrapper" id="wrapper-${safeId}">`;
+            html += `<div class="export-race-title" id="title-${safeId}" onclick="toggleRace('${safeId}')" title="Click to collapse/expand">
+                        <span id="arrow-${safeId}" style="display:inline-block;width:15px;font-size:10px;vertical-align:middle;">▼</span>
+                        🕒 ${escapeHtml(time)} | ${escapeHtml(track)} R${raceNum}
+                     </div>`;
+            html += `<div class="export-race-card" id="content-${safeId}">`;
 
-                html += `<div id="content-track-${safeTrackId}" class="export-track-grid">`;
+            group.marks.forEach(m => {
+                const c = bColors[m.bk] || { bg: '#444', color: '#fff', border: '#444' };
+                const symSize = m.symbol === '◎' ? '19px' : '16px';
+                const ppBadge = m.pp !== 99
+                    ? `<span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;font-size:12px;font-weight:bold;background:${c.bg};color:${c.color};border:1px solid ${c.border};border-radius:4px;margin-right:6px;">${m.pp}</span>`
+                    : `<span style="display:inline-block;width:22px;height:22px;margin-right:6px;"></span>`;
+                const markBadge = `<span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;font-size:${symSize};font-weight:bold;background:${c.bg};color:${c.color};border:1px solid ${c.border};border-radius:4px;margin-right:8px;">${escapeHtml(m.symbol)}</span>`;
+                const favBadge = m.fav ? `Fav ${escapeHtml(String(m.fav))}` : 'Fav -';
+                const safeHorseName = escapeHtml(String(m.horse || 'Unknown Horse'));
 
-                const races = Object.keys(summaryByDate[date][track]).map(Number).sort((a,b) => a - b);
-                races.forEach(rNum => {
-                    html += `<div class="export-race-card">`;
-
-                    const safeId = `${date}-${track}-${rNum}`.replace(/[^a-zA-Z0-9-]/g, '');
-                    html += `<div class="export-race-title" onclick="toggleExportRace('${safeId}')" title="Click to collapse/expand">
-                                <span id="arrow-${safeId}" style="display:inline-block; width:15px; font-size: 10px; vertical-align: middle;">▼</span> Race ${rNum}
-                             </div>`;
-
-                    html += `<div id="content-${safeId}">`;
-
-                    const marks = summaryByDate[date][track][rNum];
-                    marks.sort((a, b) => a.rank - b.rank);
-
-                    marks.forEach(m => {
-                        let symSize = "16px";
-                        if (m.symbol === "◎") {
-                            symSize = "19px";
-                        }
-
-                        const bColors = {
-                            1: { bg: '#f8f9fa', color: '#000', border: '#ccc' },
-                            2: { bg: '#212529', color: '#fff', border: '#444' },
-                            3: { bg: '#d26363', color: '#fff', border: '#d26363' },
-                            4: { bg: '#5970b0', color: '#fff', border: '#5970b0' },
-                            5: { bg: '#b8b053', color: '#000', border: '#b8b053' },
-                            6: { bg: '#72af68', color: '#fff', border: '#72af68' },
-                            7: { bg: '#efa65e', color: '#000', border: '#efa65e' },
-                            8: { bg: '#dc809a', color: '#000', border: '#dc809a' }
-                        };
-                        
-                        const c = bColors[m.bk] || { bg: '#444', color: '#fff', border: '#444' };
-
-                        const ppBadge = m.pp !== 99 
-                            ? `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:12px; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:6px;">${m.pp}</span>` 
-                            : `<span style="display:inline-block; width:22px; height:22px; margin-right:6px;"></span>`;
-
-                        const markBadge = `<span style="display:inline-block; width:22px; height:22px; line-height:22px; text-align:center; font-size:${symSize}; font-weight:bold; background:${c.bg}; color:${c.color}; border:1px solid ${c.border}; border-radius:4px; margin-right:8px;">${m.symbol}</span>`;
-
-                        const favBadge = m.fav ? `Fav ${escapeHtml(String(m.fav))}` : "Fav -";
-                        const safeHorseName = escapeHtml(String(m.horse || "Unknown Horse"));
-
-                        html += `<div class="export-horse-line" style="margin-bottom: 8px;">
-                            ${ppBadge}
-                            ${markBadge}
-                            <div class="export-horse-main" style="flex: 1; min-width: 0;">
-                                <span style="font-weight: 500;">${safeHorseName}</span>
-                                <span class="export-fav-badge">${favBadge}</span>
-                            </div>
-                        </div>`;
-                    });
-                    html += `</div>`; 
-                    html += `</div>`; 
-                });
-                html += `</div>`;
+                html += `<div class="export-horse-line" style="margin-bottom:8px;">
+                    ${ppBadge}${markBadge}<div class="export-horse-main" style="flex:1;min-width:0;">
+                        <span style="font-weight:500;">${safeHorseName}</span>
+                        <span class="export-fav-badge">${favBadge}</span>
+                    </div>
+                </div>`;
             });
+
+            html += `</div></div>`;
         });
     }
 
-    const fullHtml = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>🪟 Live View Popout</title>
-        <style>
-            body { font-family: sans-serif; background-color: #0c0c0c; color: #fafafa; margin: 0; padding: 20px; }
-            h2 { color: #fff; border-bottom: 2px solid #ff4b4b; padding-bottom: 5px; margin-top: 15px; margin-bottom: 15px; }
-            
-            /* NEW: Added hover effects and pointer cursor to Track Header */
-            .export-track-header { font-size: 18px; font-weight: bold; color: #1dd1a1; border-bottom: 2px solid #333; padding-bottom: 5px; margin: 20px 0 10px 0; text-transform: uppercase; letter-spacing: 1px; cursor: pointer; user-select: none; transition: 0.2s; }
-            .export-track-header:hover { color: #fff; border-color: #555; }
-            .export-track-header.collapsed { color: #555; border-bottom-style: dotted; }
-            
-            .export-track-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-            .export-race-card { background: #1a1c23; border: 1px solid #333; border-radius: 6px; padding: 12px; }
-            
-            .export-race-title { font-size: 14px; font-weight: bold; color: #888; margin-bottom: 10px; border-bottom: 1px dotted #444; padding-bottom: 4px; cursor: pointer; user-select: none; transition: 0.2s; }
-            .export-race-title:hover { color: #fff; }
-            .export-race-title.collapsed { color: #444; border-bottom-style: solid; border-color: #222; margin-bottom: 0; }
-            
-            .export-horse-line { display: flex; align-items: center; margin-bottom: 8px; font-size: 14px; }
-            .export-horse-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-            .export-fav-badge { font-size: 11px; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
-        </style>
-    </head>
-    <body>
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px;">
-            <h3 style="margin: 0; font-size: 20px;">🪟 Live View Popout</h3>
-            <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" style="background: #1dd1a1; color: black; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px;">🔗 Open OrePro</a>
-        </div>
+    const raceTimeJson = JSON.stringify(raceTimeData);
 
-        <div id="racecourse-view">
-            ${html}
-        </div>
-        
-        <script>
-            function toggleExportRace(safeId) {
-                const content = document.getElementById('content-' + safeId);
-                const title = document.getElementById('arrow-' + safeId).parentElement;
-                const arrow = document.getElementById('arrow-' + safeId);
-                
-                if (content.style.display === 'none') {
-                    content.style.display = ''; 
-                    title.classList.remove('collapsed');
-                    arrow.innerText = '▼';
-                } else {
-                    content.style.display = 'none';
+    const fullHtml = `<!DOCTYPE html>
+<html>
+<head>
+    <title>🪟 Live View Popout</title>
+    <style>
+        body { font-family: sans-serif; background-color: #0c0c0c; color: #fafafa; margin: 0; padding: 20px; }
+        .race-wrapper { margin-bottom: 10px; }
+        .export-race-title { font-size: 14px; font-weight: bold; color: #888; margin-bottom: 6px; border-bottom: 1px dotted #444; padding-bottom: 4px; cursor: pointer; user-select: none; transition: 0.2s; }
+        .export-race-title:hover { color: #fff; }
+        .export-race-title.collapsed { color: #444; border-bottom-style: solid; border-color: #222; margin-bottom: 0; }
+        .export-race-card { background: #1a1c23; border: 1px solid #333; border-radius: 6px; padding: 12px; margin-bottom: 4px; }
+        .export-race-card.hidden { display: none; }
+        .export-horse-line { display: flex; align-items: center; font-size: 14px; }
+        .export-horse-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .export-fav-badge { font-size: 11px; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
+    </style>
+</head>
+<body>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;border-bottom:1px solid #333;padding-bottom:10px;">
+        <h3 style="margin:0;font-size:20px;">🪟 Live View · ${escapeHtml(targetDate || 'No date selected')}</h3>
+        <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" style="background:#1dd1a1;color:black;padding:6px 12px;text-decoration:none;border-radius:4px;font-weight:bold;font-size:14px;">🔗 Open OrePro</a>
+    </div>
+    <div id="race-list">${html}</div>
+    <script>
+        var raceTimeData = ${raceTimeJson};
+
+        function toggleRace(safeId) {
+            var content = document.getElementById('content-' + safeId);
+            var arrow = document.getElementById('arrow-' + safeId);
+            var title = document.getElementById('title-' + safeId);
+            var isHidden = content.classList.contains('hidden');
+            content.classList.toggle('hidden', !isHidden);
+            title.classList.toggle('collapsed', !isHidden);
+            arrow.innerText = isHidden ? '▼' : '▶';
+        }
+
+        function autoCollapseRaces() {
+            if (!raceTimeData.length) return;
+            var now = new Date();
+            // Find the index of the next race that hasn't started yet
+            var nextIdx = -1;
+            for (var i = 0; i < raceTimeData.length; i++) {
+                var st = raceTimeData[i].sortTime;
+                if (!st) continue;
+                var t = new Date(st.replace(' ', 'T'));
+                if (t > now) { nextIdx = i; break; }
+            }
+            if (nextIdx <= 0) return; // nothing to collapse (all future, or all past)
+            var inProgressIdx = nextIdx - 1;
+            for (var j = 0; j < raceTimeData.length; j++) {
+                var sid = raceTimeData[j].safeId;
+                var content = document.getElementById('content-' + sid);
+                var arrow = document.getElementById('arrow-' + sid);
+                var title = document.getElementById('title-' + sid);
+                if (!content || !arrow || !title) continue;
+                if (j < inProgressIdx) {
+                    // Collapse older past races
+                    content.classList.add('hidden');
                     title.classList.add('collapsed');
                     arrow.innerText = '▶';
-                }
-            }
-
-            function toggleExportTrack(safeId) {
-                const content = document.getElementById('content-track-' + safeId);
-                const title = document.getElementById('arrow-track-' + safeId).parentElement;
-                const arrow = document.getElementById('arrow-track-' + safeId);
-                
-                if (content.style.display === 'none') {
-                    content.style.display = ''; 
+                } else if (j === inProgressIdx) {
+                    // Keep the in-progress race expanded
+                    content.classList.remove('hidden');
                     title.classList.remove('collapsed');
                     arrow.innerText = '▼';
-                } else {
-                    content.style.display = 'none';
-                    title.classList.add('collapsed');
-                    arrow.innerText = '▶';
                 }
+                // Future races stay as-is
             }
-        </script>
-    </body>
-    </html>
-    `;
+        }
+
+        autoCollapseRaces();
+        setInterval(autoCollapseRaces, 30000);
+    <\/script>
+</body>
+</html>`;
 
     if ('documentPictureInPicture' in window) {
         try {

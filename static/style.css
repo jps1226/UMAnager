@@ -513,7 +513,15 @@
             background: #0e1117;
         }
 
-        body.voting-mode .sidebar > :not(.sidebar-brand-row):not(.sidebar-top-controls):not(#voting-sidebar-panel) {
+        body.voting-mode .sidebar > .sidebar-scroll {
+            display: flex !important;
+            flex: 1;
+            min-height: 0;
+        }
+        body.voting-mode .sidebar > .sidebar-scroll > :not(#voting-sidebar-panel) {
+            display: none !important;
+        }
+        body.voting-mode .sidebar > :not(.sidebar-brand-row):not(.sidebar-top-controls):not(.sidebar-scroll) {
             display: none !important;
         }
         body.voting-mode #voting-sidebar-panel {
