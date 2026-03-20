@@ -705,6 +705,7 @@
         
         /* --- MARKS --- */
         .mark-btn { background: #333; color: #aaa; border: none; padding: 4px 8px; margin: 0 2px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .mark-btn.auto-bet-preview { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35), 0 0 0 3px rgba(var(--auto-bet-preview-rgb, 29, 209, 161), 0.20); }
         .mark-btn.active-◎ { background: #ff4b4b; color: white; font-weight: bold; }
         .mark-btn.active-〇 { background: #ff9f43; color: white; font-weight: bold; }
         .mark-btn.active-▲ { background: #1dd1a1; color: white; font-weight: bold; }

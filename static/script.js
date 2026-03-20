@@ -99,6 +99,10 @@ function isAutoLockPastVotesEnabled() {
     return appConfig.ui?.autoLockPastVotes ?? false;
 }
 
+function isAutoBetHighlightingEnabled() {
+    return appConfig.ui?.highlightAutoBets ?? false;
+}
+
 function raceHasHistoryData(race) {
     if (!race) return false;
     if (race.info?.history_refreshed) return true;
@@ -347,6 +351,7 @@ function updateRaceHighlighting() {
     
     // Update all hover buttons to reflect current list status
     updateAllHoverButtons();
+    updateAutoBetHighlighting();
 }
 
 function updateAllHoverButtons() {
@@ -390,6 +395,7 @@ async function init() {
     // NEW: Save slider state to config periodically
     document.getElementById('risk-slider').addEventListener('change', saveConfigToServer);
     document.getElementById('risk-slider').addEventListener('input', updateAllRiskBadges);
+    document.getElementById('risk-slider').addEventListener('input', updateAutoBetHighlighting);
     
     // NEW: Load saved slider state from config
     const savedRisk = appConfig.ui?.riskSlider || 50;
@@ -891,6 +897,7 @@ function setSort(r_id, col) {
     // Instantly replace just the table body and headers for THIS race (Zero flashing!)
     document.getElementById(`tbody-${r_id}`).innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
     refreshRaceHeaderSortLabels(r_id);
+    updateAutoBetHighlighting();
 }
 
 // Generates the inner rows (Pulled out of loadRaces to be reusable)
@@ -966,6 +973,24 @@ function buildTableBody(r_id, entries) {
 
 
 // --- STRATEGY SLIDER LOGIC ---
+function hexToRgbTuple(hex) {
+    if (!hex || typeof hex !== 'string') return null;
+    const normalized = hex.replace('#', '').trim();
+    if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return null;
+    return {
+        r: parseInt(normalized.slice(0, 2), 16),
+        g: parseInt(normalized.slice(2, 4), 16),
+        b: parseInt(normalized.slice(4, 6), 16)
+    };
+}
+
+function syncAutoBetPreviewColor(riskVal) {
+    const colorHex = getRiskColor(Number(riskVal));
+    const rgb = hexToRgbTuple(colorHex);
+    if (!rgb) return;
+    document.documentElement.style.setProperty('--auto-bet-preview-rgb', `${rgb.r}, ${rgb.g}, ${rgb.b}`);
+}
+
 function updateRiskLabel(val) {
     const label = document.getElementById('risk-label');
     const slider = document.getElementById('risk-slider');
@@ -981,6 +1006,7 @@ function updateRiskLabel(val) {
     label.innerText = `${text} (${val})`;
     label.style.color = color;
     slider.style.color = color; // Changes the thumb color dynamically!
+    syncAutoBetPreviewColor(val);
 }
 
 function getRiskColor(val) {
@@ -1258,6 +1284,7 @@ async function autoPick(event, r_id, riskOverride = null) {
 
     updateRaceActionButtons(r_id);
     updateRiskBadge(r_id);
+    updateAutoBetHighlighting();
 }
 
 // --- REORDER EXISTING PICKS ---
@@ -1313,6 +1340,7 @@ async function reorderPicks(event, r_id) {
     refreshRaceHeaderSortLabels(r_id);
     updateRaceActionButtons(r_id);
     updateRiskBadge(r_id);
+    updateAutoBetHighlighting();
 }
 
 // --- BET SAFETY INDICATOR ---
@@ -1368,6 +1396,41 @@ function getEffectiveRiskForRace(r_id) {
 
     // Positive picksDelta means the picks are riskier than the slider target.
     return { bestRisk, currentRisk, currentRegret, picksDelta: bestRisk - currentRisk };
+}
+
+// Returns the exact symbol placements the auto-pick logic would make at current slider value.
+function getAutoBetPreviewAssignmentsForRace(r_id) {
+    const entries = globalRaceEntries[r_id];
+    if (!entries || entries.length === 0) return [];
+
+    const mainSymbols = ["◎", "〇", "▲", "△"];
+    const usedSymbols = [];
+    const blockedHorseIds = [];
+    for (const [k, v] of Object.entries(globalMarks)) {
+        if (!k.startsWith(`${r_id}_`) || !v) continue;
+        blockedHorseIds.push(k.split('_')[1]);
+        if (mainSymbols.includes(v)) {
+            usedSymbols.push(v);
+        }
+    }
+
+    const availableSymbols = mainSymbols.filter(symbol => !usedSymbols.includes(symbol));
+    if (availableSymbols.length === 0) return [];
+
+    const currentRisk = parseInt(document.getElementById('risk-slider').value);
+    if (isNaN(currentRisk)) return [];
+
+    const scored = entries
+        .filter(row => !blockedHorseIds.includes(String(row.Horse_ID).split('.')[0]))
+        .map(row => ({ h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, currentRisk) }))
+        .sort((a, b) => b.power - a.power);
+
+    const assignments = [];
+    for (let i = 0; i < Math.min(availableSymbols.length, scored.length); i++) {
+        assignments.push({ h_id: scored[i].h_id, symbol: availableSymbols[i] });
+    }
+
+    return assignments;
 }
 
 // Interpolates color from yellow (on target) toward red (riskier) or cyan (safer)
@@ -1430,6 +1493,22 @@ function updateRiskBadge(r_id) {
 
 function updateAllRiskBadges() {
     Object.keys(globalRaceEntries).forEach(r_id => updateRiskBadge(r_id));
+}
+
+function updateAutoBetHighlighting() {
+    document.querySelectorAll('.mark-btn.auto-bet-preview').forEach(btn => btn.classList.remove('auto-bet-preview'));
+
+    if (!isAutoBetHighlightingEnabled()) return;
+
+    Object.keys(globalRaceEntries).forEach(r_id => {
+        const assignments = getAutoBetPreviewAssignmentsForRace(r_id);
+        assignments.forEach(({ h_id, symbol }) => {
+            const btn = document.getElementById(`btn_${r_id}_${h_id}_${symbol}`);
+            if (btn) {
+                btn.classList.add('auto-bet-preview');
+            }
+        });
+    });
 }
 
 function normalizeRacesPayload(data) {
@@ -2083,6 +2162,7 @@ async function loadRaces() {
     syncVotingViewAvailability();
     updateLiveViewPopoutAvailability();
     updateAllRiskBadges();
+    updateAutoBetHighlighting();
 
     isFirstLoad = false;
     appendDebugLine(`loadRaces completed in ${(performance.now() - t0).toFixed(0)}ms`);
@@ -2229,6 +2309,7 @@ async function clearRaceBets(event, r_id) {
     refreshRaceHeaderSortLabels(r_id);
     updateRaceActionButtons(r_id);
     updateRiskBadge(r_id);
+    updateAutoBetHighlighting();
     updateWinningVotesFocusButton();
     if (winningVotesFocusEnabled) applyWinningVotesFocus();
 }
@@ -2241,6 +2322,7 @@ function toggleRaceLock(event, r_id) {
     if (tbody) tbody.innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
 
     updateRaceActionButtons(r_id);
+    updateAutoBetHighlighting();
 }
 
 async function toggleMark(r_id, h_id, symbol) {
@@ -2298,6 +2380,7 @@ async function toggleMark(r_id, h_id, symbol) {
     document.getElementById(`tbody-${r_id}`).innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
     updateRaceActionButtons(r_id);
     updateRiskBadge(r_id);
+    updateAutoBetHighlighting();
     updateWinningVotesFocusButton();
     if (winningVotesFocusEnabled) applyWinningVotesFocus();
 }
@@ -3928,6 +4011,7 @@ function showSettingsModal() {
     document.getElementById('setting-prefetchRaceCheck').checked = isPrefetchRaceCheckEnabled();
     document.getElementById('setting-debugConsole').checked = isDebugConsoleEnabled();
     document.getElementById('setting-autoLockPastVotes').checked = isAutoLockPastVotesEnabled();
+    document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
         document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     // Populate formula weight inputs
     const fw = getFormulaWeights();
@@ -3973,7 +4057,8 @@ async function updateSidebarSettings() {
         prefetchRaceCheck: document.getElementById('setting-prefetchRaceCheck').checked,
         debugConsole: document.getElementById('setting-debugConsole').checked,
         autoLockPastVotes: document.getElementById('setting-autoLockPastVotes').checked,
-            showConsole: document.getElementById('setting-showConsole').checked,
+        showConsole: document.getElementById('setting-showConsole').checked,
+        highlightAutoBets: document.getElementById('setting-highlightAutoBets').checked,
         formulaWeights: {
             oddsCap:            parseFWInput('fw-oddsCap',            100),
             formMultiplier:     parseFWInput('fw-formMultiplier',     100),
@@ -3998,6 +4083,7 @@ async function updateSidebarSettings() {
     // Apply settings immediately to sidebar
     applySidebarSettings();
     updateAllRiskBadges();
+    updateAutoBetHighlighting();
     applyRaceTableLayoutSettings();
 
     if (!previousAutoFetchPastResults && isAutoFetchPastResultsEnabled()) {
@@ -4023,6 +4109,7 @@ function applyRaceTableLayoutSettings() {
 
         refreshRaceHeaderSortLabels(r_id);
     });
+    updateAutoBetHighlighting();
 }
 
 function renderRaceColumnSettings() {
