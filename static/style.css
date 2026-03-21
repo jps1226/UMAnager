@@ -1342,6 +1342,35 @@ td.finish-pos-3 { color: #cd7f32; }
     background: #3d2020;
 }
 
+.bet-estimate-inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.bet-estimate-chip {
+    font-size: 11px;
+    color: #e8ecf7;
+    border: 1px solid #4f5970;
+    border-radius: 999px;
+    padding: 3px 8px;
+    background: rgba(35, 41, 55, 0.92);
+    white-space: nowrap;
+}
+
+.bet-estimate-chip.is-positive {
+    color: #c5ffe3;
+    border-color: #375e4f;
+    background: #17342b;
+}
+
+.bet-estimate-chip.is-negative {
+    color: #ffd7d7;
+    border-color: #744848;
+    background: #3d2020;
+}
+
 /* --- DIMMED TAKEN VOTES --- */
 .mark-btn.dimmed-symbol {
     opacity: 0.25;

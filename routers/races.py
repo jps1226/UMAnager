@@ -1,12 +1,15 @@
 from fastapi import APIRouter, HTTPException
 import datetime
+import itertools
 import logging
+import math
 import os
 from typing import Any, Dict, List, Literal, Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 from pydantic import BaseModel, Field
+import requests
 
 import config
 import data_manager
@@ -41,6 +44,10 @@ DEFAULT_MARKS_STORE = {
     "raceMeta": {},
 }
 
+WIN_STAKE_YEN = 5000
+QUINELLA_STAKE_YEN = 500
+TRIO_STAKE_YEN = 500
+
 
 class DayResultsImportPayload(BaseModel):
     date: str
@@ -71,6 +78,16 @@ class MarksSavePayload(BaseModel):
     version: Optional[int] = MARKS_SCHEMA_VERSION
     marks: Dict[str, Optional[str]] = Field(default_factory=dict)
     raceMeta: Dict[str, RaceMetaPayload] = Field(default_factory=dict)
+
+
+class RaceBetEstimateRequestItem(BaseModel):
+    race_id: str
+    honmei_post: int
+    box_posts: List[int] = Field(default_factory=list)
+
+
+class RaceBetEstimateBatchRequest(BaseModel):
+    races: List[RaceBetEstimateRequestItem] = Field(default_factory=list)
 
 
 def set_progress_logger(callback):
@@ -217,6 +234,220 @@ def parse_sort_time(sort_time_str):
         return datetime.datetime.strptime(str(sort_time_str), "%Y-%m-%d %H:%M")
     except (ValueError, TypeError):
         return None
+
+
+def _normalize_post_number(value):
+    try:
+        post = int(value)
+    except (TypeError, ValueError):
+        return None
+    if post <= 0:
+        return None
+    return post
+
+
+def _build_combo_key(posts):
+    return "".join(f"{int(p):02d}" for p in sorted(posts))
+
+
+def _parse_odds_to_float(value):
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    if not text or text in {"-", "--", "---"}:
+        return None
+    try:
+        parsed = float(text)
+    except ValueError:
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _parse_primary_odds(entry):
+    if isinstance(entry, list) and entry:
+        return _parse_odds_to_float(entry[0])
+    return _parse_odds_to_float(entry)
+
+
+def _fetch_netkeiba_odds_map(race_id: str, odds_type: int):
+    referer = f"{config.NETKEIBA_RACE_SHUTUBA}?race_id={race_id}"
+    params = {"race_id": race_id, "type": str(odds_type), "action": "init"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer": referer,
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    response = requests.get(config.NETKEIBA_API_ODDS, params=params, headers=headers, timeout=10)
+    response.raise_for_status()
+    payload = response.json()
+
+    data = payload.get("data") if isinstance(payload, dict) else {}
+    odds_root = data.get("odds") if isinstance(data, dict) else {}
+    odds_map = odds_root.get(str(odds_type)) if isinstance(odds_root, dict) else {}
+    if not isinstance(odds_map, dict):
+        return {}
+    return odds_map
+
+
+def _fetch_netkeiba_odds_map_safe(race_id: str, odds_type: int):
+    try:
+        return _fetch_netkeiba_odds_map(race_id, odds_type), None
+    except requests.RequestException as exc:
+        return {}, str(exc)
+    except Exception as exc:
+        return {}, str(exc)
+
+
+def _estimate_range_from_combos(combo_posts, odds_map, total_purchase, stake_per_ticket):
+    if not combo_posts:
+        return {
+            "tickets": 0,
+            "resolvedTickets": 0,
+            "missingTickets": 0,
+            "minOdds": None,
+            "maxOdds": None,
+            "minPayout": None,
+            "maxPayout": None,
+            "minNet": None,
+            "maxNet": None,
+        }
+
+    odds_values = []
+    missing = 0
+    for combo in combo_posts:
+        key = _build_combo_key(combo)
+        odds = _parse_primary_odds(odds_map.get(key))
+        if odds is None:
+            missing += 1
+            continue
+        odds_values.append(odds)
+
+    if not odds_values:
+        return {
+            "tickets": len(combo_posts),
+            "resolvedTickets": 0,
+            "missingTickets": len(combo_posts),
+            "minOdds": None,
+            "maxOdds": None,
+            "minPayout": None,
+            "maxPayout": None,
+            "minNet": None,
+            "maxNet": None,
+        }
+
+    min_odds = min(odds_values)
+    max_odds = max(odds_values)
+    min_payout = int(round(min_odds * stake_per_ticket))
+    max_payout = int(round(max_odds * stake_per_ticket))
+    return {
+        "tickets": len(combo_posts),
+        "resolvedTickets": len(odds_values),
+        "missingTickets": missing,
+        "minOdds": min_odds,
+        "maxOdds": max_odds,
+        "minPayout": min_payout,
+        "maxPayout": max_payout,
+        "minNet": min_payout - total_purchase,
+        "maxNet": max_payout - total_purchase,
+    }
+
+
+def _build_box_bet_estimate(race_id: str, honmei_post: int, box_posts: List[int]):
+    clean_race_id = str(race_id or "").strip()
+    if not clean_race_id:
+        raise ValueError("race_id is required")
+
+    clean_honmei = _normalize_post_number(honmei_post)
+    if clean_honmei is None:
+        raise ValueError("honmei_post must be a positive integer")
+
+    normalized_posts = []
+    for post in box_posts:
+        clean_post = _normalize_post_number(post)
+        if clean_post is not None and clean_post not in normalized_posts:
+            normalized_posts.append(clean_post)
+    normalized_posts.sort()
+
+    if clean_honmei not in normalized_posts:
+        normalized_posts.append(clean_honmei)
+        normalized_posts.sort()
+
+    if len(normalized_posts) < 2:
+        raise ValueError("At least two unique posts are required for box estimates")
+
+    win_ticket_cost = WIN_STAKE_YEN
+    quinella_ticket_count = math.comb(len(normalized_posts), 2)
+    trio_ticket_count = math.comb(len(normalized_posts), 3) if len(normalized_posts) >= 3 else 0
+    quinella_cost = quinella_ticket_count * QUINELLA_STAKE_YEN
+    trio_cost = trio_ticket_count * TRIO_STAKE_YEN
+    total_purchase = win_ticket_cost + quinella_cost + trio_cost
+
+    win_map, win_fetch_error = _fetch_netkeiba_odds_map_safe(clean_race_id, 1)
+    # Netkeiba type=4 is horse-number Quinella (Umaren); type=3 is bracket quinella.
+    quinella_map, quinella_fetch_error = _fetch_netkeiba_odds_map_safe(clean_race_id, 4)
+    trio_map, trio_fetch_error = _fetch_netkeiba_odds_map_safe(clean_race_id, 7)
+    fetch_errors = [err for err in [win_fetch_error, quinella_fetch_error, trio_fetch_error] if err]
+
+    win_key = f"{clean_honmei:02d}"
+    win_odds = _parse_primary_odds(win_map.get(win_key))
+    win_payout = int(round(win_odds * WIN_STAKE_YEN)) if win_odds is not None else None
+
+    quinella_combos = list(itertools.combinations(normalized_posts, 2))
+    trio_combos = list(itertools.combinations(normalized_posts, 3)) if len(normalized_posts) >= 3 else []
+    quinella_range = _estimate_range_from_combos(
+        quinella_combos,
+        quinella_map,
+        total_purchase,
+        QUINELLA_STAKE_YEN,
+    )
+    trio_range = _estimate_range_from_combos(
+        trio_combos,
+        trio_map,
+        total_purchase,
+        TRIO_STAKE_YEN,
+    )
+
+    all_hit_min_net = None
+    all_hit_max_net = None
+    if (
+        win_payout is not None
+        and quinella_range.get("minPayout") is not None
+        and trio_range.get("minPayout") is not None
+    ):
+        all_hit_min_net = win_payout + quinella_range["minPayout"] + trio_range["minPayout"] - total_purchase
+        all_hit_max_net = win_payout + quinella_range["maxPayout"] + trio_range["maxPayout"] - total_purchase
+
+    return {
+        "status": "partial" if fetch_errors else "ok",
+        "raceId": clean_race_id,
+        "boxPosts": normalized_posts,
+        "honmeiPost": clean_honmei,
+        "purchase": {
+            "total": total_purchase,
+            "win": win_ticket_cost,
+            "quinellaBox": quinella_cost,
+            "trioBox": trio_cost,
+            "quinellaTickets": quinella_ticket_count,
+            "trioTickets": trio_ticket_count,
+            "winStake": WIN_STAKE_YEN,
+            "quinellaStake": QUINELLA_STAKE_YEN,
+            "trioStake": TRIO_STAKE_YEN,
+        },
+        "win": {
+            "odds": win_odds,
+            "payout": win_payout,
+            "net": (win_payout - total_purchase) if win_payout is not None else None,
+        },
+        "quinellaBox": quinella_range,
+        "trioBox": trio_range,
+        "allHit": {
+            "minNet": all_hit_min_net,
+            "maxNet": all_hit_max_net,
+        },
+        "warnings": fetch_errors,
+    }
 
 
 def split_races_by_day_completion(races_by_date):
@@ -565,6 +796,74 @@ async def save_marks(payload: MarksSavePayload):
         }
     )
     return {"status": "success"}
+
+
+@router.post("/api/races/bet-estimate")
+def get_bet_estimates(payload: RaceBetEstimateBatchRequest):
+    estimates: Dict[str, Dict[str, Any]] = {}
+
+    requests_batch = payload.races[:50] if isinstance(payload.races, list) else []
+    for item in requests_batch:
+        race_id = str(item.race_id or "").strip()
+        if not race_id:
+            continue
+
+        try:
+            estimates[race_id] = _build_box_bet_estimate(
+                race_id=race_id,
+                honmei_post=item.honmei_post,
+                box_posts=item.box_posts,
+            )
+        except requests.RequestException as exc:
+            estimates[race_id] = {
+                "status": "error",
+                "raceId": race_id,
+                "message": f"Odds fetch failed: {exc}",
+            }
+        except Exception as exc:
+            estimates[race_id] = {
+                "status": "partial",
+                "raceId": race_id,
+                "message": str(exc),
+                "warnings": [str(exc)],
+                "purchase": {
+                    "total": None,
+                    "win": None,
+                    "quinellaBox": None,
+                    "trioBox": None,
+                    "quinellaTickets": None,
+                    "trioTickets": None,
+                    "winStake": WIN_STAKE_YEN,
+                    "quinellaStake": QUINELLA_STAKE_YEN,
+                    "trioStake": TRIO_STAKE_YEN,
+                },
+                "win": {"odds": None, "payout": None, "net": None},
+                "quinellaBox": {
+                    "tickets": 0,
+                    "resolvedTickets": 0,
+                    "missingTickets": 0,
+                    "minOdds": None,
+                    "maxOdds": None,
+                    "minPayout": None,
+                    "maxPayout": None,
+                    "minNet": None,
+                    "maxNet": None,
+                },
+                "trioBox": {
+                    "tickets": 0,
+                    "resolvedTickets": 0,
+                    "missingTickets": 0,
+                    "minOdds": None,
+                    "maxOdds": None,
+                    "minPayout": None,
+                    "maxPayout": None,
+                    "minNet": None,
+                    "maxNet": None,
+                },
+                "allHit": {"minNet": None, "maxNet": None},
+            }
+
+    return {"status": "ok", "estimates": estimates}
 
 
 @router.get("/api/prefetch-check")

@@ -4,6 +4,8 @@ let globalMarksVersion = 2;
 let listsData = { favorites: "", watchlist: "" };
 let raceLocks = {}; // Per-race lock state for mark interactions
 let upcomingRaces = []; // NEW: Stores our parsed race times
+const BET_ESTIMATE_STORAGE_KEY = 'umanager-bet-estimate-cache-v1';
+const BET_ESTIMATE_MAX_AGE_MS = 1000 * 60 * 60 * 12;
 let globalRaceEntries = {}; // NEW: Stores local row data for instant sorting
 let globalRaceInfo = {}; // NEW: Stores the Racetrack names and numbers
 let globalRacesByDate = {}; // All race days organized by date for navigation and jump dropdowns
@@ -392,6 +394,9 @@ async function init() {
     // NEW: Load config file
     const configRes = await fetch('/api/config');
     appConfig = await configRes.json();
+
+    // Restore persisted race-level estimate cache to avoid recomputing every view switch.
+    raceBetEstimateCache = loadStoredBetEstimateCache();
     
     // NEW: Save slider state to config periodically
     document.getElementById('risk-slider').addEventListener('change', saveConfigToServer);
@@ -3097,6 +3102,364 @@ function toggleVotingSidebarRace(raceId) {
     }
 }
 
+function buildRaceBetEstimateKey(requestItem) {
+    if (!requestItem) return '';
+    return `v2|${requestItem.race_id}|${requestItem.honmei_post}|${(requestItem.box_posts || []).join('-')}`;
+}
+
+function loadStoredBetEstimateCache() {
+    try {
+        const raw = window.localStorage.getItem(BET_ESTIMATE_STORAGE_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+        const now = Date.now();
+        const clean = {};
+        Object.entries(parsed).forEach(([raceId, entry]) => {
+            if (!raceId || !entry || typeof entry !== 'object' || Array.isArray(entry)) return;
+            if (!entry.hash || typeof entry.hash !== 'string') return;
+            const requestedAt = Number(entry.requestedAt || 0);
+            if (!Number.isFinite(requestedAt) || requestedAt <= 0) return;
+            if ((now - requestedAt) > BET_ESTIMATE_MAX_AGE_MS) return;
+
+            clean[raceId] = {
+                hash: entry.hash,
+                pending: false,
+                requestedAt,
+                data: entry.data && typeof entry.data === 'object' ? entry.data : null
+            };
+        });
+        return clean;
+    } catch (_) {
+        return {};
+    }
+}
+
+function saveBetEstimateCacheToStorage() {
+    try {
+        const compact = {};
+        Object.entries(raceBetEstimateCache || {}).forEach(([raceId, entry]) => {
+            if (!raceId || !entry || typeof entry !== 'object') return;
+            if (entry.pending) return;
+            if (!entry.hash || !entry.data) return;
+            compact[raceId] = {
+                hash: entry.hash,
+                requestedAt: Number(entry.requestedAt || Date.now()),
+                data: entry.data
+            };
+        });
+        window.localStorage.setItem(BET_ESTIMATE_STORAGE_KEY, JSON.stringify(compact));
+    } catch (_) {
+        // Best-effort cache only.
+    }
+}
+
+function clearBetEstimateCacheForDate(targetDate) {
+    const date = String(targetDate || '').trim();
+    if (!date) return;
+    const races = Array.isArray(globalRacesByDate[date]) ? globalRacesByDate[date] : [];
+    races.forEach(race => {
+        const raceId = String(race?.info?.race_id || '').trim();
+        if (raceId && raceBetEstimateCache[raceId]) {
+            delete raceBetEstimateCache[raceId];
+        }
+    });
+    saveBetEstimateCacheToStorage();
+}
+
+function getRaceBetEstimateRequest(raceId) {
+    const raceMarks = collectRaceMainMarks(raceId);
+    if (!MAIN_BET_SYMBOLS.every(symbol => !!raceMarks[symbol])) return null;
+
+    const entries = Array.isArray(globalRaceEntries[raceId]) ? globalRaceEntries[raceId] : [];
+    const horseToPost = new Map();
+    entries.forEach(row => {
+        const horseId = String(row?.Horse_ID || '').split('.')[0].trim();
+        const post = parseInt(row?.PP, 10);
+        if (horseId && Number.isFinite(post) && post > 0) {
+            horseToPost.set(horseId, post);
+        }
+    });
+
+    const honmeiHorse = raceMarks["◎"];
+    const honmeiPost = horseToPost.get(honmeiHorse);
+    if (!Number.isFinite(honmeiPost) || honmeiPost <= 0) return null;
+
+    const boxPosts = [];
+    MAIN_BET_SYMBOLS.forEach(symbol => {
+        const horseId = raceMarks[symbol];
+        const post = horseToPost.get(horseId);
+        if (Number.isFinite(post) && post > 0 && !boxPosts.includes(post)) {
+            boxPosts.push(post);
+        }
+    });
+    boxPosts.sort((a, b) => a - b);
+    if (boxPosts.length < 4) return null;
+
+    return {
+        race_id: String(raceId || '').trim(),
+        honmei_post: honmeiPost,
+        box_posts: boxPosts
+    };
+}
+
+async function refreshBetEstimatesForDate(targetDate, options = {}) {
+    const date = String(targetDate || '').trim();
+    if (!date) return;
+    const force = !!options.force;
+    const nowMs = Date.now();
+    const pendingStaleMs = 20000;
+
+    const races = Array.isArray(globalRacesByDate[date]) ? globalRacesByDate[date] : [];
+    const requestItems = [];
+
+    races.forEach(race => {
+        const raceId = String(race?.info?.race_id || '').trim();
+        if (!raceId) return;
+
+        const requestItem = getRaceBetEstimateRequest(raceId);
+        if (!requestItem) {
+            delete raceBetEstimateCache[raceId];
+            return;
+        }
+
+        const hash = buildRaceBetEstimateKey(requestItem);
+        const cacheEntry = raceBetEstimateCache[raceId];
+        const isStalePending = !!(
+            cacheEntry
+            && cacheEntry.pending
+            && Number.isFinite(cacheEntry.requestedAt)
+            && (nowMs - cacheEntry.requestedAt) > pendingStaleMs
+        );
+        if (force || !cacheEntry || cacheEntry.hash !== hash || isStalePending || (!cacheEntry.pending && !cacheEntry.data)) {
+            requestItems.push(requestItem);
+            raceBetEstimateCache[raceId] = { hash, pending: true, requestedAt: nowMs, data: null };
+        }
+    });
+
+    if (!requestItems.length) return;
+
+    const chunkSize = 3;
+    for (let i = 0; i < requestItems.length; i += chunkSize) {
+        const chunk = requestItems.slice(i, i + chunkSize);
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 20000);
+            const res = await fetch('/api/races/bet-estimate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ races: chunk }),
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(payload?.detail || payload?.message || `HTTP ${res.status}`);
+            }
+
+            const estimates = payload?.estimates && typeof payload.estimates === 'object' ? payload.estimates : {};
+            chunk.forEach(item => {
+                const raceId = item.race_id;
+                const hash = buildRaceBetEstimateKey(item);
+                raceBetEstimateCache[raceId] = {
+                    hash,
+                    pending: false,
+                    requestedAt: nowMs,
+                    data: estimates[raceId] || {
+                        status: 'partial',
+                        raceId: raceId,
+                        message: 'No estimate payload returned.',
+                        warnings: ['No estimate payload returned.']
+                    }
+                };
+            });
+            saveBetEstimateCacheToStorage();
+        } catch (err) {
+            chunk.forEach(item => {
+                const raceId = item.race_id;
+                const hash = buildRaceBetEstimateKey(item);
+                const previous = raceBetEstimateCache[raceId];
+                const hasUsablePrevious = !!(
+                    previous
+                    && previous.hash === hash
+                    && !previous.pending
+                    && ['ok', 'partial'].includes(previous?.data?.status)
+                );
+                raceBetEstimateCache[raceId] = {
+                    hash,
+                    pending: false,
+                    requestedAt: nowMs,
+                    data: hasUsablePrevious
+                        ? previous.data
+                        : {
+                            status: 'partial',
+                            raceId: raceId,
+                            message: err?.message || String(err),
+                            warnings: [err?.message || String(err)]
+                        }
+                };
+            });
+            saveBetEstimateCacheToStorage();
+        }
+    }
+
+    if (currentMainView === 'voting' && String(currentActiveDate || '').trim() === date) {
+        const sidebarDisplay = document.getElementById('voting-sidebar-display');
+        if (sidebarDisplay) {
+            sidebarDisplay.innerHTML = buildRacecourseCheatHtml(date);
+            if (winningVotesFocusEnabled) {
+                applyWinningVotesFocusToVotingSidebar(getDayOverallHitSummary(date));
+            }
+        }
+    }
+}
+
+async function reEstimateActiveDay() {
+    const date = String(currentActiveDate || '').trim();
+    if (!date) return;
+    const btn = document.getElementById('btn-reestimate-day');
+    const prevLabel = btn?.textContent || '';
+    try {
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳ Re-estimating...';
+        }
+        clearBetEstimateCacheForDate(date);
+        await refreshBetEstimatesForDate(date, { force: true });
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = prevLabel || '🧮 Re-estimate Day';
+        }
+    }
+}
+
+function formatEstimateYen(value) {
+    if (value === null || value === undefined || value === '') return '-';
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '-';
+    const rounded = Math.round(num);
+    const sign = rounded > 0 ? '+' : '';
+    return `${sign}${new Intl.NumberFormat('en-US').format(rounded)}円`;
+}
+
+function formatEstimateNetRange(minNet, maxNet) {
+    if (
+        minNet === null || minNet === undefined || minNet === ''
+        || maxNet === null || maxNet === undefined || maxNet === ''
+    ) {
+        return '-';
+    }
+    const minVal = Number(minNet);
+    const maxVal = Number(maxNet);
+    if (!Number.isFinite(minVal) || !Number.isFinite(maxVal)) {
+        return '-';
+    }
+    if (Math.round(minVal) === Math.round(maxVal)) {
+        return formatEstimateYen(minVal);
+    }
+    return `${formatEstimateYen(minVal)} to ${formatEstimateYen(maxVal)}`;
+}
+
+function formatEstimateAverageRefund(minPayout, maxPayout) {
+    if (
+        minPayout === null || minPayout === undefined || minPayout === ''
+        || maxPayout === null || maxPayout === undefined || maxPayout === ''
+    ) {
+        return '-';
+    }
+    const minVal = Number(minPayout);
+    const maxVal = Number(maxPayout);
+    if (!Number.isFinite(minVal) || !Number.isFinite(maxVal)) {
+        return '-';
+    }
+    const avg = (minVal + maxVal) / 2;
+    return formatEstimateYen(avg);
+}
+
+function estimateNetClass(value) {
+    if (value === null || value === undefined || value === '') return '';
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '';
+    return num >= 0 ? 'is-positive' : 'is-negative';
+}
+
+function estimateWarningsText(estimate) {
+    const warnings = Array.isArray(estimate?.warnings) ? estimate.warnings.filter(Boolean) : [];
+    if (warnings.length) return warnings.join(' | ');
+    const msg = String(estimate?.message || '').trim();
+    return msg || '';
+}
+
+function estimateValueReason(estimate, key) {
+    const win = estimate?.win || {};
+    const q = estimate?.quinellaBox || {};
+    const t = estimate?.trioBox || {};
+    const allHit = estimate?.allHit || {};
+    const warningText = estimateWarningsText(estimate);
+
+    if (key === 'winNet') {
+        if (win?.net === null || win?.net === undefined || win?.net === '') {
+            return 'Win net cannot be computed because ◎ win odds are unavailable.';
+        }
+        return '';
+    }
+
+    if (key === 'quinellaNet' || key === 'quinellaAvgRefund') {
+        if (q?.tickets > 0 && Number(q?.resolvedTickets || 0) === 0) {
+            return 'Quinella cannot be computed because no odds were returned for the selected box combinations.';
+        }
+        if (Number(q?.missingTickets || 0) > 0) {
+            return `Quinella is partially computed. Missing odds for ${q.missingTickets} combination(s).`;
+        }
+        if (warningText) return warningText;
+        return 'Quinella value is unavailable.';
+    }
+
+    if (key === 'trioNet' || key === 'trioAvgRefund') {
+        if (t?.tickets > 0 && Number(t?.resolvedTickets || 0) === 0) {
+            return 'Trio cannot be computed because no odds were returned for the selected box combinations.';
+        }
+        if (Number(t?.missingTickets || 0) > 0) {
+            return `Trio is partially computed. Missing odds for ${t.missingTickets} combination(s).`;
+        }
+        if (warningText) return warningText;
+        return 'Trio value is unavailable.';
+    }
+
+    if (key === 'allHitNet') {
+        if (!(allHit?.minNet === null || allHit?.minNet === undefined || allHit?.minNet === '')
+            && !(allHit?.maxNet === null || allHit?.maxNet === undefined || allHit?.maxNet === '')) {
+            return '';
+        }
+        const reasons = [];
+        if (win?.net === null || win?.net === undefined || win?.net === '') {
+            reasons.push('Win leg missing');
+        }
+        if (q?.minPayout === null || q?.maxPayout === null || q?.minPayout === undefined || q?.maxPayout === undefined) {
+            reasons.push('Quinella leg missing');
+        }
+        if (t?.minPayout === null || t?.maxPayout === null || t?.minPayout === undefined || t?.maxPayout === undefined) {
+            reasons.push('Trio leg missing');
+        }
+        if (reasons.length) {
+            return `All Hit cannot be computed: ${reasons.join(', ')}.`;
+        }
+        if (warningText) return warningText;
+        return 'All Hit value is unavailable.';
+    }
+
+    return warningText;
+}
+
+function chipTitleAttr(reason) {
+    const text = String(reason || '').trim();
+    if (!text) return '';
+    return ` title="${escapeHtml(text)}"`;
+}
+
 function buildRacecourseCheatHtml(targetDate) {
     const date = String(targetDate || '').trim();
     const timeline = globalDateTimelineByDate[date] || '';
@@ -3154,6 +3517,7 @@ function buildRacecourseCheatHtml(targetDate) {
             raceName: localizeRaceName(info.race_name),
             winBadgesHtml: timeline === 'past' ? buildRaceWinBadgesHtml(raceObj) : '',
             orepro: oreproRaceMap.get(r_id) || null,
+            betEstimate: raceBetEstimateCache[r_id] || null,
             marks: group.marks
         });
     }
@@ -3181,6 +3545,51 @@ function buildRacecourseCheatHtml(targetDate) {
                     <span class="orepro-inline-chip">Buy ${escapeHtml(raceCard.orepro.purchaseLabel || '-')}</span>
                     <span class="orepro-inline-chip">Pay ${escapeHtml(raceCard.orepro.payoutLabel || '-')}</span>
                     <span class="orepro-inline-chip ${Number(raceCard.orepro.profit) >= 0 ? 'is-positive' : 'is-negative'}">PnL ${escapeHtml(raceCard.orepro.profitLabel || '-')}</span>
+                </div>`;
+            }
+
+            if (!raceCard.orepro && raceCard.betEstimate?.pending) {
+                html += `
+                <div class="bet-estimate-inline">
+                    <span class="bet-estimate-chip">Estimating Win / Q Box / T Box...</span>
+                </div>`;
+            } else if (!raceCard.orepro && ['ok', 'partial'].includes(raceCard.betEstimate?.data?.status)) {
+                const estimate = raceCard.betEstimate.data;
+                const purchase = estimate?.purchase || {};
+                const win = estimate?.win || {};
+                const q = estimate?.quinellaBox || {};
+                const t = estimate?.trioBox || {};
+                const allHit = estimate?.allHit || {};
+                const warningText = estimateWarningsText(estimate);
+
+                const winNetClass = estimateNetClass(win?.net);
+                const allHitClass = estimateNetClass(allHit?.maxNet);
+
+                const estBuyText = formatEstimateYen(purchase?.total);
+                const winNetText = formatEstimateYen(win?.net);
+                const qNetText = formatEstimateNetRange(q?.minNet, q?.maxNet);
+                const tNetText = formatEstimateNetRange(t?.minNet, t?.maxNet);
+                const allHitText = formatEstimateNetRange(allHit?.minNet, allHit?.maxNet);
+
+                const estBuyReason = estBuyText === '-' ? (warningText || 'Estimated purchase is unavailable.') : warningText;
+                const winReason = winNetText === '-' ? estimateValueReason(estimate, 'winNet') : warningText;
+                const qReason = qNetText === '-' ? estimateValueReason(estimate, 'quinellaNet') : warningText;
+                const tReason = tNetText === '-' ? estimateValueReason(estimate, 'trioNet') : warningText;
+                const allHitReason = allHitText === '-' ? estimateValueReason(estimate, 'allHitNet') : warningText;
+
+                html += `
+                <div class="bet-estimate-inline">
+                    <span class="bet-estimate-chip"${chipTitleAttr(estBuyReason)}>Est Buy ${escapeHtml(estBuyText)}</span>
+                    <span class="bet-estimate-chip ${winNetClass}"${chipTitleAttr(winReason)}>◎ Net ${escapeHtml(winNetText)}</span>
+                    <span class="bet-estimate-chip"${chipTitleAttr(qReason)}>Q Net ${escapeHtml(qNetText)}</span>
+                    <span class="bet-estimate-chip"${chipTitleAttr(tReason)}>T Net ${escapeHtml(tNetText)}</span>
+                    <span class="bet-estimate-chip ${allHitClass}"${chipTitleAttr(allHitReason)}>All Hit ${escapeHtml(allHitText)}</span>
+                </div>`;
+            } else if (!raceCard.orepro && raceCard.betEstimate?.data?.status === 'error') {
+                const errMsg = raceCard.betEstimate?.data?.message || 'Estimate unavailable';
+                html += `
+                <div class="bet-estimate-inline">
+                    <span class="bet-estimate-chip is-negative" title="${escapeHtml(String(errMsg))}">Estimate unavailable</span>
                 </div>`;
             }
 
@@ -3250,6 +3659,9 @@ function toggleVotingOrePro() {
 let oreproCompanionWindow = null;
 const OREPRO_COMPANION_WINDOW_NAME = 'OreProCompanionWindow';
 let oreproLastSyncPayload = null;
+let raceBetEstimateCache = {};
+
+const MAIN_BET_SYMBOLS = ["◎", "〇", "▲", "△"];
 
 function normalizeOreProDateLabel(dateStr) {
     return String(dateStr || '').replace(/-/g, '').trim();
@@ -3961,6 +4373,7 @@ function renderLiveViewPanel() {
         recapPanel.innerHTML = '';
     }
 
+    refreshBetEstimatesForDate(date);
     loadOreProSessionStatus();
 }
 
@@ -4023,6 +4436,8 @@ function buildDailyRecapHtml(targetDate) {
 
 async function showExportModal() {
     const targetDate = String(currentActiveDate || '').trim();
+    await refreshBetEstimatesForDate(targetDate);
+    const oreproRaceMap = getOreProRaceResultMapForActiveDate();
     const sMap = {"◎": 1, "〇": 2, "▲": 3, "△": 4, "☆": 5, "消": 6};
     const bColors = {
         1: { bg: '#f8f9fa', color: '#000', border: '#ccc' },
@@ -4067,10 +4482,26 @@ async function showExportModal() {
     });
 
     // Build race-time data array for auto-collapse (embedded as JSON in the popup)
-    const raceTimeData = sortedRaces.map(([r_id, group]) => ({
+    const collapseRaceTimeData = sortedRaces.map(([r_id, group]) => ({
         safeId: r_id.replace(/[^a-zA-Z0-9-]/g, ''),
         sortTime: group.info.sort_time || ''
     }));
+
+    // Use the full selected day's races for the countdown so the popout matches the main view.
+    const countdownRaceTimeData = (globalRacesByDate[targetDate] || [])
+        .map(race => {
+            const info = race?.info || {};
+            const sortTime = String(info.sort_time || '').trim();
+            const timeLabel = String(info.time || '').trim();
+            if (!sortTime || !timeLabel || timeLabel === 'TBA') return null;
+
+            return {
+                sortTime,
+                name: `${String(info.place || '').toUpperCase()} R${info.race_number || '?'}`.trim()
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.sortTime.localeCompare(b.sortTime));
 
     let html = "";
     if (!sortedRaces.length) {
@@ -4092,21 +4523,62 @@ async function showExportModal() {
                      </div>`;
             html += `<div class="export-race-card" id="content-${safeId}">`;
 
+            const orepro = oreproRaceMap.get(r_id) || null;
+            const estimateCache = raceBetEstimateCache[r_id] || null;
+            if (orepro) {
+                html += `
+                <div class="popout-finance-inline">
+                    <span class="popout-finance-chip">Buy ${escapeHtml(orepro.purchaseLabel || '-')}</span>
+                    <span class="popout-finance-chip">Pay ${escapeHtml(orepro.payoutLabel || '-')}</span>
+                    <span class="popout-finance-chip ${Number(orepro.profit) >= 0 ? 'is-positive' : 'is-negative'}">PnL ${escapeHtml(orepro.profitLabel || '-')}</span>
+                </div>`;
+            } else if (estimateCache?.pending) {
+                html += `
+                <div class="popout-finance-inline">
+                    <span class="popout-finance-chip">Estimating Win / Q Box / T Box...</span>
+                </div>`;
+            } else if (['ok', 'partial'].includes(estimateCache?.data?.status)) {
+                const estimate = estimateCache.data;
+                const purchase = estimate?.purchase || {};
+                const win = estimate?.win || {};
+                const q = estimate?.quinellaBox || {};
+                const t = estimate?.trioBox || {};
+                const allHit = estimate?.allHit || {};
+                const warningText = estimateWarningsText(estimate);
+
+                const estBuyText = formatEstimateYen(purchase?.total);
+                const winNetText = formatEstimateYen(win?.net);
+                const qAvgText = formatEstimateAverageRefund(q?.minPayout, q?.maxPayout);
+                const tAvgText = formatEstimateAverageRefund(t?.minPayout, t?.maxPayout);
+                const allHitText = formatEstimateNetRange(allHit?.minNet, allHit?.maxNet);
+
+                const estBuyReason = estBuyText === '-' ? (warningText || 'Estimated purchase is unavailable.') : warningText;
+                const winReason = winNetText === '-' ? estimateValueReason(estimate, 'winNet') : warningText;
+                const qAvgReason = qAvgText === '-' ? estimateValueReason(estimate, 'quinellaAvgRefund') : warningText;
+                const tAvgReason = tAvgText === '-' ? estimateValueReason(estimate, 'trioAvgRefund') : warningText;
+                const allHitReason = allHitText === '-' ? estimateValueReason(estimate, 'allHitNet') : warningText;
+                html += `
+                <div class="popout-finance-inline">
+                    <span class="popout-finance-chip"${chipTitleAttr(estBuyReason)}>Est Buy ${escapeHtml(estBuyText)}</span>
+                    <span class="popout-finance-chip ${estimateNetClass(win?.net)}"${chipTitleAttr(winReason)}>◎ Net ${escapeHtml(winNetText)}</span>
+                    <span class="popout-finance-chip"${chipTitleAttr(qAvgReason)}>Q Avg Refund ${escapeHtml(qAvgText)}</span>
+                    <span class="popout-finance-chip"${chipTitleAttr(tAvgReason)}>T Avg Refund ${escapeHtml(tAvgText)}</span>
+                    <span class="popout-finance-chip ${estimateNetClass(allHit?.maxNet)}"${chipTitleAttr(allHitReason)}>All Hit ${escapeHtml(allHitText)}</span>
+                </div>`;
+            }
+
             group.marks.forEach(m => {
                 const c = bColors[m.bk] || { bg: '#444', color: '#fff', border: '#444' };
                 const symSize = m.symbol === '◎' ? '19px' : '16px';
                 const ppBadge = m.pp !== 99
-                    ? `<span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;font-size:12px;font-weight:bold;background:${c.bg};color:${c.color};border:1px solid ${c.border};border-radius:4px;margin-right:6px;">${m.pp}</span>`
-                    : `<span style="display:inline-block;width:22px;height:22px;margin-right:6px;"></span>`;
-                const markBadge = `<span style="display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;font-size:${symSize};font-weight:bold;background:${c.bg};color:${c.color};border:1px solid ${c.border};border-radius:4px;margin-right:8px;">${escapeHtml(m.symbol)}</span>`;
+                    ? `<span class="export-horse-post" style="font-size:12px;font-weight:bold;background:${c.bg};color:${c.color};border:1px solid ${c.border};">${m.pp}</span>`
+                    : `<span class="export-horse-post is-empty"></span>`;
+                const markBadge = `<span class="export-horse-mark" style="font-size:${symSize};font-weight:bold;background:${c.bg};color:${c.color};border:1px solid ${c.border};">${escapeHtml(m.symbol)}</span>`;
                 const favBadge = m.fav ? `Fav ${escapeHtml(String(m.fav))}` : 'Fav -';
                 const safeHorseName = escapeHtml(String(m.horse || 'Unknown Horse'));
 
                 html += `<div class="export-horse-line" style="margin-bottom:8px;">
-                    ${ppBadge}${markBadge}<div class="export-horse-main" style="flex:1;min-width:0;">
-                        <span style="font-weight:500;">${safeHorseName}</span>
-                        <span class="export-fav-badge">${favBadge}</span>
-                    </div>
+                    ${ppBadge}${markBadge}<span class="export-horse-name">${safeHorseName}</span><span class="export-fav-badge export-horse-fav">${favBadge}</span>
                 </div>`;
             });
 
@@ -4114,7 +4586,8 @@ async function showExportModal() {
         });
     }
 
-    const raceTimeJson = JSON.stringify(raceTimeData);
+    const collapseRaceTimeJson = JSON.stringify(collapseRaceTimeData);
+    const countdownRaceTimeJson = JSON.stringify(countdownRaceTimeData);
 
     const fullHtml = `<!DOCTYPE html>
 <html>
@@ -4122,25 +4595,132 @@ async function showExportModal() {
     <title>🪟 Live View Popout</title>
     <style>
         body { font-family: sans-serif; background-color: #0c0c0c; color: #fafafa; margin: 0; padding: 20px; }
+        .popout-head { position: sticky; top: 0; z-index: 999; background: #0c0c0c; display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:20px; border-bottom:1px solid #333; padding-bottom:10px; }
+        .popout-head-main { display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+        .popout-head-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+        .popout-layout-btn { background:#222; color:#fafafa; border:1px solid #444; border-radius:4px; padding:6px 12px; font-weight:bold; font-size:13px; cursor:pointer; }
+        .popout-layout-btn:hover { background:#2c2f39; }
+        .countdown-wrapper { background: rgba(255, 75, 75, 0.1); border: 1px solid rgba(255, 75, 75, 0.3); border-radius: 8px; padding: 6px 18px; text-align: center; min-width: 180px; }
+        .countdown-title { font-size: 11px; color: #ff7675; font-weight: bold; letter-spacing: 1px; text-transform: uppercase; }
+        .countdown-time { font-size: 24px; font-weight: bold; color: #ff4b4b; font-variant-numeric: tabular-nums; }
+        .countdown-race { font-size: 12px; color: #ccc; font-weight: bold; }
         .race-wrapper { margin-bottom: 10px; }
         .export-race-title { font-size: 14px; font-weight: bold; color: #888; margin-bottom: 6px; border-bottom: 1px dotted #444; padding-bottom: 4px; cursor: pointer; user-select: none; transition: 0.2s; }
         .export-race-title:hover { color: #fff; }
         .export-race-title.collapsed { color: #444; border-bottom-style: solid; border-color: #222; margin-bottom: 0; }
         .export-race-card { background: #1a1c23; border: 1px solid #333; border-radius: 6px; padding: 12px; margin-bottom: 4px; }
         .export-race-card.hidden { display: none; }
-        .export-horse-line { display: flex; align-items: center; font-size: 14px; }
-        .export-horse-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .popout-finance-inline { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+        .popout-finance-chip { font-size:11px; color:#e8ecf7; border:1px solid #4f5970; border-radius:999px; padding:3px 8px; background: rgba(35, 41, 55, 0.92); white-space:nowrap; }
+        .popout-finance-chip.is-positive { color:#c5ffe3; border-color:#375e4f; background:#17342b; }
+        .popout-finance-chip.is-negative { color:#ffd7d7; border-color:#744848; background:#3d2020; }
+        .export-horse-line { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+        .export-horse-post, .export-horse-mark { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; line-height:22px; text-align:center; border-radius:4px; flex:0 0 22px; }
+        .export-horse-post.is-empty { background: transparent; border-color: transparent; }
+        .export-horse-name { flex: 1; min-width: 0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .export-fav-badge { font-size: 11px; color: #ddd; border: 1px solid #555; border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
+        body.reverse-horse-layout .export-horse-fav { order: 1; }
+        body.reverse-horse-layout .export-horse-name { order: 2; text-align: right; }
+        body.reverse-horse-layout .export-horse-mark { order: 3; }
+        body.reverse-horse-layout .export-horse-post { order: 4; }
+        @media (max-width: 720px) {
+            body { padding: 16px; }
+            .popout-head { flex-direction: column; align-items: stretch; }
+            .popout-head-main { flex-direction: column; align-items: stretch; }
+            .popout-head-actions { justify-content: stretch; }
+            .popout-layout-btn { width: 100%; }
+            .countdown-wrapper { width: 100%; box-sizing: border-box; }
+        }
     </style>
 </head>
 <body>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;border-bottom:1px solid #333;padding-bottom:10px;">
-        <h3 style="margin:0;font-size:20px;">🪟 Live View · ${escapeHtml(targetDate || 'No date selected')}</h3>
-        <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" style="background:#1dd1a1;color:black;padding:6px 12px;text-decoration:none;border-radius:4px;font-weight:bold;font-size:14px;">🔗 Open OrePro</a>
+    <div class="popout-head">
+        <div class="popout-head-main">
+            <h3 style="margin:0;font-size:20px;">🪟 Live View · ${escapeHtml(targetDate || 'No date selected')}</h3>
+            <div id="popout-countdown-container" class="countdown-wrapper" style="display:none;">
+                <div class="countdown-title">Next Race In</div>
+                <div id="popout-countdown-time" class="countdown-time">--:--:--</div>
+                <div id="popout-countdown-race" class="countdown-race">Loading...</div>
+            </div>
+        </div>
+        <div class="popout-head-actions">
+            <button id="btn-toggle-horse-layout" class="popout-layout-btn" onclick="toggleHorseLayout()" type="button">⇄ Layout: Numbers Left</button>
+            <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" style="background:#1dd1a1;color:black;padding:6px 12px;text-decoration:none;border-radius:4px;font-weight:bold;font-size:14px;">🔗 Open OrePro</a>
+        </div>
     </div>
     <div id="race-list">${html}</div>
     <script>
-        var raceTimeData = ${raceTimeJson};
+        var collapseRaceTimeData = ${collapseRaceTimeJson};
+        var countdownRaceTimeData = ${countdownRaceTimeJson};
+        var reverseHorseLayout = false;
+
+        function getSavedHorseLayoutPreference() {
+            try {
+                return window.localStorage.getItem('umanager-popout-reverse-layout') === '1';
+            } catch (err) {
+                return false;
+            }
+        }
+
+        function setReverseHorseLayout(nextValue) {
+            reverseHorseLayout = !!nextValue;
+            document.body.classList.toggle('reverse-horse-layout', reverseHorseLayout);
+
+            var btn = document.getElementById('btn-toggle-horse-layout');
+            if (btn) {
+                btn.innerText = reverseHorseLayout ? '⇄ Layout: Numbers Right' : '⇄ Layout: Numbers Left';
+                btn.title = reverseHorseLayout
+                    ? 'Showing Fav, Name, Mark, Post so the numbers sit on the right edge.'
+                    : 'Showing Post, Mark, Name, Fav so the numbers sit on the left edge.';
+            }
+
+            try {
+                window.localStorage.setItem('umanager-popout-reverse-layout', reverseHorseLayout ? '1' : '0');
+            } catch (err) {
+                // Ignore storage failures in popup/PiP contexts.
+            }
+        }
+
+        function toggleHorseLayout() {
+            setReverseHorseLayout(!reverseHorseLayout);
+        }
+
+        function formatCountdown(diff) {
+            var d = Math.floor(diff / (1000 * 60 * 60 * 24));
+            var h = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            var m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            var s = Math.floor((diff % (1000 * 60)) / 1000);
+            var timeStr = String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+            return d > 0 ? d + 'd ' + timeStr : timeStr;
+        }
+
+        function updateCountdown() {
+            var container = document.getElementById('popout-countdown-container');
+            var timeEl = document.getElementById('popout-countdown-time');
+            var raceEl = document.getElementById('popout-countdown-race');
+            if (!container || !timeEl || !raceEl) return;
+
+            var now = new Date();
+            var nextRace = null;
+            for (var i = 0; i < countdownRaceTimeData.length; i++) {
+                var item = countdownRaceTimeData[i];
+                if (!item || !item.sortTime) continue;
+                var raceTime = new Date(item.sortTime.replace(' ', 'T'));
+                if (raceTime > now) {
+                    nextRace = { time: raceTime, name: item.name || 'Upcoming Race' };
+                    break;
+                }
+            }
+
+            if (!nextRace) {
+                container.style.display = 'none';
+                return;
+            }
+
+            container.style.display = 'block';
+            timeEl.innerText = formatCountdown(nextRace.time - now);
+            raceEl.innerText = nextRace.name;
+        }
 
         function toggleRace(safeId) {
             var content = document.getElementById('content-' + safeId);
@@ -4153,23 +4733,25 @@ async function showExportModal() {
         }
 
         function autoCollapseRaces() {
-            if (!raceTimeData.length) return;
+            if (!collapseRaceTimeData.length) return;
             var now = new Date();
             // Find the index of the next race that hasn't started yet
             var nextIdx = -1;
-            for (var i = 0; i < raceTimeData.length; i++) {
-                var st = raceTimeData[i].sortTime;
+            for (var i = 0; i < collapseRaceTimeData.length; i++) {
+                var st = collapseRaceTimeData[i].sortTime;
                 if (!st) continue;
                 var t = new Date(st.replace(' ', 'T'));
                 if (t > now) { nextIdx = i; break; }
             }
             if (nextIdx <= 0) return; // nothing to collapse (all future, or all past)
             var inProgressIdx = nextIdx - 1;
-            for (var j = 0; j < raceTimeData.length; j++) {
-                var sid = raceTimeData[j].safeId;
+            var inProgressWrapper = null;
+            for (var j = 0; j < collapseRaceTimeData.length; j++) {
+                var sid = collapseRaceTimeData[j].safeId;
                 var content = document.getElementById('content-' + sid);
                 var arrow = document.getElementById('arrow-' + sid);
                 var title = document.getElementById('title-' + sid);
+                var wrapper = document.getElementById('wrapper-' + sid);
                 if (!content || !arrow || !title) continue;
                 if (j < inProgressIdx) {
                     // Collapse older past races
@@ -4181,12 +4763,22 @@ async function showExportModal() {
                     content.classList.remove('hidden');
                     title.classList.remove('collapsed');
                     arrow.innerText = '▼';
+                    inProgressWrapper = wrapper;
                 }
                 // Future races stay as-is
             }
+            // Auto-scroll to the in-progress race (only if off-screen)
+            if (inProgressWrapper) {
+                setTimeout(function() {
+                    inProgressWrapper.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }, 50);
+            }
         }
 
+        setReverseHorseLayout(getSavedHorseLayoutPreference());
+        updateCountdown();
         autoCollapseRaces();
+        setInterval(updateCountdown, 1000);
         setInterval(autoCollapseRaces, 30000);
     <\/script>
 </body>
