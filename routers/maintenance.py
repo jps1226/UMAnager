@@ -86,7 +86,7 @@ def _clear_data_dir():
 
 @router.post("/api/cache/clear")
 def clear_cache():
-    clear_race_cache()
+    clear_race_cache(clear_all=True)
     if os.path.exists(CACHE_FILE):
         os.remove(CACHE_FILE)
     return {"status": "success"}

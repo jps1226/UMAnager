@@ -40,3 +40,10 @@ compendium_txt/
 project_full_contents.md
 generate_compendium.ps1
 generate_compendium_folder.ps1
+
+# Ignore local JRA-VAN reference assets
+JVDTLABSDK4902/
+jra-van-docs/
+
+# Ignore JRA-VAN isolated runtime storage
+data_jra_van/

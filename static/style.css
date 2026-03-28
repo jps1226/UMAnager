@@ -64,6 +64,44 @@
         .tool-block { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #444; display: flex; flex-direction: column; gap: 6px; }
         .tool-block-label { font-size: 11px; color: #aaa; font-weight: bold; }
         .tool-input-compact { font-size: 12px; padding: 6px; }
+        .jvlink-tool-block { border-color: #2f6f5f; }
+        .jvlink-inline-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        .jvlink-checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #ccd7e3; }
+        .jvlink-btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        .jvlink-test-status {
+            font-size: 11px;
+            color: #b7c4e3;
+            background: #121926;
+            border: 1px solid #3f495d;
+            border-radius: 6px;
+            padding: 6px 8px;
+            white-space: pre-wrap;
+        }
+        .jvlink-test-status.ok {
+            color: #c6ffe3;
+            background: #17342b;
+            border-color: #35624e;
+        }
+        .jvlink-test-status.error {
+            color: #ffd0d0;
+            background: #3a1f25;
+            border-color: #9e4656;
+        }
+        .jvlink-test-output {
+            margin: 0;
+            background: #0c0f15;
+            border: 1px solid #2d3445;
+            border-radius: 6px;
+            color: #d6e3ff;
+            font-family: "Consolas", "Courier New", monospace;
+            font-size: 11px;
+            line-height: 1.35;
+            max-height: 220px;
+            overflow: auto;
+            padding: 8px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
         .sidebar-label { font-size: 14px; }
         .sidebar-select-full { background: #262730; color: white; border: 1px solid #444; padding: 5px; margin-bottom: 5px; width: 100%; }
         .inline-input-row { display: flex; gap: 5px; margin-bottom: 15px; }

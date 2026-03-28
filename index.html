@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260320-3"> 
+    <link rel="stylesheet" href="/static/style.css?v=20260321-1"> 
 </head>
 <body>
 
@@ -80,6 +80,42 @@
                             <option value="all">Delete All Day Data</option>
                         </select>
                         <button class="btn-full btn-danger btn-micro btn-no-margin" onclick="deleteDayData()">🧹 Delete This Day</button>
+                    </div>
+
+                    <div class="tool-block jvlink-tool-block">
+                        <label class="tool-block-label">JRA-VAN / JV-Link Test Panel</label>
+                        <input type="text" id="jvlink-test-dataspec" class="tool-input-compact" value="TOKURACEDIFNBLDNSLOPWOODYSCHSNPNHOSNHOYUCOMMMING" placeholder="DataSpec">
+                        <input type="text" id="jvlink-test-from-date" class="tool-input-compact" value="20250323000000" placeholder="FromDate (YYYYMMDD or YYYYMMDDHHMMSS)">
+                        <div class="jvlink-inline-grid">
+                            <input type="number" id="jvlink-test-max-records" class="tool-input-compact" value="20" min="1" max="500" placeholder="Max records">
+                            <select id="jvlink-test-data-option" class="tool-input-compact">
+                                <option value="1" selected>DataOption 1</option>
+                                <option value="2">DataOption 2</option>
+                                <option value="3">DataOption 3</option>
+                            </select>
+                        </div>
+                        <input type="text" id="jvlink-test-sid" class="tool-input-compact" placeholder="SID override (optional)">
+                        <label class="jvlink-checkbox-row">
+                            <input type="checkbox" id="jvlink-test-skip-key" checked>
+                            <span>Skip JVSetServiceKey</span>
+                        </label>
+                        <label class="jvlink-checkbox-row">
+                            <input type="checkbox" id="jvlink-test-compact" checked>
+                            <span>Compact output</span>
+                        </label>
+                        <div class="jvlink-btn-grid">
+                            <button class="btn-full btn-micro" onclick="runJvlinkRefreshUpcoming()">🔄 Refresh Cache</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkStatusTest()">🔎 Status</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkStorageLayoutTest()">📁 Storage</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkOpenSettingsTest()">⚙️ Open Settings</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkProbeOpenTest()">🧪 Probe Open</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkStreamSampleTest()">🌊 Stream Sample</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkStreamSampleAutoTest()">⏱️ Auto Wait Stream</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkCapabilityScanTest()">🧭 Capability Scan</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkStreamSummaryTest()">📊 Stream Summary</button>
+                        </div>
+                        <div id="jvlink-test-status" class="jvlink-test-status">Ready.</div>
+                        <pre id="jvlink-test-output" class="jvlink-test-output">{}</pre>
                     </div>
                 </div>
             </details>
@@ -260,6 +296,13 @@
                 <div class="settings-card">
                     <h4 class="settings-section-title">Display & Automation</h4>
                     <div class="settings-option-list">
+                        <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
+                            <span>🧭 Data Engine</span>
+                            <select id="setting-dataEngine" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:140px;">
+                                <option value="nk">Netkeiba</option>
+                                <option value="jv">JRA-VAN</option>
+                            </select>
+                        </label>
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-betSafetyIndicator" onchange="updateSidebarSettings()">
                             <span>⚡ Bet Safety Indicator</span>
@@ -328,6 +371,6 @@
     </div>
 </div>
 </div>
-<script src="/static/script.js?v=20260320-9"></script>
+<script src="/static/script.js?v=20260321-6"></script>
 </body>
 </html>

@@ -33,6 +33,9 @@ _session_factory = None
 CURRENT_SCHEMA_VERSION = 1
 
 APP_CONFIG_DEFAULTS = {
+    "backend": {
+        "dataEngine": "nk",
+    },
     "sidebarTabs": {
         "raceDatabase": True,
         "pedigreeLists": True,
@@ -133,6 +136,78 @@ race_entries_table = Table(
     Column("raw_payload", JSON, nullable=False, server_default=text("'{}'")),
     Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
     UniqueConstraint("race_id", "horse_number", name="uq_race_entries_race_horse_number"),
+)
+
+races_nk_table = Table(
+    "races_nk",
+    DB_METADATA,
+    Column("race_id", String(32), primary_key=True),
+    Column("race_date", String(16), nullable=False, server_default=text("''")),
+    Column("kaisai_id", String(32), nullable=False, server_default=text("''")),
+    Column("track", String(128), nullable=False, server_default=text("''")),
+    Column("race_name", String(255), nullable=False, server_default=text("''")),
+    Column("race_number", Integer, nullable=False, server_default=text("0")),
+    Column("sort_time", String(32), nullable=False, server_default=text("''")),
+    Column("distance", Integer, nullable=False, server_default=text("0")),
+    Column("surface", String(32), nullable=False, server_default=text("''")),
+    Column("grade", String(32), nullable=False, server_default=text("''")),
+    Column("raw_payload", JSON, nullable=False, server_default=text("'{}'")),
+    Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+)
+
+race_entries_nk_table = Table(
+    "race_entries_nk",
+    DB_METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("race_id", String(32), ForeignKey("races_nk.race_id", ondelete="CASCADE"), nullable=False),
+    Column("horse_id", String(32), nullable=False, server_default=text("''")),
+    Column("horse_name", String(255), nullable=False, server_default=text("''")),
+    Column("frame_number", Integer, nullable=False, server_default=text("0")),
+    Column("horse_number", Integer, nullable=False, server_default=text("0")),
+    Column("jockey", String(255), nullable=False, server_default=text("''")),
+    Column("odds", Float, nullable=False, server_default=text("0")),
+    Column("finish_position", Integer, nullable=False, server_default=text("0")),
+    Column("entry_score", Float, nullable=False, server_default=text("0")),
+    Column("mark_symbol", String(8), nullable=False, server_default=text("''")),
+    Column("raw_payload", JSON, nullable=False, server_default=text("'{}'")),
+    Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+    UniqueConstraint("race_id", "horse_number", name="uq_race_entries_nk_race_horse_number"),
+)
+
+races_jv_table = Table(
+    "races_jv",
+    DB_METADATA,
+    Column("race_id", String(32), primary_key=True),
+    Column("race_date", String(16), nullable=False, server_default=text("''")),
+    Column("kaisai_id", String(32), nullable=False, server_default=text("''")),
+    Column("track", String(128), nullable=False, server_default=text("''")),
+    Column("race_name", String(255), nullable=False, server_default=text("''")),
+    Column("race_number", Integer, nullable=False, server_default=text("0")),
+    Column("sort_time", String(32), nullable=False, server_default=text("''")),
+    Column("distance", Integer, nullable=False, server_default=text("0")),
+    Column("surface", String(32), nullable=False, server_default=text("''")),
+    Column("grade", String(32), nullable=False, server_default=text("''")),
+    Column("raw_payload", JSON, nullable=False, server_default=text("'{}'")),
+    Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+)
+
+race_entries_jv_table = Table(
+    "race_entries_jv",
+    DB_METADATA,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("race_id", String(32), ForeignKey("races_jv.race_id", ondelete="CASCADE"), nullable=False),
+    Column("horse_id", String(32), nullable=False, server_default=text("''")),
+    Column("horse_name", String(255), nullable=False, server_default=text("''")),
+    Column("frame_number", Integer, nullable=False, server_default=text("0")),
+    Column("horse_number", Integer, nullable=False, server_default=text("0")),
+    Column("jockey", String(255), nullable=False, server_default=text("''")),
+    Column("odds", Float, nullable=False, server_default=text("0")),
+    Column("finish_position", Integer, nullable=False, server_default=text("0")),
+    Column("entry_score", Float, nullable=False, server_default=text("0")),
+    Column("mark_symbol", String(8), nullable=False, server_default=text("''")),
+    Column("raw_payload", JSON, nullable=False, server_default=text("'{}'")),
+    Column("updated_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")),
+    UniqueConstraint("race_id", "horse_number", name="uq_race_entries_jv_race_horse_number"),
 )
 
 race_marks_table = Table(
@@ -484,14 +559,101 @@ def _write_race_cache_to_db(session, weekend_races):
         session.execute(race_entries_table.insert(), entry_rows)
 
 
-def load_race_cache():
+def normalize_data_engine(data_engine):
+    engine = str(data_engine or "").strip().lower()
+    return engine if engine in {"nk", "jv"} else "nk"
+
+
+def _race_tables_for_engine(data_engine):
+    engine = normalize_data_engine(data_engine)
+    if engine == "jv":
+        return races_jv_table, race_entries_jv_table
+    return races_nk_table, race_entries_nk_table
+
+
+def get_active_data_engine(default="nk"):
+    cfg = load_app_config()
+    backend = cfg.get("backend", {}) if isinstance(cfg, dict) else {}
+    configured = backend.get("dataEngine", default)
+    return normalize_data_engine(configured)
+
+
+def _write_race_cache_to_engine_tables(session, weekend_races, races_tbl, entries_tbl):
+    session.execute(entries_tbl.delete())
+    session.execute(races_tbl.delete())
+
+    race_rows = []
+    entry_rows = []
+    for race_order, race in enumerate(weekend_races or []):
+        info = race.get("info", {}) if isinstance(race, dict) else {}
+        race_id = str(info.get("race_id", "")).strip()
+        if not race_id:
+            continue
+
+        info_payload = {
+            str(k): _coerce_jsonable(v)
+            for k, v in info.items()
+            if isinstance(k, str)
+        }
+        info_payload["_cache_order"] = race_order
+
+        race_rows.append(
+            {
+                "race_id": race_id,
+                "race_date": str(info.get("clean_date") or "").strip(),
+                "kaisai_id": str(info.get("kaisai_id") or "").strip(),
+                "track": str(info.get("place") or "").strip(),
+                "race_name": str(info.get("race_name") or "").strip(),
+                "race_number": _safe_int(info.get("race_number"), 0),
+                "sort_time": str(info.get("sort_time") or "").strip(),
+                "distance": _safe_int(info.get("distance"), 0),
+                "surface": str(info.get("surface") or "").strip(),
+                "grade": str(info.get("grade") or "").strip(),
+                "raw_payload": info_payload,
+            }
+        )
+
+        used_horse_numbers = set()
+        for row_order, entry in enumerate(_entries_to_records(race.get("entries"))):
+            horse_number = _safe_int(entry.get("PP"), 0)
+            if horse_number <= 0 or horse_number in used_horse_numbers:
+                horse_number = 1000 + row_order
+            used_horse_numbers.add(horse_number)
+
+            entry_payload = {str(k): _coerce_jsonable(v) for k, v in entry.items()}
+            entry_payload["_row_order"] = row_order
+
+            entry_rows.append(
+                {
+                    "race_id": race_id,
+                    "horse_id": str(entry.get("Horse_ID") or "").strip(),
+                    "horse_name": str(entry.get("Horse") or "").strip(),
+                    "frame_number": _safe_int(entry.get("BK"), 0),
+                    "horse_number": horse_number,
+                    "jockey": str(entry.get("Jockey") or "").strip(),
+                    "odds": _safe_float(entry.get("Odds"), 0.0),
+                    "finish_position": _safe_int(entry.get("Finish"), 0),
+                    "entry_score": _safe_float(entry.get("Score"), 0.0),
+                    "mark_symbol": str(entry.get("Match") or "").strip(),
+                    "raw_payload": entry_payload,
+                }
+            )
+
+    if race_rows:
+        session.execute(races_tbl.insert(), race_rows)
+    if entry_rows:
+        session.execute(entries_tbl.insert(), entry_rows)
+
+
+def load_race_cache(data_engine="nk"):
+    races_tbl, entries_tbl = _race_tables_for_engine(data_engine)
     with db_session_scope() as session:
-        race_rows = session.execute(races_table.select()).all()
+        race_rows = session.execute(races_tbl.select()).all()
         if not race_rows:
             return []
 
         entries_by_race = {}
-        for row in session.execute(race_entries_table.select()).all():
+        for row in session.execute(entries_tbl.select()).all():
             entries_by_race.setdefault(row.race_id, []).append(row)
 
         try:
@@ -543,15 +705,24 @@ def load_race_cache():
         return weekend_races
 
 
-def save_race_cache(weekend_races):
+def save_race_cache(weekend_races, data_engine="nk"):
+    races_tbl, entries_tbl = _race_tables_for_engine(data_engine)
     with db_session_scope() as session:
-        _write_race_cache_to_db(session, weekend_races)
+        _write_race_cache_to_engine_tables(session, weekend_races, races_tbl, entries_tbl)
 
 
-def clear_race_cache():
+def clear_race_cache(data_engine="nk", clear_all=False):
     with db_session_scope() as session:
-        session.execute(race_entries_table.delete())
-        session.execute(races_table.delete())
+        if clear_all:
+            session.execute(race_entries_nk_table.delete())
+            session.execute(races_nk_table.delete())
+            session.execute(race_entries_jv_table.delete())
+            session.execute(races_jv_table.delete())
+            return
+
+        races_tbl, entries_tbl = _race_tables_for_engine(data_engine)
+        session.execute(entries_tbl.delete())
+        session.execute(races_tbl.delete())
 
 
 def _load_legacy_marks_store_from_file(path):
@@ -1300,9 +1471,9 @@ def import_legacy_storage(overwrite_existing=False):
             results["horses"] = imported_horses
 
         legacy_races = load_pickle(config.CACHE_FILE, [])
-        existing_races = session.execute(text("SELECT COUNT(1) FROM races")).scalar_one()
+        existing_races = session.execute(text("SELECT COUNT(1) FROM races_nk")).scalar_one()
         if isinstance(legacy_races, list) and legacy_races and (overwrite_existing or int(existing_races or 0) == 0):
-            _write_race_cache_to_db(session, legacy_races)
+            _write_race_cache_to_engine_tables(session, legacy_races, races_nk_table, race_entries_nk_table)
             results["races"] = len(legacy_races)
 
         existing_orepro = session.execute(text("SELECT COUNT(1) FROM orepro_daily_results")).scalar_one()
@@ -1325,7 +1496,9 @@ def build_legacy_export_payloads():
     payloads["data/watchlist_horses.txt"] = horse_ids_to_text(load_horse_list("watchlist")).encode("utf-8")
     payloads["data/saved_marks.json"] = json.dumps(load_marks_store(), ensure_ascii=False, indent=4).encode("utf-8")
     payloads["data/horse_names.json"] = json.dumps(load_horse_cache_map(), ensure_ascii=False, indent=4).encode("utf-8")
-    payloads["data/race_cache.pkl"] = pickle.dumps(load_race_cache())
+    payloads["data/race_cache.pkl"] = pickle.dumps(load_race_cache(data_engine="nk"))
+    payloads["data/race_cache_nk.pkl"] = pickle.dumps(load_race_cache(data_engine="nk"))
+    payloads["data/race_cache_jv.pkl"] = pickle.dumps(load_race_cache(data_engine="jv"))
 
     orepro_history = orepro_get_history_summary()
     payloads["data/orepro_results_history.json"] = json.dumps(

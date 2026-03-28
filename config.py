@@ -7,7 +7,8 @@ import os
 from pathlib import Path
 
 # File paths
-DATA_DIR = Path(__file__).parent / "data"
+ROOT_DIR = Path(__file__).parent
+DATA_DIR = ROOT_DIR / "data"
 DB_FILE = DATA_DIR / "umanager.sqlite3"
 DB_URL = f"sqlite:///{DB_FILE.as_posix()}"
 CACHE_FILE = DATA_DIR / "race_cache.pkl"
@@ -15,6 +16,19 @@ MARKS_FILE = DATA_DIR / "saved_marks.json"
 TRACKING_FILE = DATA_DIR / "tracked_horses.txt"
 WATCHLIST_FILE = DATA_DIR / "watchlist_horses.txt"
 HORSE_DICT_FILE = DATA_DIR / "horse_names.json"
+
+# JRA-VAN storage isolation (separate from current app runtime data/)
+JRA_VAN_DATA_DIR = ROOT_DIR / "data_jra_van"
+JRA_VAN_DB_FILE = JRA_VAN_DATA_DIR / "umanager_jra_van.sqlite3"
+JRA_VAN_DB_URL = f"sqlite:///{JRA_VAN_DB_FILE.as_posix()}"
+JVLINK_SAVE_DIR = JRA_VAN_DATA_DIR / "jvlink_files"
+JVLINK_DEFAULT_SID = "UMANAGER"
+
+# Source selection for scrape orchestration.
+# nk: netkeiba only, jv: JV-backed discovery only, auto: combine JV+NK discovery.
+SCRAPE_SOURCE_MODE = os.getenv("UMANAGER_SCRAPE_SOURCE_MODE", "nk").strip().lower()
+SCRAPE_SOURCE_FALLBACK_TO_NK = os.getenv("UMANAGER_SCRAPE_FALLBACK_TO_NK", "1").strip().lower() not in {"0", "false", "no"}
+JV_DISCOVERY_LOOKBACK_DAYS = max(0, int(os.getenv("UMANAGER_JV_DISCOVERY_LOOKBACK_DAYS", "7")))
 
 # API & Network settings
 REQUEST_TIMEOUT = 5

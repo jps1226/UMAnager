@@ -413,6 +413,14 @@ async function init() {
     
     await refreshDataAndUI();
     switchMainView('races');
+
+    if (document.getElementById('jvlink-test-status')) {
+        setJvlinkPanelStatus('Ready. Click Status to verify bridge wiring.', false);
+        setJvlinkPanelOutput({
+            status: 'ready',
+            hint: 'Use Status, then Probe Open, then Stream Sample.'
+        });
+    }
 }
 
 // --- HORSE LIST UI LOGIC ---
@@ -2466,6 +2474,341 @@ async function triggerPost(url) {
     }
 }
 
+function jvlinkPanelGetPayload() {
+    const dataSpec = (document.getElementById('jvlink-test-dataspec')?.value || '').trim();
+    const fromDate = (document.getElementById('jvlink-test-from-date')?.value || '').trim();
+    const sid = (document.getElementById('jvlink-test-sid')?.value || '').trim();
+    const maxRecordsRaw = Number(document.getElementById('jvlink-test-max-records')?.value || 20);
+    const dataOptionRaw = Number(document.getElementById('jvlink-test-data-option')?.value || 1);
+    const skipSetServiceKey = Boolean(document.getElementById('jvlink-test-skip-key')?.checked);
+
+    return {
+        data_spec: dataSpec,
+        from_date: fromDate,
+        sid: sid || null,
+        max_records: Math.min(500, Math.max(1, Number.isFinite(maxRecordsRaw) ? maxRecordsRaw : 20)),
+        data_option: Math.min(3, Math.max(1, Number.isFinite(dataOptionRaw) ? dataOptionRaw : 1)),
+        skip_set_service_key: skipSetServiceKey
+    };
+}
+
+function setJvlinkPanelStatus(message, isError = false) {
+    const statusEl = document.getElementById('jvlink-test-status');
+    if (!statusEl) return;
+    statusEl.textContent = message || '';
+    statusEl.classList.remove('ok', 'error');
+    statusEl.classList.add(isError ? 'error' : 'ok');
+}
+
+function setJvlinkPanelOutput(payload) {
+    const outEl = document.getElementById('jvlink-test-output');
+    if (!outEl) return;
+    const compactMode = Boolean(document.getElementById('jvlink-test-compact')?.checked);
+    const output = compactMode ? compactJvlinkPanelOutput(payload || {}) : (payload || {});
+    outEl.textContent = JSON.stringify(output, null, 2);
+}
+
+function compactJvlinkPanelOutput(payload) {
+    const status = String(payload?.status || '').toLowerCase();
+    if (payload?.probe && typeof payload.probe === 'object') {
+        const p = payload.probe;
+        return {
+            status: payload.status,
+            runId: payload.runId,
+            probe: {
+                ok: p.ok,
+                openOk: p.openOk,
+                readOk: p.readOk,
+                readTransport: p.readTransport || '',
+                openCode: p.openCode,
+                error: p.error,
+                warnings: p.warnings || [],
+                statusCode: p.statusCode,
+                statusPollCount: p.statusPollCount,
+                downloadCount: p.downloadCount,
+                readCount: p.readCount,
+                lastFileTimestamp: p.lastFileTimestamp,
+                sampleCount: Array.isArray(p.readSamples) ? p.readSamples.length : 0,
+                samplePreview: Array.isArray(p.readSamples) ? p.readSamples.slice(0, 5) : []
+            }
+        };
+    }
+
+    if (payload?.stream && typeof payload.stream === 'object') {
+        const s = payload.stream;
+        return {
+            status: payload.status,
+            stream: {
+                ok: s.ok,
+                openOk: s.openOk,
+                readOk: s.readOk,
+                readTransport: s.readTransport || '',
+                openCode: s.openCode,
+                error: s.error,
+                warnings: s.warnings || [],
+                statusCode: s.statusCode,
+                statusPollCount: s.statusPollCount,
+                downloadCount: s.downloadCount,
+                readCount: s.readCount,
+                lastFileTimestamp: s.lastFileTimestamp,
+                recordCount: Array.isArray(s.records) ? s.records.length : 0,
+                recordPreview: Array.isArray(s.records) ? s.records.slice(0, 8) : []
+            },
+            saved: payload.saved || {}
+        };
+    }
+
+    if (payload?.scan && typeof payload.scan === 'object') {
+        const s = payload.scan;
+        return {
+            status: payload.status,
+            scan: {
+                ok: s.ok,
+                fromDate: s.fromDate,
+                maxRecordsPerRun: s.maxRecordsPerRun,
+                scanDataOptions: s.scanDataOptions || [],
+                runCount: s.runCount,
+                runsOpenOk: s.runsOpenOk,
+                runsWithRecords: s.runsWithRecords,
+                observedRecordSpecs: s.observedRecordSpecs || [],
+                observedFilePrefixes: s.observedFilePrefixes || [],
+                runPreview: Array.isArray(s.runs) ? s.runs.slice(0, 12) : [],
+                notes: s.notes || []
+            }
+        };
+    }
+
+    if (payload?.bridge && typeof payload.bridge === 'object') {
+        const b = payload.bridge;
+        return {
+            status: payload.status,
+            bridge: {
+                ok: b.ok,
+                error: b.error || '',
+                version: b.version || '',
+                runner: b.runner || ''
+            }
+        };
+    }
+
+    if (payload?.layout && typeof payload.layout === 'object') {
+        return {
+            status: payload.status,
+            layout: payload.layout
+        };
+    }
+
+    if (status === 'error' || status === 'warning' || status === 'ok') {
+        return payload;
+    }
+    return payload;
+}
+
+function toggleJvlinkPanelButtons(disabled) {
+    document.querySelectorAll('.jvlink-tool-block button').forEach(btn => {
+        btn.disabled = Boolean(disabled);
+    });
+}
+
+async function runJvlinkPanelCall(label, runner) {
+    toggleJvlinkPanelButtons(true);
+    setJvlinkPanelStatus(`${label}: running...`, false);
+    try {
+        const response = await runner();
+        setJvlinkPanelOutput(response);
+        const topStatus = String(response?.status || '').toLowerCase();
+        const ok = topStatus === 'ok';
+        setJvlinkPanelStatus(`${label}: ${ok ? 'ok' : 'error'}`, !ok);
+        appendDebugLine(`[JVLink Panel] ${label} => ${ok ? 'ok' : 'error'}`);
+    } catch (err) {
+        setJvlinkPanelOutput({ error: String(err?.message || err) });
+        setJvlinkPanelStatus(`${label}: ${String(err?.message || err)}`, true);
+    } finally {
+        toggleJvlinkPanelButtons(false);
+    }
+}
+
+async function runJvlinkStatusTest() {
+    await runJvlinkPanelCall('Status', async () => {
+        const res = await fetch('/api/jvlink/status');
+        return await res.json();
+    });
+}
+
+async function runJvlinkStorageLayoutTest() {
+    await runJvlinkPanelCall('Storage Layout', async () => {
+        const res = await fetch('/api/jvlink/storage-layout');
+        return await res.json();
+    });
+}
+
+async function runJvlinkOpenSettingsTest() {
+    const payload = jvlinkPanelGetPayload();
+    await runJvlinkPanelCall('Open Settings', async () => {
+        return await postJson('/api/jvlink/open-settings', {
+            sid: payload.sid || null
+        });
+    });
+}
+
+async function runJvlinkProbeOpenTest() {
+    const payload = jvlinkPanelGetPayload();
+    if (!payload.data_spec || !payload.from_date) {
+        setJvlinkPanelStatus('Probe Open: data_spec and from_date are required', true);
+        return;
+    }
+
+    await runJvlinkPanelCall('Probe Open', async () => {
+        return await postJson('/api/jvlink/probe-open', {
+            data_spec: payload.data_spec,
+            from_date: payload.from_date,
+            max_read_calls: 3,
+            data_option: payload.data_option,
+            max_status_wait_seconds: 60,
+            skip_set_service_key: payload.skip_set_service_key,
+            sid: payload.sid || null
+        });
+    });
+}
+
+async function runJvlinkStreamSampleTest() {
+    const payload = jvlinkPanelGetPayload();
+    if (!payload.data_spec || !payload.from_date) {
+        setJvlinkPanelStatus('Stream Sample: data_spec and from_date are required', true);
+        return;
+    }
+
+    await runJvlinkPanelCall('Stream Sample', async () => {
+        return await postJson('/api/jvlink/stream-sample', {
+            data_spec: payload.data_spec,
+            from_date: payload.from_date,
+            max_records: payload.max_records,
+            data_option: payload.data_option,
+            max_status_wait_seconds: 12,
+            skip_set_service_key: payload.skip_set_service_key,
+            sid: payload.sid || null
+        });
+    });
+}
+
+function sleepMs(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function runJvlinkStreamSampleAutoTest() {
+    const payload = jvlinkPanelGetPayload();
+    if (!payload.data_spec || !payload.from_date) {
+        setJvlinkPanelStatus('Auto Wait Stream: data_spec and from_date are required', true);
+        return;
+    }
+
+    await runJvlinkPanelCall('Auto Wait Stream', async () => {
+        const maxAttempts = 8;
+        const delayMs = 5000;
+        let last = null;
+        let attempt = 0;
+
+        for (attempt = 1; attempt <= maxAttempts; attempt++) {
+            setJvlinkPanelStatus(`Auto Wait Stream: attempt ${attempt}/${maxAttempts}...`, false);
+            const response = await postJson('/api/jvlink/stream-sample', {
+                data_spec: payload.data_spec,
+                from_date: payload.from_date,
+                max_records: payload.max_records,
+                max_status_wait_seconds: 45,
+                data_option: payload.data_option,
+                skip_set_service_key: payload.skip_set_service_key,
+                sid: payload.sid || null
+            });
+            last = response;
+
+            const stream = response?.stream || {};
+            const records = Array.isArray(stream.records) ? stream.records : [];
+            const hasRecords = records.length > 0;
+            if (hasRecords) {
+                break;
+            }
+
+            const dl = Number(stream.downloadCount || 0);
+            const st = Number(stream.statusCode || 0);
+            const stillDownloading = dl > 0 && st < dl;
+            if (!stillDownloading) {
+                break;
+            }
+
+            if (attempt < maxAttempts) {
+                await sleepMs(delayMs);
+            }
+        }
+
+        if (!last) {
+            return {
+                status: 'error',
+                message: 'No response received from stream endpoint.'
+            };
+        }
+
+        return {
+            ...last,
+            auto: {
+                attemptsUsed: attempt,
+                maxAttempts,
+                delayMs,
+                stoppedReason: (Array.isArray(last?.stream?.records) && last.stream.records.length > 0)
+                    ? 'records-received'
+                    : 'no-more-progress-or-timeout'
+            }
+        };
+    });
+}
+
+async function runJvlinkRefreshUpcoming() {
+    await runJvlinkPanelCall('Refresh Cache', async () => {
+        const payload = jvlinkPanelGetPayload();
+        return await postJson('/api/jvlink/refresh-upcoming', {
+            data_spec: payload.data_spec || null,
+            max_status_wait_seconds: 180,
+            skip_set_service_key: payload.skip_set_service_key,
+            sid: payload.sid || null
+        });
+    });
+}
+
+async function runJvlinkStreamSummaryTest() {
+    await runJvlinkPanelCall('Stream Summary', async () => {
+        const res = await fetch('/api/jvlink/stream-summary?limit=50');
+        return await res.json();
+    });
+}
+
+async function runJvlinkCapabilityScanTest() {
+    const payload = jvlinkPanelGetPayload();
+    if (!payload.from_date) {
+        setJvlinkPanelStatus('Capability Scan: from_date is required', true);
+        return;
+    }
+
+    await runJvlinkPanelCall('Capability Scan', async () => {
+        return await postJson('/api/jvlink/capability-scan', {
+            from_date: payload.from_date,
+            max_status_wait_seconds: 30,
+            max_records_per_run: Math.min(200, Math.max(10, payload.max_records || 40)),
+            data_options: [1, 2],
+            sid: payload.sid || null,
+            skip_set_service_key: payload.skip_set_service_key
+        });
+    });
+}
+
+// Keep these on window for inline onclick handlers in index.html.
+window.runJvlinkStatusTest = runJvlinkStatusTest;
+window.runJvlinkStorageLayoutTest = runJvlinkStorageLayoutTest;
+window.runJvlinkOpenSettingsTest = runJvlinkOpenSettingsTest;
+window.runJvlinkProbeOpenTest = runJvlinkProbeOpenTest;
+window.runJvlinkStreamSampleTest = runJvlinkStreamSampleTest;
+window.runJvlinkStreamSampleAutoTest = runJvlinkStreamSampleAutoTest;
+window.runJvlinkStreamSummaryTest = runJvlinkStreamSummaryTest;
+window.runJvlinkCapabilityScanTest = runJvlinkCapabilityScanTest;
+
 async function postJson(url, payload) {
     const res = await fetch(url, {
         method: 'POST',
@@ -2569,6 +2912,7 @@ async function refreshUpcomingRacesLite() {
     const originalLabel = btn?.textContent || '';
     const startedAt = performance.now();
     let progressTimer = null;
+    const formatElapsedSeconds = () => Math.round((performance.now() - startedAt) / 1000);
     if (btn) {
         btn.disabled = true;
         if (action === 'apply') btn.textContent = '⏳ Applying Pending Updates...';
@@ -2581,11 +2925,15 @@ async function refreshUpcomingRacesLite() {
         if (action === 'apply') {
             appendConsoleLine('[Prefetch] Applying pending updates. This can take a while if many races are checked.');
             progressTimer = setInterval(() => {
-                appendConsoleLine('[Prefetch] Apply still running...');
+                appendConsoleLine(`[Prefetch] Apply still running... ${formatElapsedSeconds()}s elapsed.`);
             }, 12000);
         }
 
         if (action === 'legacy-refresh') {
+            appendConsoleLine('[Prefetch] Legacy upcoming refresh started. This can take several minutes when many races are refreshed.');
+            progressTimer = setInterval(() => {
+                appendConsoleLine(`[Prefetch] Legacy upcoming refresh still running... ${formatElapsedSeconds()}s elapsed.`);
+            }, 12000);
             const data = await postJson('/api/races/upcoming/refresh', {});
             await refreshDataAndUI();
             const failedCount = Array.isArray(data.failed_races) ? data.failed_races.length : 0;
@@ -4816,6 +5164,9 @@ const OREPRO_URL = 'https://orepro.netkeiba.com/bet/race_list.html';
 // --- SETTINGS MODAL ---
 function showSettingsModal() {
     // Populate checkboxes from current config
+    if (!appConfig.backend) appConfig.backend = {};
+    const currentEngine = String(appConfig.backend?.dataEngine || 'nk').toLowerCase();
+    document.getElementById('setting-dataEngine').value = currentEngine === 'jv' ? 'jv' : 'nk';
     document.getElementById('setting-raceDatabase').checked = appConfig.sidebarTabs?.raceDatabase ?? true;
     document.getElementById('setting-pedigreeLists').checked = appConfig.sidebarTabs?.pedigreeLists ?? true;
     document.getElementById('setting-autoPickStrategy').checked = appConfig.sidebarTabs?.autoPickStrategy ?? true;
@@ -4856,6 +5207,7 @@ function resetFormulaWeights() {
 async function updateSidebarSettings() {
     const previousAutoFetchPastResults = isAutoFetchPastResultsEnabled();
     const previousPrefetchRaceCheck = isPrefetchRaceCheckEnabled();
+    const previousDataEngine = String(appConfig.backend?.dataEngine || 'nk').toLowerCase();
     // Update config from checkbox values
     appConfig.sidebarTabs = {
         raceDatabase: document.getElementById('setting-raceDatabase').checked,
@@ -4882,6 +5234,10 @@ async function updateSidebarSettings() {
             pedigreeMultiplier: parseFWInput('fw-pedigreeMultiplier',  30),
         }
     };
+    appConfig.backend = {
+        ...appConfig.backend,
+        dataEngine: document.getElementById('setting-dataEngine').value === 'jv' ? 'jv' : 'nk'
+    };
     
     // Save to server
     await fetch('/api/config', {
@@ -4891,8 +5247,8 @@ async function updateSidebarSettings() {
     });
 
     appendDebugLine(
-        `Settings saved: showConsole=${appConfig.ui?.showConsole ?? true}, debugConsole=${appConfig.ui?.debugConsole ?? false}, ` +
-        `prefetchRaceCheck=${appConfig.ui?.prefetchRaceCheck ?? false}`
+        `Settings saved: engine=${appConfig.backend?.dataEngine ?? 'nk'}, showConsole=${appConfig.ui?.showConsole ?? true}, ` +
+        `debugConsole=${appConfig.ui?.debugConsole ?? false}, prefetchRaceCheck=${appConfig.ui?.prefetchRaceCheck ?? false}`
     );
     
     // Apply settings immediately to sidebar
@@ -4907,6 +5263,10 @@ async function updateSidebarSettings() {
     if (!previousPrefetchRaceCheck && isPrefetchRaceCheckEnabled()) {
         appendConsoleLine('[Prefetch] Race prefetch check enabled. Running lightweight scan on next refresh...');
         await loadRaces();
+    }
+    if (previousDataEngine !== appConfig.backend.dataEngine) {
+        appendConsoleLine(`[Engine] Switched data engine to ${appConfig.backend.dataEngine.toUpperCase()}. Reloading races...`);
+        await refreshDataAndUI();
     }
 }
 

@@ -16,6 +16,7 @@ import data_manager
 from storage import (
     delete_horse_cache_entries_by_ids,
     delete_marks_for_races,
+    get_active_data_engine,
     load_app_config,
     load_horse_list,
     load_marks_store,
@@ -111,11 +112,11 @@ def force_str(val):
 
 
 def load_cached_races():
-    return load_race_cache()
+    return load_race_cache(data_engine=get_active_data_engine())
 
 
 def save_cached_races(races):
-    save_race_cache(races)
+    save_race_cache(races, data_engine=get_active_data_engine())
 
 
 def _clean_mark_symbol(value):

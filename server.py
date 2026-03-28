@@ -5,15 +5,17 @@ import os
 import subprocess
 import signal
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from routers.maintenance import router as maintenance_router
 from routers.lists_config import router as lists_config_router
 from routers.races import router as races_router, set_progress_logger
 from routers.scrape import router as scrape_router, log_progress
 from routers.orepro import router as orepro_router
+from routers.jvlink import router as jvlink_router
 from storage import init_storage_foundation
-from dotenv import load_dotenv
-
-load_dotenv()
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -29,6 +31,7 @@ app.include_router(lists_config_router)
 app.include_router(races_router)
 app.include_router(scrape_router)
 app.include_router(orepro_router)
+app.include_router(jvlink_router)
 
 
 set_progress_logger(log_progress)

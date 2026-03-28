@@ -11,7 +11,14 @@ import json
 import time
 import logging
 import config
-from storage import load_horse_cache_map, load_race_cache, save_race_cache, upsert_horse_cache_entries
+from storage import (
+    load_horse_cache_map,
+    load_race_cache,
+    save_race_cache,
+    upsert_horse_cache_entries,
+    normalize_data_engine,
+)
+from jra_van_storage import get_race_keys_in_date_range, get_cache_dates_in_range
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +304,95 @@ def get_race_ids_for_date(target_date):
 
     return sorted(race_ids)
 
+
+def _normalize_source_mode(source_mode):
+    mode = str(source_mode or "").strip().lower()
+    if mode in {"nk", "jv", "auto"}:
+        return mode
+    cfg_mode = str(getattr(config, "SCRAPE_SOURCE_MODE", "nk") or "nk").strip().lower()
+    return cfg_mode if cfg_mode in {"nk", "jv", "auto"} else "nk"
+
+
+def _race_id12_from_jv_key16(race_key_16):
+    key = str(race_key_16 or "").strip()
+    if not re.fullmatch(r"\d{16}", key):
+        return ""
+    # Preserve existing internal race-id shape (12 digits): YYYY + JYO(2) + KAIJI(2) + NICHIJI(2) + RACE(2)
+    return f"{key[0:4]}{key[8:16]}"
+
+
+def _get_jv_race_ids_for_window(start_date, end_date, allow_nk_assist=True):
+    start_text = str(start_date)
+    end_text = str(end_date)
+    try:
+        keys = get_race_keys_in_date_range(start_text, end_text)
+    except Exception as exc:
+        logger.warning(f"JV race-key lookup failed for {start_text}..{end_text}: {exc}")
+        return []
+
+    race_ids = []
+    for key in keys:
+        rid = _race_id12_from_jv_key16(key)
+        if rid:
+            race_ids.append(rid)
+
+    race_ids = sorted(set(race_ids))
+    if race_ids:
+        return race_ids
+
+    # Fallback path: infer active dates from JV cache index metadata and
+    # expand those dates to race_ids using the existing daily list discovery.
+    if not allow_nk_assist:
+        return []
+
+    # The lookback tolerance (start_date may be before today) is intentional for
+    # the race_keys table but must NOT be applied to the daily-list expansion —
+    # past dates yield completed races whose date check will always fail in the
+    # scrape loop.  Clamp to today so we only discover upcoming race IDs.
+    today_dt = datetime.date.today()
+    daily_list_start = max(today_dt, start_date if isinstance(start_date, datetime.date)
+                          else datetime.datetime.strptime(start_text, "%Y-%m-%d").date())
+    try:
+        covered_dates = get_cache_dates_in_range(str(daily_list_start), end_text, specs=["RA", "SE", "BN", "JG", "TK"])
+    except Exception as exc:
+        logger.warning(f"JV cache-date lookup failed for {start_text}..{end_text}: {exc}")
+        return []
+
+    for day_text in covered_dates:
+        try:
+            day_dt = datetime.datetime.strptime(day_text, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        race_ids.extend(_get_race_ids_from_daily_list(day_dt))
+
+    # Always also try upcoming weekend dates that fall inside the query window.
+    # This ensures the current/next weekend races are found even when the JV cache
+    # hasn't been refreshed yet for those specific dates.
+    try:
+        covered_date_set = set(covered_dates)
+        end_dt = datetime.datetime.strptime(end_text, "%Y-%m-%d").date()
+        for wd in sorted(get_upcoming_weekend_dates()):
+            if daily_list_start <= wd <= end_dt:
+                wd_text = wd.strftime("%Y-%m-%d")
+                if wd_text not in covered_date_set:
+                    race_ids.extend(_get_race_ids_from_daily_list(wd))
+    except Exception as exc:
+        logger.debug(f"Weekend date supplement failed: {exc}")
+
+    # If daily-list expansion yields nothing, try month-level discovery for covered dates.
+    if not race_ids and covered_dates:
+        year_months = set()
+        for day_text in covered_dates:
+            try:
+                d = datetime.datetime.strptime(day_text, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            year_months.add((d.year, d.month))
+        for y, m in sorted(year_months):
+            race_ids.extend(_get_month_race_ids(y, m))
+
+    return sorted(set(str(r).strip() for r in race_ids if str(r).strip()))
+
 def fetch_real_post_time(race_id):
     url = f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
     try:
@@ -310,6 +406,74 @@ def fetch_real_post_time(race_id):
     except Exception as e:
         logger.warning(f"Failed to fetch post time for {race_id}: {e}")
     return None
+
+
+def _build_jv_placeholder_race_snapshot(race_id, resolved_source_mode, resolved_data_engine):
+    race_id_text = str(race_id or "").strip()
+    if not re.fullmatch(r"\d{12}", race_id_text):
+        return None
+
+    year = race_id_text[0:4]
+    jyo_cd = race_id_text[4:6]
+    kaiji = race_id_text[6:8]
+    nichiji = race_id_text[8:10]
+    race_num = race_id_text[10:12]
+
+    jyo_map = {
+        "01": "Sapporo",
+        "02": "Hakodate",
+        "03": "Fukushima",
+        "04": "Niigata",
+        "05": "Tokyo",
+        "06": "Nakayama",
+        "07": "Chukyo",
+        "08": "Kyoto",
+        "09": "Hanshin",
+        "10": "Kokura",
+    }
+    place = jyo_map.get(jyo_cd, f"JYO-{jyo_cd}")
+
+    info = {
+        "race_id": race_id_text,
+        "clean_date": "",
+        "place": place,
+        "race_name": f"{place} R{int(race_num)}",
+        "race_number": int(race_num),
+        "sort_time": "",
+        "time": "TBA",
+        "kaisai_id": f"{year}{jyo_cd}{kaiji}{nichiji}",
+        "discovery_sources": ["jv"],
+        "discovery_source": "jv",
+        "scrape_source_mode": resolved_source_mode,
+        "data_engine": resolved_data_engine,
+    }
+
+    # Try to infer month/day from the JV key table if present.
+    try:
+        start_d = datetime.date(int(year), 1, 1)
+        end_d = datetime.date(int(year), 12, 31)
+        keys = get_race_keys_in_date_range(str(start_d), str(end_d))
+        key_prefix = f"{year}"
+        for key in keys:
+            k = str(key or "")
+            if len(k) != 16 or not k.startswith(key_prefix):
+                continue
+            if k[8:16] == race_id_text[4:12]:
+                month_day = k[4:8]
+                try:
+                    guessed_date = datetime.datetime.strptime(f"{year}{month_day}", "%Y%m%d").date()
+                    info["clean_date"] = str(guessed_date)
+                    info["sort_time"] = f"{guessed_date} 00:00"
+                except Exception:
+                    pass
+                break
+    except Exception:
+        pass
+
+    return {
+        "info": info,
+        "entries": pd.DataFrame([], columns=["BK", "PP", "Horse", "Record", "Sire", "Dam", "BMS", "Odds", "Fav", "Horse_ID", "Sire_ID", "Dam_ID", "BMS_ID"]),
+    }
 
 # --- NEW: HTML Sniper for Predicted Odds/Fav ---
 def fetch_predictions(race_id):
@@ -466,10 +630,16 @@ def format_entry_data(entry_list, predictions=None):
     
     return formatted
 
-def fetch_weekend_timeline(mode="load", progress_callback=None):
+def fetch_weekend_timeline(mode="load", progress_callback=None, source_mode=None, data_engine=None):
     today = datetime.datetime.now(ZoneInfo("Asia/Tokyo")).date()
     lookahead_days = max(1, int(getattr(config, "UPCOMING_LOOKAHEAD_DAYS", 28)))
     end_date = today + datetime.timedelta(days=lookahead_days)
+    resolved_data_engine = normalize_data_engine(data_engine)
+    resolved_source_mode = _normalize_source_mode(source_mode)
+    if resolved_data_engine == "jv" and resolved_source_mode != "jv":
+        resolved_source_mode = "jv"
+    if resolved_data_engine == "nk" and resolved_source_mode == "jv":
+        resolved_source_mode = "nk"
     target_year_months = sorted({
         (today.year, today.month),
         (end_date.year, end_date.month),
@@ -477,25 +647,75 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
     
     cached_races = []
     if mode in ["load", "new"]:
-        cached_races = load_race_cache()
+        cached_races = load_race_cache(data_engine=resolved_data_engine)
             
     if mode == "load" and cached_races: return cached_races
 
-    print(f"\n--- SCRAPE MODE: {mode.upper()} ---")
-    all_race_ids = []
-    for year_val, month_val in target_year_months:
-        all_race_ids.extend(_get_month_race_ids(year_val, month_val))
-
-    # Calendar fallback: discover upcoming weekend race IDs from daily race list pages.
-    weekend_dates = sorted(
-        d for d in get_upcoming_weekend_dates()
-        if today <= d <= end_date
+    print(
+        f"\n--- SCRAPE MODE: {mode.upper()} / ENGINE: {resolved_data_engine.upper()} / "
+        f"SOURCE: {resolved_source_mode.upper()} ---"
     )
-    for weekend_date in weekend_dates:
-        all_race_ids.extend(_get_race_ids_from_daily_list(weekend_date))
+    nk_discovered: list = []
+    jv_discovered: list = []
 
-    # Preserve order while dropping duplicates when scanning multiple months.
-    all_race_ids = list(dict.fromkeys(all_race_ids))
+    if resolved_source_mode in {"nk", "auto"}:
+        for year_val, month_val in target_year_months:
+            nk_discovered.extend(str(r) for r in _get_month_race_ids(year_val, month_val))
+
+        # Calendar fallback: discover upcoming weekend race IDs from daily race list pages.
+        weekend_dates = sorted(
+            d for d in get_upcoming_weekend_dates()
+            if today <= d <= end_date
+        )
+        for weekend_date in weekend_dates:
+            nk_discovered.extend(str(r) for r in _get_race_ids_from_daily_list(weekend_date))
+
+    if resolved_source_mode in {"jv", "auto"}:
+        lookback_days = max(0, int(getattr(config, "JV_DISCOVERY_LOOKBACK_DAYS", 7)))
+        jv_start_date = today - datetime.timedelta(days=lookback_days)
+        jv_ids_raw = _get_jv_race_ids_for_window(
+            jv_start_date,
+            end_date,
+            allow_nk_assist=(resolved_data_engine != "jv"),
+        )
+        if jv_ids_raw:
+            jv_discovered.extend(str(r) for r in jv_ids_raw)
+            msg = f"JV discovery added {len(jv_discovered)} race IDs for {jv_start_date}..{end_date}."
+            print(msg)
+            if progress_callback:
+                progress_callback(msg)
+        elif (
+            resolved_source_mode == "jv"
+            and resolved_data_engine != "jv"
+            and getattr(config, "SCRAPE_SOURCE_FALLBACK_TO_NK", True)
+        ):
+            msg = "JV discovery returned no race IDs; falling back to NK discovery."
+            print(msg)
+            if progress_callback:
+                progress_callback(msg)
+            for year_val, month_val in target_year_months:
+                nk_discovered.extend(str(r) for r in _get_month_race_ids(year_val, month_val))
+            # Also include upcoming weekend dates — mirrors what full NK mode does.
+            weekend_dates = sorted(
+                d for d in get_upcoming_weekend_dates()
+                if today <= d <= end_date
+            )
+            for weekend_date in weekend_dates:
+                nk_discovered.extend(str(r) for r in _get_race_ids_from_daily_list(weekend_date))
+
+    nk_id_set = set(nk_discovered)
+    jv_id_set = set(jv_discovered)
+
+    def _discovery_sources_for(rid: str) -> list:
+        sources = []
+        if rid in nk_id_set:
+            sources.append("nk")
+        if rid in jv_id_set:
+            sources.append("jv")
+        return sources or [resolved_source_mode]
+
+    # Preserve order while dropping duplicates; NK IDs first, then JV-only additions.
+    all_race_ids = list(dict.fromkeys(nk_discovered + jv_discovered))
     total_races = len(all_race_ids)
     
     existing_ids = [r["info"]["race_id"] for r in cached_races] if mode == "new" else []
@@ -516,6 +736,17 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
         
         str_id = str(race_id)
         if str_id in existing_ids:
+            # In "new" mode, augment provenance if this scrape found the race via a new source.
+            if mode == "new":
+                disc_sources = _discovery_sources_for(str_id)
+                for cached_race in weekend_races:
+                    if cached_race["info"].get("race_id") == str_id:
+                        prev = set(cached_race["info"].get("discovery_sources") or [])
+                        merged = sorted(prev | set(disc_sources))
+                        if merged != sorted(prev):
+                            cached_race["info"]["discovery_sources"] = merged
+                            cached_race["info"]["discovery_source"] = "both" if len(merged) > 1 else merged[0]
+                        break
             msg = f"[{i + 1}/{total_races}] {str_id}... Cached."
             print(msg)
             if progress_callback: progress_callback(msg)
@@ -527,6 +758,20 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
         msg = f"[{i + 1}/{total_races}] Checking {str_id}..."
         print(msg, end=" ")
         if progress_callback: progress_callback(msg)
+
+        if resolved_data_engine == "jv":
+            jv_snapshot = _build_jv_placeholder_race_snapshot(
+                str_id,
+                resolved_source_mode=resolved_source_mode,
+                resolved_data_engine=resolved_data_engine,
+            )
+            if jv_snapshot is not None:
+                weekend_races.append(jv_snapshot)
+                msg_jv = f"JV snapshot staged for {str_id}."
+                print(msg_jv)
+                if progress_callback:
+                    progress_callback(msg_jv)
+            continue
         
         try:
             result = keibascraper.load("entry", race_id)
@@ -570,7 +815,14 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
                         # Fetch the predicted odds & fav right now
                         preds = fetch_predictions(str_id)
                         formatted_entries = format_entry_data(entry_list, preds)
-                        
+
+                        # Tag race with provenance: which source(s) discovered this race ID.
+                        disc_sources = _discovery_sources_for(str_id)
+                        race_info["discovery_sources"] = disc_sources
+                        race_info["discovery_source"] = "both" if len(disc_sources) > 1 else disc_sources[0]
+                        race_info["scrape_source_mode"] = resolved_source_mode
+                        race_info["data_engine"] = resolved_data_engine
+
                         weekend_races.append({
                             "info": race_info,
                             "entries": formatted_entries
@@ -593,7 +845,7 @@ def fetch_weekend_timeline(mode="load", progress_callback=None):
         x["info"].get("place", "")
     ))
     
-    save_race_cache(weekend_races)
+    save_race_cache(weekend_races, data_engine=resolved_data_engine)
     return weekend_races
 
 def fetch_race_history_by_id(race_id):
