@@ -40,3 +40,7 @@ compendium_txt/
 project_full_contents.md
 generate_compendium.ps1
 generate_compendium_folder.ps1
+
+data_jra_van/
+jra-van-docs/
+JVDTLABSDK4902/
