@@ -19,6 +19,7 @@ from storage import (
     normalize_data_engine,
 )
 from jra_van_storage import get_race_keys_in_date_range, get_cache_dates_in_range
+from jvlink_bridge import run_native_schedule
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,17 @@ def romanize(text):
             
     result = kks.convert(text)
     return " ".join([item['hepburn'].title() for item in result]).replace("  ", " ").strip()
+
+
+def resolve_cached_or_romanized_horse_name(horse_id, raw_name):
+    """Prefer cached English display names; otherwise romanize the JV/NK raw name without network calls."""
+    clean_id = str(horse_id or "").replace('.0', '').strip()
+    if clean_id and clean_id in HORSE_CACHE and isinstance(HORSE_CACHE[clean_id], dict):
+        cached_name = str(HORSE_CACHE[clean_id].get("name") or "").strip()
+        if cached_name:
+            return cached_name
+    return romanize(raw_name)
+
 
 def fetch_official_name_by_id(horse_id, jp_fallback):
     if not horse_id: return romanize(jp_fallback)
@@ -475,6 +487,394 @@ def _build_jv_placeholder_race_snapshot(race_id, resolved_source_mode, resolved_
         "entries": pd.DataFrame([], columns=["BK", "PP", "Horse", "Record", "Sire", "Dam", "BMS", "Odds", "Fav", "Horse_ID", "Sire_ID", "Dam_ID", "BMS_ID"]),
     }
 
+
+def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, resolved_data_engine, progress_callback=None):
+    # DataOption=2 returns changed records since from_date, so backfill a bit
+    # to include races published before the requested weekend window.
+    lookback_days = max(0, int(getattr(config, "JV_NATIVE_FROMDATE_LOOKBACK_DAYS", 14) or 0))
+    from_date_base = start_date - datetime.timedelta(days=lookback_days)
+    from_date = from_date_base.strftime("%Y%m%d000000")
+    window_start = start_date
+    spec_queries = [
+        {"data_spec": "TOKUTCOVRACERCOVSNAP", "data_option": 2, "max_records": 50000},
+        {"data_spec": "TOKUTCVNRACERCVNSNPN", "data_option": 2, "max_records": 20000},
+    ]
+
+    runs = []
+    races_by_id = {}
+
+    for query in spec_queries:
+        if progress_callback:
+            progress_callback(
+                f"JV read start: spec={query['data_spec']} option={query['data_option']} "
+                f"from={from_date} max={query['max_records']}"
+            )
+
+        native = run_native_schedule(
+            from_date=from_date,
+            data_spec=query["data_spec"],
+            max_records=query["max_records"],
+            max_status_wait_seconds=180,
+            data_option=query["data_option"],
+            skip_set_service_key=False,
+        )
+
+        if progress_callback:
+            if isinstance(native, dict):
+                progress_callback(
+                    f"JV read done: spec={query['data_spec']} open={native.get('openCode')} "
+                    f"records={int(native.get('recordsRead') or 0)} races={len(native.get('races') or [])}"
+                )
+            else:
+                progress_callback(f"JV read done: spec={query['data_spec']} returned non-dict payload")
+
+        runs.append(
+            {
+                "dataSpec": query["data_spec"],
+                "dataOption": query["data_option"],
+                "ok": bool(isinstance(native, dict) and native.get("ok")),
+                "recordsRead": int((native or {}).get("recordsRead") or 0) if isinstance(native, dict) else 0,
+                "error": str((native or {}).get("error") or "") if isinstance(native, dict) else "unknown native schedule error",
+            }
+        )
+        if not isinstance(native, dict) or not native.get("ok"):
+            continue
+
+        for item in (native.get("races") or []):
+            if not isinstance(item, dict):
+                continue
+            race_id = str(item.get("raceId") or "").strip()
+            if not re.fullmatch(r"\d{12}", race_id):
+                continue
+            # Keep strict JRA central races only (01-10).
+            try:
+                jyo_cd_int = int(race_id[4:6])
+            except Exception:
+                continue
+            if jyo_cd_int < 1 or jyo_cd_int > 10:
+                continue
+
+            clean_date = str(item.get("date") or "").strip()
+            if not clean_date:
+                continue
+            try:
+                d = datetime.datetime.strptime(clean_date, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if not (window_start <= d <= end_date):
+                continue
+
+            entries = item.get("entries") or []
+            if not isinstance(entries, list):
+                entries = []
+            row_list = []
+            for e in entries:
+                if not isinstance(e, dict):
+                    continue
+                horse_id = str(e.get("Horse_ID") or "").strip()
+                raw_horse_name = str(e.get("Horse") or "").strip()
+                row_list.append(
+                    {
+                        "BK": str(e.get("BK") or "").strip(),
+                        "PP": str(e.get("PP") or "").strip(),
+                        "Horse": resolve_cached_or_romanized_horse_name(horse_id, raw_horse_name),
+                        "Record": str(e.get("Record") or "").strip(),
+                        "Sire": str(e.get("Sire") or "").strip(),
+                        "Dam": str(e.get("Dam") or "").strip(),
+                        "BMS": str(e.get("BMS") or "").strip(),
+                        "Odds": str(e.get("Odds") or "").strip(),
+                        "Fav": str(e.get("Fav") or "").strip(),
+                        "Horse_ID": str(e.get("Horse_ID") or "").strip(),
+                        "Sire_ID": str(e.get("Sire_ID") or "").strip(),
+                        "Dam_ID": str(e.get("Dam_ID") or "").strip(),
+                        "BMS_ID": str(e.get("BMS_ID") or "").strip(),
+                        "Jockey": str(e.get("Jockey") or "").strip(),
+                    }
+                )
+
+            info = {
+                "race_id": race_id,
+                "clean_date": clean_date,
+                "place": str(item.get("place") or "").strip(),
+                "race_name": str(item.get("raceName") or "").strip(),
+                "race_number": int(item.get("raceNumber") or 0),
+                "sort_time": str(item.get("sortTime") or "").strip(),
+                "time": str(item.get("time") or "TBA").strip() or "TBA",
+                "kaisai_id": str(item.get("kaisaiId") or "").strip(),
+                "distance": int(item.get("distance") or 0),
+                "surface": str(item.get("surface") or "").strip(),
+                "grade": str(item.get("grade") or "").strip(),
+                "discovery_sources": ["jv"],
+                "discovery_source": "jv",
+                "scrape_source_mode": resolved_source_mode,
+                "data_engine": resolved_data_engine,
+            }
+
+            # JG-derived shells can include race_number=0 records that are not actual race cards.
+            # Keep only real race numbers to avoid confusing UI output.
+            if int(info.get("race_number") or 0) <= 0:
+                continue
+
+            existing = races_by_id.get(race_id)
+            if not existing:
+                races_by_id[race_id] = {"info": info, "entries": pd.DataFrame(row_list)}
+                continue
+
+            existing_info = existing.get("info") or {}
+            for field in ["place", "race_name", "sort_time", "time", "kaisai_id", "surface", "grade"]:
+                if not str(existing_info.get(field) or "").strip() and str(info.get(field) or "").strip():
+                    existing_info[field] = info[field]
+            if int(existing_info.get("distance") or 0) == 0 and int(info.get("distance") or 0) > 0:
+                existing_info["distance"] = int(info.get("distance") or 0)
+            if int(existing_info.get("race_number") or 0) == 0 and int(info.get("race_number") or 0) > 0:
+                existing_info["race_number"] = int(info.get("race_number") or 0)
+
+            existing_entries = existing.get("entries")
+            existing_len = len(existing_entries) if hasattr(existing_entries, "__len__") else 0
+            if row_list and existing_len == 0:
+                existing["entries"] = pd.DataFrame(row_list)
+
+        if progress_callback:
+            progress_callback(
+                f"JV merge status: spec={query['data_spec']} merged_unique_races={len(races_by_id)}"
+            )
+
+    races = list(races_by_id.values())
+    races.sort(key=lambda x: (
+        x["info"].get("clean_date", "2099-12-31"),
+        int(x["info"].get("race_number", 99) or 99),
+        x["info"].get("sort_time", "23:59"),
+        x["info"].get("place", ""),
+    ))
+    meta = {
+        "ok": len(races) > 0,
+        "runs": runs,
+    }
+    if len(races) == 0:
+        errors = [r.get("error") for r in runs if r.get("error")]
+        if errors:
+            meta["error"] = errors[0]
+    return races, meta
+
+
+def _is_placeholder_numeric_text(value):
+    s = str(value or "").strip()
+    if not s:
+        return True
+    if s.lower() in {"nan", "none"}:
+        return True
+    try:
+        return float(s) <= 0.0
+    except Exception:
+        return False
+
+
+def _fetch_fast_upcoming_odds_fav_map(race_id):
+    """Fetch only odds/popularity for an upcoming race from the lightweight NK odds API.
+
+    Returns a map keyed by post position (PP), e.g. {"01": {"Odds": "10.3", "Fav": "3"}}.
+    If the API responds with a non-PP keyed payload (for example `yoso` mode), returns an empty
+    map so the caller can optionally fall back to the slower HTML+API path.
+    """
+    race_id_text = str(race_id or "").strip()
+    if not race_id_text:
+        return {}, "none"
+
+    params = {"race_id": race_id_text, "type": "1", "action": "init"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Referer": f"{config.NETKEIBA_RACE_SHUTUBA}?race_id={race_id_text}",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
+    try:
+        response = requests.get(config.NETKEIBA_API_ODDS, params=params, headers=headers, timeout=6)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        logger.debug(f"Fast upcoming odds fetch failed for {race_id_text}: {exc}")
+        return {}, "error"
+
+    status = str(payload.get("status") or "").strip().lower()
+    odds_root = (payload.get("data") or {}).get("odds") or {}
+    odds_data = odds_root.get("1") if isinstance(odds_root, dict) else {}
+    if not isinstance(odds_data, dict) or not odds_data:
+        return {}, status or "empty"
+
+    # `yoso` mode is not reliably keyed by PP; let the caller decide whether to use
+    # the slower HTML+API mapping path for those cases.
+    if status == "yoso":
+        return {}, status
+
+    pp_map = {}
+    for raw_key, raw_values in odds_data.items():
+        pp = str(raw_key or "").strip()
+        if not pp:
+            continue
+        if pp.isdigit():
+            pp = f"{int(pp):02d}"
+
+        odds = ""
+        fav = ""
+        if isinstance(raw_values, (list, tuple)):
+            if len(raw_values) > 0:
+                odds = str(raw_values[0] or "").strip()
+            if len(raw_values) > 2:
+                fav = str(raw_values[2] or "").strip()
+        else:
+            odds = str(raw_values or "").strip()
+
+        if odds in {"0", "0.0", "0.00"}:
+            odds = ""
+        if fav in {"0", "00", "0.0"}:
+            fav = ""
+
+        if odds or fav:
+            pp_map[pp] = {"Odds": odds, "Fav": fav}
+
+    return pp_map, status or ("ok" if pp_map else "empty")
+
+
+def _enrich_jv_upcoming_with_nk_snapshot(races, progress_callback=None):
+    """Fill JV upcoming Odds/Fav placeholders using the lightweight NK odds API only.
+
+    JV remains the primary source for race and entry data; this bridge now limits itself to
+    just odds/popularity so upcoming refreshes stay fast.
+    """
+    if not races:
+        return races
+
+    today = datetime.date.today()
+    enriched = []
+    total = len(races)
+    processed = 0
+    candidate_count = 0
+    fetch_attempts = 0
+    fetch_hits = 0
+    changed_races = 0
+    fill_counts = {"Odds": 0, "Fav": 0}
+
+    if progress_callback:
+        progress_callback(f"JV odds/fav bridge: start (races={total})")
+
+    for race in races:
+        processed += 1
+        if not isinstance(race, dict):
+            enriched.append(race)
+            continue
+
+        info = race.get("info") or {}
+        race_id = str(info.get("race_id") or "").strip()
+        clean_date = str(info.get("clean_date") or "").strip()
+        entries_df = race.get("entries")
+
+        if not race_id or not isinstance(entries_df, pd.DataFrame) or entries_df.empty:
+            enriched.append(race)
+            continue
+
+        try:
+            race_date = datetime.datetime.strptime(clean_date, "%Y-%m-%d").date()
+        except Exception:
+            race_date = None
+
+        # Upcoming only; historical races should trust JV finalized data.
+        if race_date is None or race_date < today:
+            enriched.append(race)
+            continue
+
+        rows = entries_df.to_dict(orient="records")
+        needs_fill = any(
+            _is_placeholder_numeric_text(row.get("Odds"))
+            or _is_placeholder_numeric_text(row.get("Fav"))
+            for row in rows
+        )
+        if not needs_fill:
+            if progress_callback and (processed % 8 == 0 or processed == total):
+                progress_callback(
+                    f"JV odds/fav bridge progress: {processed}/{total} scanned | candidates={candidate_count} "
+                    f"fetches={fetch_attempts}/{fetch_hits} updated={changed_races}"
+                )
+            enriched.append(race)
+            continue
+
+        candidate_count += 1
+        if progress_callback:
+            progress_callback(
+                f"JV odds/fav bridge race: {clean_date} {race_id} placeholders detected; fetching NK odds API..."
+            )
+
+        fetch_attempts += 1
+        pp_map, api_status = _fetch_fast_upcoming_odds_fav_map(race_id)
+        if pp_map:
+            fetch_hits += 1
+
+        # If the fast API does not give us PP-addressable data (for example `yoso`),
+        # fall back to the older HTML+API predictions path just for this race.
+        horse_predictions = {}
+        if not pp_map:
+            horse_predictions = fetch_predictions(race_id)
+            if horse_predictions:
+                fetch_hits += 1
+            elif progress_callback:
+                progress_callback(f"JV odds/fav bridge race: {race_id} NK odds unavailable (status={api_status or 'none'})")
+
+        changed = False
+        for row in rows:
+            fallback_sources = row.get("_fallbackSources")
+            if not isinstance(fallback_sources, dict):
+                fallback_sources = {}
+
+            pp = str(row.get("PP") or "").split(".")[0].strip()
+            if pp.isdigit():
+                pp = f"{int(pp):02d}"
+            hid = str(row.get("Horse_ID") or "").split(".")[0].strip()
+
+            srow = pp_map.get(pp) or horse_predictions.get(hid) or {}
+            if not isinstance(srow, dict):
+                continue
+
+            if _is_placeholder_numeric_text(row.get("Odds")) and not _is_placeholder_numeric_text(srow.get("Odds") or srow.get("odds")):
+                row["Odds"] = str(srow.get("Odds") or srow.get("odds") or "").strip()
+                fallback_sources["Odds"] = "nk_bridge"
+                fill_counts["Odds"] += 1
+                changed = True
+            if _is_placeholder_numeric_text(row.get("Fav")) and not _is_placeholder_numeric_text(srow.get("Fav") or srow.get("fav")):
+                row["Fav"] = str(srow.get("Fav") or srow.get("fav") or "").strip()
+                fallback_sources["Fav"] = "nk_bridge"
+                fill_counts["Fav"] += 1
+                changed = True
+
+            if fallback_sources:
+                row["_fallbackSources"] = fallback_sources
+
+        if changed:
+            changed_races += 1
+            race["entries"] = pd.DataFrame(rows)
+            if progress_callback:
+                progress_callback(
+                    f"JV odds/fav bridge race: {race_id} updated | fills Odds={fill_counts['Odds']} Fav={fill_counts['Fav']}"
+                )
+        elif progress_callback:
+            progress_callback(f"JV odds/fav bridge race: {race_id} no field updates")
+
+        enriched.append(race)
+
+        if progress_callback and (processed % 5 == 0 or processed == total):
+            progress_callback(
+                f"JV odds/fav bridge progress: {processed}/{total} scanned | candidates={candidate_count} "
+                f"fetches={fetch_attempts}/{fetch_hits} updated={changed_races} "
+                f"fills Odds={fill_counts['Odds']} Fav={fill_counts['Fav']}"
+            )
+
+    if progress_callback:
+        progress_callback(
+            f"JV odds/fav bridge complete: scanned={processed} candidates={candidate_count} "
+            f"fetches={fetch_attempts}/{fetch_hits} updated={changed_races} "
+            f"fills Odds={fill_counts['Odds']} Fav={fill_counts['Fav']}"
+        )
+
+    return enriched
+
 # --- NEW: HTML Sniper for Predicted Odds/Fav ---
 def fetch_predictions(race_id):
     url = f"https://race.netkeiba.com/race/shutuba.html?race_id={race_id}"
@@ -651,6 +1051,74 @@ def fetch_weekend_timeline(mode="load", progress_callback=None, source_mode=None
             
     if mode == "load" and cached_races: return cached_races
 
+    if resolved_data_engine == "jv":
+        lookback_days = max(0, int(getattr(config, "JV_DISCOVERY_LOOKBACK_DAYS", 7)))
+        jv_start_date = today - datetime.timedelta(days=lookback_days)
+        if progress_callback:
+            progress_callback(
+                f"JV config: window={jv_start_date}..{end_date} lookbackDays={lookback_days} mode={mode}"
+            )
+        native_races, native_meta = _load_jv_native_race_snapshots(
+            start_date=jv_start_date,
+            end_date=end_date,
+            resolved_source_mode=resolved_source_mode,
+            resolved_data_engine=resolved_data_engine,
+            progress_callback=progress_callback,
+        )
+        if native_races:
+            msg = f"JV native loader assembled {len(native_races)} races from multi-spec native stream."
+            print(msg)
+            if progress_callback:
+                progress_callback(msg)
+        else:
+            err = ""
+            if isinstance(native_meta, dict):
+                err = str(native_meta.get("error") or "")
+            msg = "JRA-VAN native loader returned 0 races."
+            if err:
+                msg += f" detail={err}"
+            print(msg)
+            if progress_callback:
+                progress_callback(msg)
+
+        if bool(getattr(config, "JV_NK_BRIDGE_ENRICH_UPCOMING", True)) and native_races:
+            if progress_callback:
+                progress_callback("JV bridge enrichment: filling upcoming Odds/Fav placeholders from the fast NK odds API...")
+            native_races = _enrich_jv_upcoming_with_nk_snapshot(native_races, progress_callback=progress_callback)
+            if progress_callback:
+                progress_callback("JV bridge enrichment: complete.")
+
+        if mode == "new":
+            if progress_callback:
+                progress_callback(
+                    f"JV merge: combining existing cache ({len(cached_races or [])}) with native races ({len(native_races or [])})"
+                )
+            by_id = {str(r["info"].get("race_id") or ""): r for r in (cached_races or []) if isinstance(r, dict)}
+            for r in native_races:
+                rid = str(r["info"].get("race_id") or "")
+                if rid:
+                    by_id[rid] = r
+            merged = list(by_id.values())
+            merged.sort(key=lambda x: (
+                x["info"].get("clean_date", "2099-12-31"),
+                int(x["info"].get("race_number", 99) or 99),
+                x["info"].get("sort_time", "23:59"),
+                x["info"].get("place", ""),
+            ))
+            if progress_callback:
+                progress_callback(f"JV cache save: writing {len(merged)} merged races...")
+            save_race_cache(merged, data_engine=resolved_data_engine)
+            if progress_callback:
+                progress_callback("JV cache save: done.")
+            return merged
+
+        if progress_callback:
+            progress_callback(f"JV cache save: writing {len(native_races)} races...")
+        save_race_cache(native_races, data_engine=resolved_data_engine)
+        if progress_callback:
+            progress_callback("JV cache save: done.")
+        return native_races
+
     print(
         f"\n--- SCRAPE MODE: {mode.upper()} / ENGINE: {resolved_data_engine.upper()} / "
         f"SOURCE: {resolved_source_mode.upper()} ---"
@@ -702,6 +1170,14 @@ def fetch_weekend_timeline(mode="load", progress_callback=None, source_mode=None
             )
             for weekend_date in weekend_dates:
                 nk_discovered.extend(str(r) for r in _get_race_ids_from_daily_list(weekend_date))
+        elif resolved_data_engine == "jv":
+            msg = (
+                "JRA-VAN engine discovered 0 native races. "
+                "Strict engine isolation is active, so NK fallback is disabled."
+            )
+            print(msg)
+            if progress_callback:
+                progress_callback(msg)
 
     nk_id_set = set(nk_discovered)
     jv_id_set = set(jv_discovered)

@@ -153,6 +153,12 @@
     line-height: 1.4;
 }
 
+/* Highlight fields filled by fallback bridge sources (e.g., NK bridge in JV mode). */
+.fallback-field-cell {
+    background: rgba(255, 193, 7, 0.18);
+    box-shadow: inset 0 0 0 1px rgba(255, 193, 7, 0.45);
+}
+
         /* NEW: Flex column to separate the sticky header from the scrolling body */
         .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; background-color: #0e1117; }
         .top-sticky-bar { padding: 20px 40px 0 40px; flex-shrink: 0; position: relative; z-index: 100; }

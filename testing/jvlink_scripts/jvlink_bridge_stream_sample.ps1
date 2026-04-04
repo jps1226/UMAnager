@@ -27,6 +27,21 @@ function Read-JVRecord {
         [string]$buff = ""
         $size = 0
         $ret = [int]$Obj.JVRead([ref]$buff, [ref]$size, [ref]$filename)
+        $hexPrefix = ""
+        $nonZero = 0
+        if ($ret -gt 0 -and $size -gt 0 -and $buff) {
+            try {
+                $bytes = [System.Text.Encoding]::GetEncoding(932).GetBytes($buff)
+                $take = [Math]::Min(48, $bytes.Length)
+                if ($take -gt 0) {
+                    $hexPrefix = ([System.BitConverter]::ToString($bytes, 0, $take)).Replace('-', ' ')
+                }
+                foreach ($b in $bytes) {
+                    if ([byte]$b -ne 0) { $nonZero++ }
+                }
+            }
+            catch {}
+        }
         return @{
             ok = $true
             ret = $ret
@@ -34,6 +49,8 @@ function Read-JVRecord {
             filename = [string]$filename
             text = [string]$buff
             transport = "JVRead"
+            hexPrefix = $hexPrefix
+            nonZeroCount = [int]$nonZero
             error = ""
         }
     }
@@ -59,10 +76,15 @@ function Read-JVRecord {
             if ($ret -gt 0) { $used = [Math]::Min([int]$ret, $bytes.Length) }
 
             $txt = ""
+            $hexPrefix = ""
+            $nonZero = 0
             if ($used -gt 0) {
-                $nonZero = 0
                 for ($k = 0; $k -lt $used; $k++) {
                     if ([byte]$bytes[$k] -ne 0) { $nonZero++ }
+                }
+                $take = [Math]::Min(48, $used)
+                if ($take -gt 0) {
+                    $hexPrefix = ([System.BitConverter]::ToString($bytes, 0, $take)).Replace('-', ' ')
                 }
                 if ($nonZero -gt 0) {
                     $txt = [System.Text.Encoding]::GetEncoding(932).GetString($bytes, 0, $used)
@@ -75,6 +97,8 @@ function Read-JVRecord {
                 filename = [string]$filename
                 text = $txt
                 transport = "JVGets"
+                hexPrefix = $hexPrefix
+                nonZeroCount = [int]$nonZero
                 error = ""
             }
         }
@@ -86,6 +110,8 @@ function Read-JVRecord {
                 filename = [string]$filename
                 text = ""
                 transport = "JVGets"
+                hexPrefix = ""
+                nonZeroCount = 0
                 error = "JVRead failed ($readErr); JVGets failed: $([string]$_.Exception.Message)"
             }
         }
@@ -248,6 +274,8 @@ try {
                 size = [int]$size
                 fileName = [string]$filename
                 transport = [string]$read.transport
+                hexPrefix = [string]$read.hexPrefix
+                nonZeroCount = [int]$read.nonZeroCount
                 recordSpec = $recSpec
                 dataKubun = $dataKubun
                 raceKey16 = $raceKey16

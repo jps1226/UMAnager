@@ -47,3 +47,12 @@ jra-van-docs/
 
 # Ignore JRA-VAN isolated runtime storage
 data_jra_van/
+
+# Ignore local testing secrets and temp assets
+testing/JV-Link code.txt
+testing/tmp_*
+testing/**/*.log
+testing/**/*.tmp
+
+# Ignore local JRA-VAN operator reference
+jra_van_dashboard_reference.md

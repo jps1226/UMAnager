@@ -106,6 +106,10 @@ function isAutoBetHighlightingEnabled() {
     return appConfig.ui?.highlightAutoBets ?? false;
 }
 
+function isFallbackBridgeHighlightEnabled() {
+    return appConfig.ui?.highlightFallbackBridge ?? false;
+}
+
 function raceHasHistoryData(race) {
     if (!race) return false;
     if (race.info?.history_refreshed) return true;
@@ -117,6 +121,19 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+function parseRaceSortTime(sortTimeStr) {
+    const raw = String(sortTimeStr || '').trim();
+    if (!raw) return null;
+
+    const normalized = raw.replace(' ', 'T');
+    const withOffset = /([zZ]|[+-]\d{2}:\d{2})$/.test(normalized)
+        ? normalized
+        : `${normalized}+09:00`;
+
+    const dt = new Date(withOffset);
+    return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
 // --- CLOCK & COUNTDOWN ---
@@ -957,6 +974,16 @@ function buildTableBody(r_id, entries) {
         const sireStr = buildNameWithHover(row.Sire_ID, row.Sire, 'favorites', tracking.sire, tracking.intensity, tracking.isMixed);
         const damStr = buildNameWithHover(row.Dam_ID, row.Dam, 'favorites', tracking.dam, tracking.intensity, tracking.isMixed);
         const bmsStr = buildNameWithHover(row.BMS_ID, row.BMS, 'favorites', tracking.bms, tracking.intensity, tracking.isMixed);
+
+        const fallbackSources = (row && typeof row._fallbackSources === 'object' && row._fallbackSources)
+            ? row._fallbackSources
+            : {};
+        const fallbackHighlightEnabled = isFallbackBridgeHighlightEnabled();
+        const fallbackCellAttrs = (field) => {
+            const source = String(fallbackSources[field] || '').trim();
+            if (!fallbackHighlightEnabled || !source) return '';
+            return ` class="fallback-field-cell" title="Fallback source: ${escapeHtml(source)}"`;
+        };
         
         // NEW: Added id="row-${r_id}-${h_id}" to the <tr>
         const cellHtmlByCol = {
@@ -967,15 +994,15 @@ function buildTableBody(r_id, entries) {
                 ${createMarkBtn(r_id, h_id, '△', key)}
                 ${createMarkBtn(r_id, h_id, 'X', key)}
             </td>`,
-            BK: `<td>${row.BK || ""}</td>`,
-            PP: `<td>${row.PP || ""}</td>`,
+            BK: `<td${fallbackCellAttrs('BK')}>${row.BK || ""}</td>`,
+            PP: `<td${fallbackCellAttrs('PP')}>${row.PP || ""}</td>`,
             Horse: `<td style="font-weight: bold;">${horseStr}</td>`,
             Record: `<td>${row.Record || ""}</td>`,
             Sire: `<td>${sireStr}</td>`,
             Dam: `<td>${damStr}</td>`,
             BMS: `<td>${bmsStr}</td>`,
-            Odds: `<td>${row.Odds || ""}</td>`,
-            Fav: `<td>${row.Fav || ""}</td>`,
+            Odds: `<td${fallbackCellAttrs('Odds')}>${row.Odds || ""}</td>`,
+            Fav: `<td${fallbackCellAttrs('Fav')}>${row.Fav || ""}</td>`,
             Finish: `<td class="finish-pos finish-pos-${row.Finish || ''}">${row.Finish || ""}</td>`
         };
 
@@ -1239,56 +1266,79 @@ function calculatePowerScore(row, riskVal) {
     return totalScore;
 }
 
-// --- AUTO-PICK ALGORITHM ---
-async function autoPick(event, r_id, riskOverride = null) {
-    event.stopPropagation();
-    if (isRaceLocked(r_id)) return;
+function getCurrentAutoPickRisk(riskOverride = null) {
+    let currentRisk = parseInt(document.getElementById('risk-slider')?.value, 10);
+    if (isNaN(currentRisk)) currentRisk = 50;
+
+    if (riskOverride !== null && riskOverride !== 'null' && riskOverride !== undefined) {
+        const override = parseInt(riskOverride, 10);
+        if (!isNaN(override)) currentRisk = override;
+    }
+
+    return currentRisk;
+}
+
+function applyAutoPickSelectionsToRace(r_id, riskOverride = null) {
+    if (isRaceLocked(r_id)) {
+        return { changed: false, currentRisk: getCurrentAutoPickRisk(riskOverride), reason: 'locked' };
+    }
 
     const entries = globalRaceEntries[r_id];
-    if (!entries || entries.length === 0) return;
+    if (!entries || entries.length === 0) {
+        return { changed: false, currentRisk: getCurrentAutoPickRisk(riskOverride), reason: 'empty' };
+    }
 
     const allSymbols = ["◎", "〇", "▲", "△"];
-    let usedSymbols = [];
-    let markedHorses = []; 
+    const usedSymbols = [];
+    const markedHorses = [];
 
     for (const [k, v] of Object.entries(globalMarks)) {
         if (k.startsWith(`${r_id}_`) && v) {
             if (allSymbols.includes(v)) usedSymbols.push(v);
-            markedHorses.push(k.split('_')[1]); 
+            markedHorses.push(k.split('_')[1]);
         }
     }
 
-    const availableSymbols = allSymbols.filter(s => !usedSymbols.includes(s));
+    const availableSymbols = allSymbols.filter(symbol => !usedSymbols.includes(symbol));
+    const currentRisk = getCurrentAutoPickRisk(riskOverride);
     if (availableSymbols.length === 0) {
+        return { changed: false, currentRisk, reason: 'full' };
+    }
+
+    const scoredHorses = entries
+        .filter(row => !markedHorses.includes(String(row.Horse_ID).split('.')[0]))
+        .map(row => ({
+            h_id: String(row.Horse_ID).split('.')[0],
+            power: calculatePowerScore(row, currentRisk)
+        }))
+        .sort((a, b) => b.power - a.power);
+
+    let changed = false;
+    for (let i = 0; i < Math.min(availableSymbols.length, scoredHorses.length); i++) {
+        const key = `${r_id}_${scoredHorses[i].h_id}`;
+        if (globalMarks[key] !== availableSymbols[i]) {
+            globalMarks[key] = availableSymbols[i];
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        touchRaceMeta(r_id, { markSource: 'auto-pick', riskSlider: currentRisk });
+    }
+
+    return { changed, currentRisk, reason: changed ? 'updated' : 'unchanged' };
+}
+
+// --- AUTO-PICK ALGORITHM ---
+async function autoPick(event, r_id, riskOverride = null) {
+    event.stopPropagation();
+
+    const result = applyAutoPickSelectionsToRace(r_id, riskOverride);
+    if (!result.changed) {
         updateRaceActionButtons(r_id);
         return;
     }
 
-    // 2. Calculate Power Score ONLY for unmarked horses using Override OR Slider!
-    let currentRisk = parseInt(document.getElementById('risk-slider').value);
-    if (isNaN(currentRisk)) currentRisk = 50; // Only fallback to 50 if the slider completely fails to load
-    
-    if (riskOverride !== null && riskOverride !== 'null' && riskOverride !== undefined) {
-        currentRisk = parseInt(riskOverride);
-    }
-
-    let scoredHorses = entries
-    
-        .filter(row => !markedHorses.includes(String(row.Horse_ID).split('.')[0]))
-        .map(row => {
-            return { h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, currentRisk) };
-        });
-
-    scoredHorses.sort((a, b) => b.power - a.power);
-
-    // 3. Assign ONLY the missing symbols to the top remaining horses
-    for (let i = 0; i < Math.min(availableSymbols.length, scoredHorses.length); i++) {
-        const key = `${r_id}_${scoredHorses[i].h_id}`;
-        globalMarks[key] = availableSymbols[i];
-    }
-
-    // 4. Save and Update UI
-    touchRaceMeta(r_id, { markSource: 'auto-pick', riskSlider: currentRisk });
     await saveMarksToServer();
 
     raceSorts[r_id] = { col: 'Default', asc: true };
@@ -1322,8 +1372,7 @@ async function reorderPicks(event, r_id) {
     if (markedHorses.length === 0) return;
 
     // 2. Calculate Power Score using the Slider!
-    let currentRisk = parseInt(document.getElementById('risk-slider').value);
-    if (isNaN(currentRisk)) currentRisk = 50;
+    const currentRisk = getCurrentAutoPickRisk();
 
     let scoredHorses = entries
         .filter(row => markedHorses.some(m => m.h_id === String(row.Horse_ID).split('.')[0]))
@@ -1431,8 +1480,7 @@ function getAutoBetPreviewAssignmentsForRace(r_id) {
     const availableSymbols = mainSymbols.filter(symbol => !usedSymbols.includes(symbol));
     if (availableSymbols.length === 0) return [];
 
-    const currentRisk = parseInt(document.getElementById('risk-slider').value);
-    if (isNaN(currentRisk)) return [];
+    const currentRisk = getCurrentAutoPickRisk();
 
     const scored = entries
         .filter(row => !blockedHorseIds.includes(String(row.Horse_ID).split('.')[0]))
@@ -1923,8 +1971,8 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
                 race.info.time !== "TBA" &&
                 race.info.sort_time
             ) {
-                const raceTime = new Date(race.info.sort_time.replace(' ', 'T'));
-                if (raceTime < collapseBeforeTime && r_id !== keepOpenRaceId) {
+                const raceTime = parseRaceSortTime(race.info.sort_time);
+                if (raceTime && raceTime < collapseBeforeTime && r_id !== keepOpenRaceId) {
                     shouldCollapse = true;
                 }
             }
@@ -2093,9 +2141,10 @@ async function loadRaces() {
                     });
                 });
 
-                if (timeline === "upcoming" && race.info.time !== "TBA" && race.info.sort_time) {
+                const raceTime = parseRaceSortTime(race.info.sort_time);
+                if (timeline === "upcoming" && race.info.time !== "TBA" && raceTime) {
                     upcomingRaces.push({
-                        time: new Date(race.info.sort_time.replace(' ', 'T')),
+                        time: raceTime,
                         name: `${race.info.place.toUpperCase()} R${race.info.race_number}`,
                         r_id: r_id
                     });
@@ -3105,6 +3154,61 @@ async function closeServerInstances() {
     }
 }
 
+async function enrichHorseInfoAfterScrape() {
+    const btn = document.getElementById('btn-enrich-horse-info');
+    const originalLabel = btn?.textContent || '';
+    const startedAt = performance.now();
+    let progressTimer = null;
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ Filling Horse Info...';
+    }
+
+    const consoleBox = document.getElementById('scrape-console');
+    if (consoleBox) {
+        if (appConfig?.ui?.showConsole ?? true) consoleBox.style.display = 'block';
+        consoleBox.textContent = 'Preparing horse info enrichment...';
+    }
+
+    logInterval = setInterval(fetchLogs, 500);
+    progressTimer = setInterval(() => {
+        appendConsoleLine(`[Horse Enrichment] Still running... ${Math.round((performance.now() - startedAt) / 1000)}s elapsed.`);
+    }, 12000);
+
+    try {
+        const res = await fetch('/api/races/enrich-horse-info', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data.detail || data.message || `HTTP ${res.status}`);
+        }
+
+        await fetchLogs();
+        await loadRaces();
+        appendConsoleLine(
+            `[Horse Enrichment] Updated ${data.updated_rows || 0} entries across ${data.updated_races || 0} races ` +
+            `(horses=${data.unique_horses || 0}, fetch candidates=${data.fetch_candidates || 0}) in ` +
+            `${(performance.now() - startedAt).toFixed(0)}ms.`
+        );
+        alert(
+            `Horse info update complete.\n\n` +
+            `Updated entries: ${data.updated_rows || 0}\n` +
+            `Updated races: ${data.updated_races || 0}\n` +
+            `Unique horses scanned: ${data.unique_horses || 0}`
+        );
+    } catch (err) {
+        appendConsoleLine(`[Horse Enrichment] Failed: ${err.message}`);
+        alert(`Horse info update failed: ${err.message}`);
+    } finally {
+        clearInterval(logInterval);
+        clearInterval(progressTimer);
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalLabel || '🧬 Fill Horse Names / Parents';
+        }
+    }
+}
+
 async function triggerScrape(mode) {
     document.getElementById('btn-new-race').disabled = true;
     document.getElementById('btn-all-race').disabled = true;
@@ -3131,7 +3235,12 @@ async function triggerScrape(mode) {
         await loadRaces();
 
         if (Number(scrapeData.cached_races || 0) === 0) {
-            alert('Scrape completed but cached 0 races. This usually means no races matched the current discovery window. Try Full Re-Scrape and check scrape console logs.');
+            const activeEngine = String(appConfig?.backend?.dataEngine || scrapeData?.data_engine || 'nk').toLowerCase();
+            if (activeEngine === 'jv') {
+                alert('JRA-VAN scrape completed but cached 0 races. Strict engine isolation is active, so Netkeiba fallback is disabled. This means no JV-native races were discovered/decoded for the current window yet. Check scrape console logs.');
+            } else {
+                alert('Scrape completed but cached 0 races. This usually means no races matched the current discovery window. Try Full Re-Scrape and check scrape console logs.');
+            }
         }
     } catch (err) {
         alert(`Scrape failed: ${err.message}`);
@@ -4065,73 +4174,68 @@ async function focusOreProCompanion() {
     return controlOreProCompanion('focus');
 }
 
+function collectOreProMarksFromEntries(raceId, entries) {
+    const markPriority = { '◎': 1, '〇': 2, '▲': 3, '△': 4 };
+    const marks = [];
+    const seenSingles = new Set();
+    const seenPairs = new Set();
+
+    (entries || []).forEach(row => {
+        const h_id = String(row?.Horse_ID || '').split('.')[0].trim();
+        if (!h_id) return;
+
+        const symbol = globalMarks[`${raceId}_${h_id}`];
+        const markCode = markPriority[symbol];
+        if (!markCode) return;
+
+        const post = parseInt(row?.PP, 10);
+        if (!Number.isFinite(post) || post <= 0) return;
+
+        if (markCode !== 4) {
+            if (seenSingles.has(markCode)) return;
+            seenSingles.add(markCode);
+        }
+
+        const pairKey = `${markCode}:${post}`;
+        if (seenPairs.has(pairKey)) return;
+        seenPairs.add(pairKey);
+
+        marks.push({ symbol, post, mark_code: String(markCode) });
+    });
+
+    return marks.sort((a, b) => {
+        const aCode = Number(a.mark_code || 99);
+        const bCode = Number(b.mark_code || 99);
+        if (aCode !== bCode) return aCode - bCode;
+        return Number(a.post || 0) - Number(b.post || 0);
+    });
+}
+
 function buildOreProApplyVotesPayload(targetDate) {
     const date = String(targetDate || '').trim();
-    const markPriority = { '◎': 1, '〇': 2, '▲': 3, '△': 4 };
-    const raceMap = {};
+    const races = Object.entries(globalRaceInfo || {}).map(([r_id, info]) => {
+        if (!info) return null;
+        if (date && String(info.clean_date || '').trim() !== date) return null;
 
-    for (const [key, symbol] of Object.entries(globalMarks)) {
-        if (!markPriority[symbol]) continue;
+        const marks = collectOreProMarksFromEntries(r_id, globalRaceEntries[r_id] || []);
+        if (!marks.length) return null;
 
-        const [r_id, h_id] = key.split('_');
-        const info = globalRaceInfo[r_id];
-        if (!info) continue;
-        if (date && String(info.clean_date || '').trim() !== date) continue;
-
-        const entries = globalRaceEntries[r_id] || [];
-        const row = entries.find(r => String(r.Horse_ID).split('.')[0] === String(h_id));
-        const post = row ? parseInt(row.PP, 10) : 0;
-        if (!Number.isFinite(post) || post <= 0) continue;
-
-        if (!raceMap[r_id]) raceMap[r_id] = {};
-        // Keep first occurrence per symbol for safety.
-        if (!raceMap[r_id][symbol]) {
-            raceMap[r_id][symbol] = post;
-        }
-    }
-
-    const races = Object.entries(raceMap).map(([raceId, markObj]) => {
-        const marks = Object.entries(markObj)
-            .map(([symbol, post]) => ({ symbol, post, mark_code: String(markPriority[symbol] || '') }))
-            .sort((a, b) => (markPriority[a.symbol] || 99) - (markPriority[b.symbol] || 99));
         return {
-            race_id: raceId,
+            race_id: r_id,
             marks,
         };
-    }).filter(r => r.marks.length > 0);
+    }).filter(Boolean);
 
     return { races, dry_run: false, force_refresh: true };
 }
 
 function buildOreProApplyVotesPayloadForRace(raceId) {
     const targetRaceId = String(raceId || '').trim();
-    const markPriority = { '◎': 1, '〇': 2, '▲': 3, '△': 4 };
-    const raceMarks = {};
-
     if (!targetRaceId) {
         return { races: [], dry_run: false, force_refresh: true };
     }
 
-    for (const [key, symbol] of Object.entries(globalMarks)) {
-        if (!markPriority[symbol]) continue;
-
-        const [r_id, h_id] = key.split('_');
-        if (String(r_id || '').trim() !== targetRaceId) continue;
-
-        const entries = globalRaceEntries[r_id] || [];
-        const row = entries.find(r => String(r.Horse_ID).split('.')[0] === String(h_id));
-        const post = row ? parseInt(row.PP, 10) : 0;
-        if (!Number.isFinite(post) || post <= 0) continue;
-
-        if (!raceMarks[symbol]) {
-            raceMarks[symbol] = post;
-        }
-    }
-
-    const marks = Object.entries(raceMarks)
-        .map(([symbol, post]) => ({ symbol, post, mark_code: String(markPriority[symbol] || '') }))
-        .sort((a, b) => (markPriority[a.symbol] || 99) - (markPriority[b.symbol] || 99));
-
+    const marks = collectOreProMarksFromEntries(targetRaceId, globalRaceEntries[targetRaceId] || []);
     if (!marks.length) {
         return { races: [], dry_run: false, force_refresh: true };
     }
@@ -4143,8 +4247,106 @@ function buildOreProApplyVotesPayloadForRace(raceId) {
     };
 }
 
+async function autoBetActiveDay() {
+    const date = String(currentActiveDate || '').trim();
+    if (!date) {
+        setOreProSessionStatus('Select a day first, then run Auto Bet Day.', 'warn');
+        return;
+    }
+
+    const racesForDay = Array.isArray(globalRacesByDate[date]) ? globalRacesByDate[date] : [];
+    const now = new Date();
+    const upcomingRaceIds = racesForDay
+        .map(race => String(race?.info?.race_id || '').trim())
+        .filter(Boolean)
+        .filter(r_id => {
+            const info = globalRaceInfo[r_id] || {};
+            const raceTime = parseRaceSortTime(info.sort_time);
+            return !raceTime || raceTime > now;
+        });
+
+    if (!upcomingRaceIds.length) {
+        setOreProSessionStatus(`No remaining races found for ${date}.`, 'warn');
+        return;
+    }
+
+    const riskVal = getCurrentAutoPickRisk();
+    const confirmed = window.confirm(
+        `Auto-pick all remaining unlocked races for ${date} using Risk ${riskVal}, then apply those marks to OrePro?\n\nThis only updates OrePro marks/cart state and does not submit paid bets.`
+    );
+    if (!confirmed) return;
+
+    const btn = document.getElementById('btn-orepro-auto-day');
+    const prevLabel = btn?.textContent || '⚡ Auto Bet Day';
+
+    try {
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳ Auto Betting...';
+        }
+
+        let changedRaceIds = [];
+        let skippedLocked = 0;
+
+        upcomingRaceIds.forEach(r_id => {
+            if (isRaceLocked(r_id)) {
+                skippedLocked += 1;
+                return;
+            }
+
+            const result = applyAutoPickSelectionsToRace(r_id, null);
+            if (result.changed) {
+                changedRaceIds.push(r_id);
+            }
+        });
+
+        if (changedRaceIds.length) {
+            await saveMarksToServer();
+
+            changedRaceIds.forEach(r_id => {
+                raceSorts[r_id] = { col: 'Default', asc: true };
+                applySortLogic(r_id, 'Default', true);
+
+                const tbody = document.getElementById(`tbody-${r_id}`);
+                if (tbody) tbody.innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
+
+                refreshRaceHeaderSortLabels(r_id);
+                updateRaceActionButtons(r_id);
+                updateRiskBadge(r_id);
+            });
+
+            updateAutoBetHighlighting();
+            updateWinningVotesFocusButton();
+            if (winningVotesFocusEnabled) applyWinningVotesFocus();
+            if (currentMainView === 'voting') renderLiveViewPanel();
+        }
+
+        const payload = buildOreProApplyVotesPayload(date);
+        if (!payload.races.length) {
+            const lockNote = skippedLocked ? ` Skipped ${skippedLocked} locked race(s).` : '';
+            setOreProSessionStatus(`Auto-pick finished, but there were no valid marks to apply.${lockNote}`, 'warn');
+            return;
+        }
+
+        setOreProSessionStatus(
+            `Auto-picked ${payload.races.length} race(s) for ${date} at Risk ${riskVal}.${skippedLocked ? ` Skipped ${skippedLocked} locked race(s).` : ''}`,
+            'info'
+        );
+
+        await applyVotesToOrePro();
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = prevLabel;
+        }
+    }
+}
+
 async function applyVotesToOrePro() {
     const payload = buildOreProApplyVotesPayload(currentActiveDate);
+    payload.submit_after_apply = false;
+    payload.go_next_race = false;
+
     if (!payload.races.length) {
         setOreProSessionStatus('No valid ◎〇▲△ marks found for the active day to apply.', 'warn');
         return;
@@ -4212,6 +4414,9 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
     }
 
     const payload = buildOreProApplyVotesPayloadForRace(raceId);
+    payload.submit_after_apply = true;
+    payload.go_next_race = true;
+
     if (!payload.races.length) {
         setOreProSessionStatus(`No valid marks found for race ${raceId}.`, 'warn');
         return;
@@ -4228,7 +4433,7 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
         return;
     }
 
-    setOreProSessionStatus(`Applying marks to OrePro for race ${raceId}...`, 'info');
+    setOreProSessionStatus(`Applying marks to OrePro for race ${raceId}, then submitting and moving to the next race...`, 'info');
 
     try {
         const res = await fetch('/api/orepro/votes/apply', {
@@ -4254,7 +4459,7 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
             const stat = escapeHtml(String(result?.status || 'unknown'));
             const msg = escapeHtml(String(result?.message || ''));
             out.innerHTML = `
-                <div class="orepro-sync-title">Apply Votes (Single Race)</div>
+                <div class="orepro-sync-title">Apply Votes / Submit / Next (Single Race)</div>
                 <div class="orepro-sync-list">[${stat}] race ${rid}: ${msg}</div>
             `;
         }
@@ -5033,6 +5238,17 @@ async function showExportModal() {
             setReverseHorseLayout(!reverseHorseLayout);
         }
 
+        function parsePopoutRaceTime(sortTime) {
+            if (!sortTime) return null;
+            var normalized = String(sortTime).trim().replace(' ', 'T');
+            if (!normalized) return null;
+            if (!/([zZ]|[+-]\d{2}:\d{2})$/.test(normalized)) {
+                normalized += '+09:00';
+            }
+            var dt = new Date(normalized);
+            return isNaN(dt.getTime()) ? null : dt;
+        }
+
         function formatCountdown(diff) {
             var d = Math.floor(diff / (1000 * 60 * 60 * 24));
             var h = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
@@ -5053,8 +5269,8 @@ async function showExportModal() {
             for (var i = 0; i < countdownRaceTimeData.length; i++) {
                 var item = countdownRaceTimeData[i];
                 if (!item || !item.sortTime) continue;
-                var raceTime = new Date(item.sortTime.replace(' ', 'T'));
-                if (raceTime > now) {
+                var raceTime = parsePopoutRaceTime(item.sortTime);
+                if (raceTime && raceTime > now) {
                     nextRace = { time: raceTime, name: item.name || 'Upcoming Race' };
                     break;
                 }
@@ -5088,8 +5304,8 @@ async function showExportModal() {
             for (var i = 0; i < collapseRaceTimeData.length; i++) {
                 var st = collapseRaceTimeData[i].sortTime;
                 if (!st) continue;
-                var t = new Date(st.replace(' ', 'T'));
-                if (t > now) { nextIdx = i; break; }
+                var t = parsePopoutRaceTime(st);
+                if (t && t > now) { nextIdx = i; break; }
             }
             if (nextIdx <= 0) return; // nothing to collapse (all future, or all past)
             var inProgressIdx = nextIdx - 1;
@@ -5178,6 +5394,7 @@ function showSettingsModal() {
     document.getElementById('setting-debugConsole').checked = isDebugConsoleEnabled();
     document.getElementById('setting-autoLockPastVotes').checked = isAutoLockPastVotesEnabled();
     document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
+    document.getElementById('setting-highlightFallbackBridge').checked = isFallbackBridgeHighlightEnabled();
         document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     // Populate formula weight inputs
     const fw = getFormulaWeights();
@@ -5226,6 +5443,7 @@ async function updateSidebarSettings() {
         autoLockPastVotes: document.getElementById('setting-autoLockPastVotes').checked,
         showConsole: document.getElementById('setting-showConsole').checked,
         highlightAutoBets: document.getElementById('setting-highlightAutoBets').checked,
+        highlightFallbackBridge: document.getElementById('setting-highlightFallbackBridge').checked,
         formulaWeights: {
             oddsCap:            parseFWInput('fw-oddsCap',            100),
             formMultiplier:     parseFWInput('fw-formMultiplier',     100),
@@ -5248,7 +5466,8 @@ async function updateSidebarSettings() {
 
     appendDebugLine(
         `Settings saved: engine=${appConfig.backend?.dataEngine ?? 'nk'}, showConsole=${appConfig.ui?.showConsole ?? true}, ` +
-        `debugConsole=${appConfig.ui?.debugConsole ?? false}, prefetchRaceCheck=${appConfig.ui?.prefetchRaceCheck ?? false}`
+        `debugConsole=${appConfig.ui?.debugConsole ?? false}, prefetchRaceCheck=${appConfig.ui?.prefetchRaceCheck ?? false}, ` +
+        `highlightFallbackBridge=${appConfig.ui?.highlightFallbackBridge ?? false}`
     );
     
     // Apply settings immediately to sidebar

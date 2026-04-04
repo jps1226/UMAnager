@@ -43,13 +43,22 @@ Build and maintain two fully separate backend engines that can be switched from 
 
 ## Current Gaps (explicit)
 
-### A) Full JV race payload decoding
-Current JV engine snapshots are skeleton race objects unless full JV record decoding is available. This is intentional to preserve zero crossover.
+### A) JV race payload completeness
+JV engine now loads real race/entry data from native RA/SE reads (no NK crossover), but some fields are still minimal.
 
 Needed next:
-1. Parse RA/SE records from JV cache/stream into full race metadata.
-2. Parse race entries/horse IDs from JV payloads.
-3. Populate `races_jv` / `race_entries_jv` with decoded JV data only.
+1. Improve race name decoding/normalization for better display quality.
+2. Enrich JV entries with pedigree lineage fields (`Sire`, `Dam`, `BMS`, IDs) from JV-native records where available.
+3. Add JV-native result/history parsing so post-race updates stay fully JV-backed.
+
+## Implemented Since Initial Draft
+1. Added native JV schedule reader script: `scripts/jvlink_bridge_native_schedule.ps1`.
+2. Verified typed RA/SE extraction using JVRead/JVGets with correct VARIANT marshaling.
+3. Integrated native JV loading into `data_manager.fetch_weekend_timeline()` for `data_engine=jv`.
+4. Switched JV native loader to upcoming-focused stream combo:
+  - `DataSpec = TOKUTCOVRACERCOVSNAP`
+  - `DataOption = 2`
+5. Confirmed strict JV engine now assembles real races from RA/SE stream without NK fallback.
 
 ### B) Horse cache isolation (optional but recommended)
 Horse cache currently remains shared. For strict full-engine separation, split horse cache to:
@@ -64,29 +73,3 @@ Horse cache currently remains shared. For strict full-engine separation, split h
 
 ## Operating Principle
 Frontend stays stable; backend engine swap changes only the data source and isolated storage target.
-
-## Session Closeout Notes (March 26, 2026)
-
-### Completed in this session
-- Added one-click JV cache refresh path:
-  - backend endpoint `/api/jvlink/refresh-upcoming`
-  - UI button `Refresh Cache` in the JVLink panel
-  - auto `FromDate` based on latest cached RA/SE date
-- Added source provenance fields on race snapshots:
-  - `discovery_source`
-  - `discovery_sources`
-  - `scrape_source_mode`
-  - `data_engine`
-- Added engine-aware scrape logs (`Initializing Netkeiba Engine...` vs `Initializing JRA-VAN Engine...`).
-- Added strict no-crossover behavior for JV engine mode in orchestration.
-
-### Evidence captured during session
-- Runtime race content fetch path in NK flow uses Netkeiba scraper and odds fetch.
-- JV cache date coverage was confirmed stale relative to target weekend during debugging (`RA/SE` max date ended at `20260323` at that time).
-- Because of strict separation requirements, JV mode now avoids NK scrape fallback and records JV-only snapshots until full JV decoding is finished.
-
-### Explicit acceptance criteria for this plan
-1. Engine toggle in Settings must be the sole selector for runtime race cache target.
-2. NK and JV race caches must remain physically separate tables.
-3. JV engine mode must not call NK race discovery or NK race content scraping.
-4. Frontend race pages must continue to render without engine-specific UI divergence.

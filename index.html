@@ -53,6 +53,7 @@
             
             <button class="btn-full btn-primary-prominent" onclick="triggerScrape('new')" id="btn-new-race">🔍 Fetch Upcoming Races</button>
             <button class="btn-full btn-compact" onclick="refreshUpcomingRacesLite()" id="btn-upcoming-refresh" data-action="check">🛰️ Check Pending Updates</button>
+            <button class="btn-full btn-compact" onclick="enrichHorseInfoAfterScrape()" id="btn-enrich-horse-info" data-action="enrich">🧬 Fill Horse Names / Parents</button>
             
             <details class="advanced-tools-panel">
                 <summary class="advanced-tools-summary">⚙️ Advanced Tools</summary>
@@ -221,6 +222,7 @@
             <div class="voting-main-head-actions">
                 <button id="btn-orepro-open" onclick="openOreProCompanion()" class="toolbar-btn toolbar-btn-muted">🌐 Open OrePro</button>
                 <button id="btn-orepro-focus" onclick="focusOreProCompanion()" class="toolbar-btn toolbar-btn-muted">🎯 Focus OrePro</button>
+                <button id="btn-orepro-auto-day" onclick="autoBetActiveDay()" class="toolbar-btn toolbar-btn-primary" title="Auto-pick the rest of the day with the current risk slider, then apply those marks to OrePro">⚡ Auto Bet Day</button>
                 <button id="btn-orepro-apply" onclick="applyVotesToOrePro()" class="toolbar-btn toolbar-btn-muted">🪄 Apply Votes</button>
                 <button id="btn-orepro-sync" onclick="syncOreProResults()" class="toolbar-btn toolbar-btn-muted">📥 Sync Results</button>
                 <button id="btn-reestimate-day" onclick="reEstimateActiveDay()" class="toolbar-btn toolbar-btn-muted">🧮 Re-estimate Day</button>
@@ -334,6 +336,10 @@
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-highlightAutoBets" onchange="updateSidebarSettings()">
                             <span>💡 Highlight Auto-Bets</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-highlightFallbackBridge" onchange="updateSidebarSettings()">
+                            <span>🧷 Highlight NK Fallback Fields</span>
                         </label>
                     </div>
                 </div>

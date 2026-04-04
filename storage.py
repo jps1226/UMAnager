@@ -51,6 +51,7 @@ APP_CONFIG_DEFAULTS = {
         "debugConsole": False,
         "autoLockPastVotes": False,
         "showConsole": True,
+        "highlightFallbackBridge": False,
     },
 }
 

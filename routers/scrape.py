@@ -44,14 +44,40 @@ async def run_scrape(payload: ScrapeRequest):
         engine_label = "JRA-VAN" if resolved_engine == "jv" else "Netkeiba"
         scrape_logs = [f"Initializing {engine_label} Engine..."]
 
+    stop_heartbeat = asyncio.Event()
+    latest_stage = {"msg": "Starting..."}
+
+    def progress_with_stage(msg):
+        latest_stage["msg"] = str(msg or "").strip() or latest_stage["msg"]
+        log_progress(msg)
+
+    async def _heartbeat():
+        elapsed = 0
+        while not stop_heartbeat.is_set():
+            await asyncio.sleep(5)
+            elapsed += 5
+            stage = latest_stage["msg"]
+            if stage:
+                log_progress(f"Still running... {elapsed}s elapsed | stage: {stage}")
+            else:
+                log_progress(f"Still running... {elapsed}s elapsed")
+
     async with scrape_job_lock:
-        races = await asyncio.to_thread(
-            data_manager.fetch_weekend_timeline,
-            mode=payload.mode,
-            progress_callback=log_progress,
-            source_mode=resolved_source_mode,
-            data_engine=resolved_engine,
-        )
+        hb_task = asyncio.create_task(_heartbeat())
+        try:
+            races = await asyncio.to_thread(
+                data_manager.fetch_weekend_timeline,
+                mode=payload.mode,
+                progress_callback=progress_with_stage,
+                source_mode=resolved_source_mode,
+                data_engine=resolved_engine,
+            )
+        finally:
+            stop_heartbeat.set()
+            try:
+                await hb_task
+            except Exception:
+                pass
 
     with scrape_logs_lock:
         scrape_logs.append("Done! Refreshing schedule...")

@@ -231,10 +231,18 @@ def load_config():
 def parse_sort_time(sort_time_str):
     if not sort_time_str:
         return None
-    try:
-        return datetime.datetime.strptime(str(sort_time_str), "%Y-%m-%d %H:%M")
-    except (ValueError, TypeError):
+
+    text = str(sort_time_str).strip()
+    if not text:
         return None
+
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.datetime.strptime(text, fmt).replace(tzinfo=ZoneInfo("Asia/Tokyo"))
+        except (ValueError, TypeError):
+            continue
+
+    return None
 
 
 def _normalize_post_number(value):
@@ -452,7 +460,7 @@ def _build_box_bet_estimate(race_id: str, honmei_post: int, box_posts: List[int]
 
 
 def split_races_by_day_completion(races_by_date):
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(ZoneInfo("Asia/Tokyo"))
     today = now.date()
     upcoming = {}
     past = {}
@@ -664,7 +672,8 @@ def run_prefetch_race_check(weekend_races):
         sort_time = parse_sort_time(info.get("sort_time"))
         eligible_future.append((race_date, sort_time, race))
 
-    eligible_future.sort(key=lambda item: (item[0], item[1] or datetime.datetime.max))
+    future_sort_max = datetime.datetime.max.replace(tzinfo=ZoneInfo("Asia/Tokyo"))
+    eligible_future.sort(key=lambda item: (item[0], item[1] or future_sort_max))
     limited_future = eligible_future[:_PREFETCH_CHECK_MAX_FUTURE_RACES]
 
     new_entry_races = 0
@@ -721,7 +730,8 @@ def run_prefetch_race_check(weekend_races):
         eligible_past.append((race_date, sort_time, race))
 
     # Check most recent past races first.
-    eligible_past.sort(key=lambda item: (item[0], item[1] or datetime.datetime.max), reverse=True)
+    past_sort_max = datetime.datetime.max.replace(tzinfo=ZoneInfo("Asia/Tokyo"))
+    eligible_past.sort(key=lambda item: (item[0], item[1] or past_sort_max), reverse=True)
     limited_past = eligible_past[:_PREFETCH_CHECK_MAX_PAST_RACES]
 
     finish_position_races = 0
@@ -1064,6 +1074,146 @@ def refresh_upcoming_races():
         "updated_races": result["updated_races"],
         "updated_rows": result["updated_rows"],
         "failed_races": result["failed_races"],
+    }
+
+
+@router.post("/api/races/enrich-horse-info")
+def enrich_cached_horse_info():
+    """Manually fill horse names / pedigree fields after a fast race scrape.
+
+    This uses cached `Horse_ID` values from the current engine's race cache and resolves
+    official names plus sire/dam/BMS info without changing the fast scrape path itself.
+    """
+    from routers import scrape as scrape_router
+
+    if scrape_router.scrape_job_lock.locked():
+        raise HTTPException(status_code=409, detail="A scrape job is already running.")
+
+    with scrape_router.scrape_logs_lock:
+        scrape_router.scrape_logs = ["Initializing horse info enrichment..."]
+
+    def emit(msg: str):
+        logger.info(msg)
+        scrape_router.log_progress(msg)
+
+    weekend_races = load_cached_races()
+    if not weekend_races:
+        raise HTTPException(status_code=404, detail="No cached races found")
+
+    updated_races = 0
+    updated_rows = 0
+    unique_horses = set()
+    fetched_candidates = 0
+    horse_details = {}
+    errors = []
+    total_races = len(weekend_races)
+    processed_unique_horses = 0
+    network_fetches = 0
+
+    for race in weekend_races:
+        entries_df = race.get("entries")
+        if not isinstance(entries_df, pd.DataFrame) or entries_df.empty:
+            continue
+        for row in entries_df.to_dict(orient="records"):
+            horse_id = force_str(row.get("Horse_ID"))
+            if horse_id:
+                unique_horses.add(horse_id)
+
+    emit(
+        f"Horse enrichment: scanning {total_races} races | unique horses={len(unique_horses)}. "
+        f"Checking cache and filling names/pedigree..."
+    )
+
+    for race_idx, race in enumerate(weekend_races, start=1):
+        entries_df = race.get("entries")
+        if not isinstance(entries_df, pd.DataFrame) or entries_df.empty:
+            continue
+
+        info = race.get("info") or {}
+        race_id = str(info.get("race_id") or "").strip() or f"race-{race_idx}"
+        rows = entries_df.to_dict(orient="records")
+        race_changed = False
+
+        emit(f"Horse enrichment: race {race_idx}/{total_races} {race_id} | entries={len(rows)}")
+
+        for row in rows:
+            horse_id = force_str(row.get("Horse_ID"))
+            raw_name = str(row.get("Horse") or "").strip()
+            if not horse_id:
+                continue
+
+            if horse_id not in horse_details:
+                processed_unique_horses += 1
+                cached_before = data_manager.HORSE_CACHE.get(horse_id)
+                had_complete_cache = bool(
+                    isinstance(cached_before, dict)
+                    and str(cached_before.get("name") or "").strip()
+                    and str(cached_before.get("sire_id") or "").strip()
+                )
+                if not had_complete_cache:
+                    fetched_candidates += 1
+                    network_fetches += 1
+                    emit(
+                        f"Horse enrichment fetch {processed_unique_horses}/{len(unique_horses)}: "
+                        f"{horse_id} {raw_name or '(unnamed)'}"
+                    )
+                elif processed_unique_horses == 1 or processed_unique_horses % 25 == 0:
+                    emit(
+                        f"Horse enrichment progress: horses {processed_unique_horses}/{len(unique_horses)} processed | "
+                        f"network fetches so far={network_fetches}"
+                    )
+                try:
+                    horse_details[horse_id] = data_manager.get_horse_data(horse_id, raw_name)
+                except Exception as exc:
+                    logger.warning("Horse enrichment failed for %s: %s", horse_id, exc)
+                    errors.append(f"{horse_id}: {exc}")
+                    emit(f"Horse enrichment warning: failed for {horse_id} ({exc})")
+                    horse_details[horse_id] = {}
+
+            details = horse_details.get(horse_id) or {}
+            updated_fields = {
+                "Horse": data_manager.resolve_cached_or_romanized_horse_name(horse_id, raw_name),
+                "Record": str(details.get("record") or row.get("Record") or "").strip(),
+                "Sire": str(details.get("sire") or row.get("Sire") or "").strip(),
+                "Dam": str(details.get("dam") or row.get("Dam") or "").strip(),
+                "BMS": str(details.get("bms") or row.get("BMS") or "").strip(),
+                "Sire_ID": str(details.get("sire_id") or row.get("Sire_ID") or "").strip(),
+                "Dam_ID": str(details.get("dam_id") or row.get("Dam_ID") or "").strip(),
+                "BMS_ID": str(details.get("bms_id") or row.get("BMS_ID") or "").strip(),
+            }
+
+            row_changed = False
+            for key, new_value in updated_fields.items():
+                if new_value and str(row.get(key) or "").strip() != new_value:
+                    row[key] = new_value
+                    row_changed = True
+
+            if row_changed:
+                updated_rows += 1
+                race_changed = True
+
+        if race_changed:
+            race["entries"] = pd.DataFrame(rows)
+            updated_races += 1
+            emit(
+                f"Horse enrichment: race {race_id} updated | updated_races={updated_races} updated_rows={updated_rows}"
+            )
+
+    emit("Horse enrichment: saving cache updates...")
+    data_manager.save_horse_dict()
+    save_cached_races(weekend_races)
+    emit(
+        f"Horse enrichment complete: updated_races={updated_races} updated_rows={updated_rows} "
+        f"unique_horses={len(unique_horses)} network_fetches={network_fetches}"
+    )
+
+    return {
+        "status": "success",
+        "updated_races": updated_races,
+        "updated_rows": updated_rows,
+        "unique_horses": len(unique_horses),
+        "fetch_candidates": fetched_candidates,
+        "errors": errors[:10],
     }
 
 

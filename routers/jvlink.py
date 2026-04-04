@@ -225,11 +225,12 @@ def jvlink_race_key_summary(limit: int = 100):
 class JVLinkRefreshUpcomingPayload(BaseModel):
     data_spec: str | None = None
     specs_for_date: list[str] | None = None
+    data_option: int = 2
     max_status_wait_seconds: int = 180
     max_index_files: int = 5000
     sid: str | None = None
     service_key: str | None = None
-    skip_set_service_key: bool = True
+    skip_set_service_key: bool = False
 
 
 @router.post("/api/jvlink/refresh-upcoming")
@@ -237,22 +238,22 @@ def jvlink_refresh_upcoming(payload: JVLinkRefreshUpcomingPayload):
     """Download incremental JV cache files and re-index.
 
     Automatically determines FromDate from the latest date_end in the cache
-    for the RA/SE specs, then runs JVOpen to fetch any newer files from JRA-VAN,
+    for selected schedule-relevant specs, then runs JVOpen to fetch any newer files from JRA-VAN,
     and finally re-indexes jvlink_cache_files so JV discovery sees new data.
     """
-    date_specs = payload.specs_for_date or ["RA", "SE"]
+    date_specs = payload.specs_for_date or ["RA", "SE", "BN", "JG", "TK"]
     auto_from_date = get_cache_max_date(specs=date_specs)
     effective_data_spec = (
         payload.data_spec
         if payload.data_spec
-        else JVLINK_DATASPEC_PRESETS[0]
+        else "TOKUTCOVRACERCOVSNAP"
     )
 
     probe_result = run_open_probe(
         data_spec=effective_data_spec,
         from_date=auto_from_date,
         max_read_calls=0,
-        data_option=1,
+        data_option=max(1, min(int(payload.data_option or 2), 3)),
         skip_set_service_key=payload.skip_set_service_key,
         max_status_wait_seconds=payload.max_status_wait_seconds,
         sid=payload.sid,

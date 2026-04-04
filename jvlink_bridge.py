@@ -8,12 +8,48 @@ import config
 
 ROOT_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = ROOT_DIR / "scripts"
-PREFLIGHT_SCRIPT = SCRIPTS_DIR / "jvlink_preflight.ps1"
-STATUS_SCRIPT = SCRIPTS_DIR / "jvlink_bridge_status.ps1"
-HANDSHAKE_SCRIPT = SCRIPTS_DIR / "jvlink_bridge_handshake.ps1"
-OPEN_PROBE_SCRIPT = SCRIPTS_DIR / "jvlink_bridge_open_probe.ps1"
-OPEN_SETTINGS_SCRIPT = SCRIPTS_DIR / "jvlink_bridge_open_settings.ps1"
-STREAM_SAMPLE_SCRIPT = SCRIPTS_DIR / "jvlink_bridge_stream_sample.ps1"
+TESTING_DIR = ROOT_DIR / "testing"
+TESTING_JVLINK_SCRIPTS_DIR = TESTING_DIR / "jvlink_scripts"
+TESTING_JVLINK_KEY_FILE = TESTING_DIR / "JV-Link code.txt"
+
+
+def _resolve_script(script_name):
+    testing_path = TESTING_JVLINK_SCRIPTS_DIR / script_name
+    if testing_path.exists():
+        return testing_path
+    return SCRIPTS_DIR / script_name
+
+
+def _load_service_key_from_testing_file():
+    try:
+        if not TESTING_JVLINK_KEY_FILE.exists():
+            return ""
+        lines = TESTING_JVLINK_KEY_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
+        for line in lines:
+            key = line.strip()
+            if key:
+                return key
+    except Exception:
+        return ""
+    return ""
+
+
+def _resolve_service_key(explicit_key=None):
+    if explicit_key is not None:
+        return explicit_key
+    env_key = os.environ.get("JVLINK_SERVICE_KEY", "").strip()
+    if env_key:
+        return env_key
+    return _load_service_key_from_testing_file()
+
+
+PREFLIGHT_SCRIPT = _resolve_script("jvlink_preflight.ps1")
+STATUS_SCRIPT = _resolve_script("jvlink_bridge_status.ps1")
+HANDSHAKE_SCRIPT = _resolve_script("jvlink_bridge_handshake.ps1")
+OPEN_PROBE_SCRIPT = _resolve_script("jvlink_bridge_open_probe.ps1")
+OPEN_SETTINGS_SCRIPT = _resolve_script("jvlink_bridge_open_settings.ps1")
+STREAM_SAMPLE_SCRIPT = _resolve_script("jvlink_bridge_stream_sample.ps1")
+NATIVE_SCHEDULE_SCRIPT = SCRIPTS_DIR / "jvlink_bridge_native_schedule.ps1"
 
 JVLINK_DATASPEC_PRESETS = [
     "TOKURACEDIFNBLDNSLOPWOODYSCHSNPNHOSNHOYUCOMMMING",
@@ -176,7 +212,7 @@ def run_handshake(
     layout = get_storage_layout()
 
     effective_sid = sid or os.environ.get("JVLINK_SID") or config.JVLINK_DEFAULT_SID
-    effective_key = service_key if service_key is not None else os.environ.get("JVLINK_SERVICE_KEY", "")
+    effective_key = _resolve_service_key(service_key)
 
     cmd = [
         ps32,
@@ -249,7 +285,7 @@ def run_open_probe(
 
     layout = get_storage_layout()
     effective_sid = sid or os.environ.get("JVLINK_SID") or config.JVLINK_DEFAULT_SID
-    effective_key = service_key if service_key is not None else os.environ.get("JVLINK_SERVICE_KEY", "")
+    effective_key = _resolve_service_key(service_key)
     safe_max_reads = max(0, min(int(max_read_calls or 0), 20))
     safe_data_option = max(1, min(int(data_option or 1), 3))
 
@@ -373,7 +409,7 @@ def run_stream_sample(
 
     layout = get_storage_layout()
     effective_sid = sid or os.environ.get("JVLINK_SID") or config.JVLINK_DEFAULT_SID
-    effective_key = service_key if service_key is not None else os.environ.get("JVLINK_SERVICE_KEY", "")
+    effective_key = _resolve_service_key(service_key)
     safe_max_records = max(1, min(int(max_records or 100), 500))
     safe_data_option = max(1, min(int(data_option or 1), 3))
 
@@ -417,6 +453,93 @@ def run_stream_sample(
         return {
             "ok": False,
             "error": f"failed to parse stream-sample JSON: {exc}; raw={stdout}",
+            "runner": ps32,
+        }
+
+    payload["usedServiceKey"] = bool(effective_key)
+    payload["runner"] = ps32
+    payload["storage"] = layout
+    return payload
+
+
+def run_native_schedule(
+    from_date,
+    data_spec=None,
+    max_records=20000,
+    max_status_wait_seconds=180,
+    service_key=None,
+    sid=None,
+    data_option=1,
+    skip_set_service_key=False,
+):
+    ps32 = get_32bit_powershell_path()
+    if not Path(ps32).exists():
+        return {
+            "ok": False,
+            "error": f"32-bit PowerShell not found at {ps32}",
+            "runner": ps32,
+        }
+    if not NATIVE_SCHEDULE_SCRIPT.exists():
+        return {
+            "ok": False,
+            "error": f"native-schedule script missing: {NATIVE_SCHEDULE_SCRIPT}",
+            "runner": ps32,
+        }
+
+    if not from_date:
+        return {
+            "ok": False,
+            "error": "from_date is required",
+            "runner": ps32,
+        }
+
+    layout = get_storage_layout()
+    effective_sid = sid or os.environ.get("JVLINK_SID") or config.JVLINK_DEFAULT_SID
+    effective_key = _resolve_service_key(service_key)
+    effective_spec = str(data_spec or JVLINK_DATASPEC_PRESETS[0])
+    safe_max_records = max(1, min(int(max_records or 20000), 200000))
+    safe_data_option = max(1, min(int(data_option or 1), 3))
+
+    cmd = [
+        ps32,
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(NATIVE_SCHEDULE_SCRIPT),
+        "-Sid",
+        effective_sid,
+        "-SavePath",
+        layout["jvlinkSaveDir"],
+        "-DataSpec",
+        effective_spec,
+        "-FromDate",
+        str(from_date),
+        "-MaxRecords",
+        str(safe_max_records),
+        "-DataOption",
+        str(safe_data_option),
+        "-MaxStatusWaitSeconds",
+        str(max(1, min(int(max_status_wait_seconds or 180), 900))),
+    ]
+
+    if skip_set_service_key:
+        cmd.append("-SkipServiceKey")
+
+    if effective_key:
+        cmd.extend(["-ServiceKey", effective_key])
+
+    try:
+        stdout, _ = _run_process(cmd)
+    except BridgeError as exc:
+        return {"ok": False, "error": str(exc), "runner": ps32}
+
+    try:
+        payload = json.loads(stdout.splitlines()[-1] if stdout else "{}")
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"failed to parse native schedule JSON: {exc}; raw={stdout[:500]}",
             "runner": ps32,
         }
 

@@ -52,6 +52,8 @@ class OreProApplyVotesRequest(BaseModel):
     dry_run: bool = False
     use_companion_session: bool = True
     force_refresh: bool = True
+    submit_after_apply: bool = False
+    go_next_race: bool = False
 
 
 def _extract_summary_lines(text: str):
@@ -325,7 +327,7 @@ def apply_orepro_votes(req: OreProApplyVotesRequest = None):
                     "-File",
                     str(helper_path),
                     "-PayloadJson",
-                    json.dumps(req_payload, ensure_ascii=False),
+                    json.dumps(req_payload, ensure_ascii=True),
                 ],
                 capture_output=True,
                 text=True,
@@ -436,18 +438,34 @@ def apply_orepro_votes(req: OreProApplyVotesRequest = None):
             })
             continue
 
-        dedup_by_mark: Dict[str, str] = {}
+        single_by_mark: Dict[str, str] = {}
+        extra_triangles: List[str] = []
+        seen_pairs = set()
         for mark in race_item.marks or []:
             raw_code = str(getattr(mark, "mark_code", "") or "").strip()
             mark_code = raw_code if raw_code in {"1", "2", "3", "4"} else symbol_to_mark_code.get(str(mark.symbol or "").strip())
             post_num = str(int(mark.post or 0))
-            if not mark_code or post_num == "0" or mark_code in dedup_by_mark:
+            if not mark_code or post_num == "0":
                 continue
-            dedup_by_mark[mark_code] = post_num
+
+            pair_key = (mark_code, post_num)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+
+            if mark_code == "4":
+                extra_triangles.append(post_num)
+            elif mark_code not in single_by_mark:
+                single_by_mark[mark_code] = post_num
+
+        ordered_pairs = [
+            (code, post) for code, post in sorted(single_by_mark.items(), key=lambda x: mark_sort.get(x[0], 99))
+        ]
+        ordered_pairs.extend(("4", post) for post in extra_triangles)
 
         requested = [
             {"symbol": {"1": "◎", "2": "〇", "3": "▲", "4": "△"}[code], "post": int(post)}
-            for code, post in sorted(dedup_by_mark.items(), key=lambda x: mark_sort.get(x[0], 99))
+            for code, post in ordered_pairs
         ]
         if not requested:
             race_results.append({
@@ -482,7 +500,7 @@ def apply_orepro_votes(req: OreProApplyVotesRequest = None):
 
         resolved = []
         unmatched = []
-        for mark_code, post in sorted(dedup_by_mark.items(), key=lambda x: mark_sort.get(x[0], 99)):
+        for mark_code, post in ordered_pairs:
             seq = post_to_seq.get(post)
             if not seq:
                 unmatched.append(int(post))
