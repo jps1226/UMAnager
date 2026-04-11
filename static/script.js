@@ -123,16 +123,25 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-function parseRaceSortTime(sortTimeStr) {
+function parseRaceSortTime(sortTimeStr, raceInfo = null) {
     const raw = String(sortTimeStr || '').trim();
     if (!raw) return null;
 
     const normalized = raw.replace(' ', 'T');
-    const withOffset = /([zZ]|[+-]\d{2}:\d{2})$/.test(normalized)
-        ? normalized
-        : `${normalized}+09:00`;
+    if (/([zZ]|[+-]\d{2}:\d{2})$/.test(normalized)) {
+        const explicit = new Date(normalized);
+        return Number.isNaN(explicit.getTime()) ? null : explicit;
+    }
 
-    const dt = new Date(withOffset);
+    const cleanDate = String(raceInfo?.clean_date || '').trim();
+    const displayTime = String(raceInfo?.time || '').trim();
+    const sortDate = normalized.slice(0, 10);
+    const looksCtLocal = /\b(?:AM|PM)\b/i.test(displayTime) || (!!cleanDate && cleanDate !== sortDate);
+
+    // NK cache currently stores `sort_time` in local/CT wall-clock form for display,
+    // while JV-style timestamps are closer to JST. Detect the NK pattern first so we
+    // do not accidentally treat same-day upcoming races as already finished.
+    const dt = new Date(looksCtLocal ? normalized : `${normalized}+09:00`);
     return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
@@ -1971,7 +1980,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
                 race.info.time !== "TBA" &&
                 race.info.sort_time
             ) {
-                const raceTime = parseRaceSortTime(race.info.sort_time);
+                const raceTime = parseRaceSortTime(race.info.sort_time, race.info);
                 if (raceTime && raceTime < collapseBeforeTime && r_id !== keepOpenRaceId) {
                     shouldCollapse = true;
                 }
@@ -2141,7 +2150,7 @@ async function loadRaces() {
                     });
                 });
 
-                const raceTime = parseRaceSortTime(race.info.sort_time);
+                const raceTime = parseRaceSortTime(race.info.sort_time, race.info);
                 if (timeline === "upcoming" && race.info.time !== "TBA" && raceTime) {
                     upcomingRaces.push({
                         time: raceTime,
@@ -2302,6 +2311,17 @@ function countRaceMainBets(r_id) {
     return usedCount;
 }
 
+function clearStoredMarksForRace(r_id) {
+    let cleared = 0;
+    for (const [k, v] of Object.entries(globalMarks)) {
+        if (k.startsWith(`${r_id}_`) && v) {
+            globalMarks[k] = null;
+            cleared += 1;
+        }
+    }
+    return cleared;
+}
+
 function isRaceLocked(r_id) {
     return !!raceLocks[r_id];
 }
@@ -2353,20 +2373,15 @@ async function clearRaceBets(event, r_id) {
         return;
     }
 
-    let changed = false;
-    for (const [k, v] of Object.entries(globalMarks)) {
-        if (k.startsWith(`${r_id}_`) && v) {
-            globalMarks[k] = null;
-            changed = true;
-        }
-    }
-
-    if (!changed) return;
+    const cleared = clearStoredMarksForRace(r_id);
+    if (!cleared) return;
 
     touchRaceMeta(r_id, { markSource: 'manual', manualAdjustmentsDelta: 1 });
     await saveMarksToServer();
 
-    applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
+    const sortState = raceSorts[r_id] || { col: 'Default', asc: true };
+    raceSorts[r_id] = sortState;
+    applySortLogic(r_id, sortState.col, sortState.asc);
     const tbody = document.getElementById(`tbody-${r_id}`);
     if (tbody) tbody.innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
     refreshRaceHeaderSortLabels(r_id);
@@ -2375,6 +2390,7 @@ async function clearRaceBets(event, r_id) {
     updateAutoBetHighlighting();
     updateWinningVotesFocusButton();
     if (winningVotesFocusEnabled) applyWinningVotesFocus();
+    if (currentMainView === 'voting') renderLiveViewPanel();
 }
 
 function toggleRaceLock(event, r_id) {
@@ -3545,17 +3561,61 @@ function buildRaceWinBadgesHtml(race) {
     return `<span class="race-hit-wrap">${badges.join('')}</span>`;
 }
 
+function setVotingSidebarRaceCollapsed(raceId, shouldCollapse) {
+    const safeRaceId = String(raceId || '').trim();
+    if (!safeRaceId) return null;
+
+    const sidebar = document.getElementById('voting-sidebar-display');
+    const selector = `.voting-race-card[data-rid="${CSS.escape(safeRaceId)}"]`;
+    const card = sidebar?.querySelector(selector) || document.querySelector(selector);
+    if (!card) return null;
+
+    const collapsed = !!shouldCollapse;
+    sidebarRaceCollapseState[safeRaceId] = collapsed;
+    card.classList.toggle('is-collapsed', collapsed);
+
+    const arrow = card.querySelector('.voting-race-arrow');
+    if (arrow) {
+        arrow.textContent = collapsed ? '▶' : '▼';
+    }
+
+    return card;
+}
+
+function didOreProAdvanceToNextRace(data, result) {
+    const topNextStatus = String(data?.submitFlow?.nextStatus || '').trim().toLowerCase();
+    const rowNextStatus = String(result?.submitFlow?.nextStatus || '').trim().toLowerCase();
+    const message = String(result?.message || data?.message || '').toLowerCase();
+
+    return topNextStatus === 'ok'
+        || rowNextStatus === 'ok'
+        || message.includes('opened the next race page')
+        || message.includes('moving to the next race');
+}
+
 function toggleVotingSidebarRace(raceId) {
     const card = document.querySelector(`.voting-race-card[data-rid="${CSS.escape(String(raceId || ''))}"]`);
     if (!card) return;
 
     const nextCollapsed = !card.classList.contains('is-collapsed');
-    sidebarRaceCollapseState[String(raceId)] = nextCollapsed;
-    card.classList.toggle('is-collapsed', nextCollapsed);
+    setVotingSidebarRaceCollapsed(raceId, nextCollapsed);
+}
 
-    const arrow = card.querySelector('.voting-race-arrow');
-    if (arrow) {
-        arrow.textContent = nextCollapsed ? '▶' : '▼';
+function advanceVotingSidebarAfterApply(raceId) {
+    const card = setVotingSidebarRaceCollapsed(raceId, true);
+    if (!card) return;
+
+    let nextCard = card.nextElementSibling;
+    while (nextCard && !nextCard.classList?.contains('voting-race-card')) {
+        nextCard = nextCard.nextElementSibling;
+    }
+
+    if (nextCard) {
+        const nextRaceId = String(nextCard.dataset.rid || '').trim();
+        if (nextRaceId) {
+            setVotingSidebarRaceCollapsed(nextRaceId, false);
+        }
+        nextCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
 }
 
@@ -4247,6 +4307,108 @@ function buildOreProApplyVotesPayloadForRace(raceId) {
     };
 }
 
+async function clearActiveDayBets() {
+    const date = String(currentActiveDate || '').trim();
+    if (!date) {
+        setOreProSessionStatus('Select a day first, then clear its bets.', 'warn');
+        return;
+    }
+
+    const racesForDay = Array.isArray(globalRacesByDate[date]) ? globalRacesByDate[date] : [];
+    const raceIds = racesForDay
+        .map(race => String(race?.info?.race_id || '').trim())
+        .filter(Boolean);
+
+    if (!raceIds.length) {
+        setOreProSessionStatus(`No races found for ${date}.`, 'warn');
+        return;
+    }
+
+    let clearableRaces = 0;
+    let skippedLocked = 0;
+    let marksToClear = 0;
+
+    raceIds.forEach(r_id => {
+        const markCount = countRaceMarks(r_id);
+        if (!markCount) return;
+        if (isRaceLocked(r_id)) {
+            skippedLocked += 1;
+            return;
+        }
+        clearableRaces += 1;
+        marksToClear += markCount;
+    });
+
+    if (!clearableRaces) {
+        const lockNote = skippedLocked ? ` ${skippedLocked} locked race(s) still have marks.` : '';
+        setOreProSessionStatus(`No unlocked day bets to clear for ${date}.${lockNote}`, 'warn');
+        return;
+    }
+
+    const confirmed = window.confirm(
+        `Clear all saved marks for ${date}?\n\nThis will remove ${marksToClear} mark(s) across ${clearableRaces} unlocked race(s).${skippedLocked ? `\n${skippedLocked} locked race(s) will be skipped.` : ''}`
+    );
+    if (!confirmed) return;
+
+    const btn = document.getElementById('btn-orepro-clear-day');
+    const prevLabel = btn?.textContent || '🧹 Clear Day Bets';
+
+    try {
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳ Clearing...';
+        }
+
+        const changedRaceIds = [];
+        let clearedMarks = 0;
+
+        raceIds.forEach(r_id => {
+            if (isRaceLocked(r_id)) return;
+
+            const removed = clearStoredMarksForRace(r_id);
+            if (!removed) return;
+
+            clearedMarks += removed;
+            touchRaceMeta(r_id, { markSource: 'manual', manualAdjustmentsDelta: 1 });
+            changedRaceIds.push(r_id);
+        });
+
+        if (!changedRaceIds.length) {
+            const lockNote = skippedLocked ? ` Skipped ${skippedLocked} locked race(s).` : '';
+            setOreProSessionStatus(`No unlocked day bets were changed for ${date}.${lockNote}`, 'warn');
+            return;
+        }
+
+        await saveMarksToServer();
+
+        changedRaceIds.forEach(r_id => {
+            const sortState = raceSorts[r_id] || { col: 'Default', asc: true };
+            raceSorts[r_id] = sortState;
+            applySortLogic(r_id, sortState.col, sortState.asc);
+
+            const tbody = document.getElementById(`tbody-${r_id}`);
+            if (tbody) tbody.innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
+
+            refreshRaceHeaderSortLabels(r_id);
+            updateRaceActionButtons(r_id);
+            updateRiskBadge(r_id);
+        });
+
+        updateAutoBetHighlighting();
+        updateWinningVotesFocusButton();
+        if (winningVotesFocusEnabled) applyWinningVotesFocus();
+        if (currentMainView === 'voting') renderLiveViewPanel();
+
+        const lockNote = skippedLocked ? ` Skipped ${skippedLocked} locked race(s).` : '';
+        setOreProSessionStatus(`Cleared ${clearedMarks} mark(s) across ${changedRaceIds.length} race(s) for ${date}.${lockNote}`, 'info');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = prevLabel;
+        }
+    }
+}
+
 async function autoBetActiveDay() {
     const date = String(currentActiveDate || '').trim();
     if (!date) {
@@ -4261,11 +4423,18 @@ async function autoBetActiveDay() {
         .filter(Boolean)
         .filter(r_id => {
             const info = globalRaceInfo[r_id] || {};
-            const raceTime = parseRaceSortTime(info.sort_time);
+            const raceTime = parseRaceSortTime(info.sort_time, info);
             return !raceTime || raceTime > now;
         });
 
-    if (!upcomingRaceIds.length) {
+    const eligibleRaceIds = upcomingRaceIds.length
+        ? upcomingRaceIds
+        : ((globalDateTimelineByDate[date] || 'upcoming') === 'upcoming' ? racesForDay
+            .map(race => String(race?.info?.race_id || '').trim())
+            .filter(Boolean)
+            : []);
+
+    if (!eligibleRaceIds.length) {
         setOreProSessionStatus(`No remaining races found for ${date}.`, 'warn');
         return;
     }
@@ -4288,7 +4457,7 @@ async function autoBetActiveDay() {
         let changedRaceIds = [];
         let skippedLocked = 0;
 
-        upcomingRaceIds.forEach(r_id => {
+        eligibleRaceIds.forEach(r_id => {
             if (isRaceLocked(r_id)) {
                 skippedLocked += 1;
                 return;
@@ -4443,8 +4612,15 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
         });
         const data = await res.json();
 
-        const result = Array.isArray(data?.results) ? data.results[0] : null;
-        const mode = result?.status === 'ok' ? 'ok' : 'warn';
+        const result = Array.isArray(data?.results)
+            ? data.results[0]
+            : (data?.result?.results?.[0] || null);
+        const topStatus = String(data?.status || '').trim().toLowerCase();
+        const rowStatus = String(result?.status || '').trim().toLowerCase();
+        const requestCompleted = topStatus !== 'error' && rowStatus !== 'error';
+        const collapseSucceeded = didOreProAdvanceToNextRace(data, result)
+            || requestCompleted;
+        const mode = collapseSucceeded || rowStatus === 'ok' ? 'ok' : 'warn';
         let serverMessage = result?.message || data?.message || `Applied votes for race ${raceId}.`;
         try {
             const nested = JSON.parse(serverMessage || '{}');
@@ -4462,6 +4638,10 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
                 <div class="orepro-sync-title">Apply Votes / Submit / Next (Single Race)</div>
                 <div class="orepro-sync-list">[${stat}] race ${rid}: ${msg}</div>
             `;
+        }
+
+        if (collapseSucceeded) {
+            advanceVotingSidebarAfterApply(raceId);
         }
     } catch (err) {
         setOreProSessionStatus(`Failed applying race votes: ${err?.message || err}`, 'error');
@@ -5037,7 +5217,9 @@ async function showExportModal() {
     // Build race-time data array for auto-collapse (embedded as JSON in the popup)
     const collapseRaceTimeData = sortedRaces.map(([r_id, group]) => ({
         safeId: r_id.replace(/[^a-zA-Z0-9-]/g, ''),
-        sortTime: group.info.sort_time || ''
+        sortTime: group.info.sort_time || '',
+        cleanDate: group.info.clean_date || '',
+        displayTime: group.info.time || ''
     }));
 
     // Use the full selected day's races for the countdown so the popout matches the main view.
@@ -5050,6 +5232,8 @@ async function showExportModal() {
 
             return {
                 sortTime,
+                cleanDate: String(info.clean_date || '').trim(),
+                displayTime: timeLabel,
                 name: `${String(info.place || '').toUpperCase()} R${info.race_number || '?'}`.trim()
             };
         })
@@ -5238,14 +5422,33 @@ async function showExportModal() {
             setReverseHorseLayout(!reverseHorseLayout);
         }
 
-        function parsePopoutRaceTime(sortTime) {
+        function parsePopoutRaceTime(itemOrSortTime, raceInfo) {
+            var sortTime = '';
+            var info = {};
+
+            if (itemOrSortTime && typeof itemOrSortTime === 'object' && !Array.isArray(itemOrSortTime)) {
+                sortTime = itemOrSortTime.sortTime || '';
+                info = itemOrSortTime;
+            } else {
+                sortTime = itemOrSortTime || '';
+                info = raceInfo || {};
+            }
+
             if (!sortTime) return null;
             var normalized = String(sortTime).trim().replace(' ', 'T');
             if (!normalized) return null;
-            if (!/([zZ]|[+-]\d{2}:\d{2})$/.test(normalized)) {
-                normalized += '+09:00';
+
+            if (/([zZ]|[+-]\d{2}:\d{2})$/.test(normalized)) {
+                var explicit = new Date(normalized);
+                return isNaN(explicit.getTime()) ? null : explicit;
             }
-            var dt = new Date(normalized);
+
+            var cleanDate = String(info.cleanDate || info.clean_date || '').trim();
+            var displayTime = String(info.displayTime || info.display_time || '').trim();
+            var sortDate = normalized.slice(0, 10);
+            var looksCtLocal = /\b(?:AM|PM)\b/i.test(displayTime) || (!!cleanDate && cleanDate !== sortDate);
+
+            var dt = new Date(looksCtLocal ? normalized : normalized + '+09:00');
             return isNaN(dt.getTime()) ? null : dt;
         }
 
@@ -5269,7 +5472,7 @@ async function showExportModal() {
             for (var i = 0; i < countdownRaceTimeData.length; i++) {
                 var item = countdownRaceTimeData[i];
                 if (!item || !item.sortTime) continue;
-                var raceTime = parsePopoutRaceTime(item.sortTime);
+                var raceTime = parsePopoutRaceTime(item);
                 if (raceTime && raceTime > now) {
                     nextRace = { time: raceTime, name: item.name || 'Upcoming Race' };
                     break;
@@ -5302,9 +5505,10 @@ async function showExportModal() {
             // Find the index of the next race that hasn't started yet
             var nextIdx = -1;
             for (var i = 0; i < collapseRaceTimeData.length; i++) {
-                var st = collapseRaceTimeData[i].sortTime;
+                var item = collapseRaceTimeData[i];
+                var st = item && item.sortTime;
                 if (!st) continue;
-                var t = parsePopoutRaceTime(st);
+                var t = parsePopoutRaceTime(item);
                 if (t && t > now) { nextIdx = i; break; }
             }
             if (nextIdx <= 0) return; // nothing to collapse (all future, or all past)
@@ -5343,7 +5547,7 @@ async function showExportModal() {
         updateCountdown();
         autoCollapseRaces();
         setInterval(updateCountdown, 1000);
-        setInterval(autoCollapseRaces, 30000);
+        setInterval(autoCollapseRaces, 5000);
     <\/script>
 </body>
 </html>`;

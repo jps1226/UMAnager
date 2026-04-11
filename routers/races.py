@@ -228,7 +228,7 @@ def load_config():
     return load_app_config()
 
 
-def parse_sort_time(sort_time_str):
+def parse_sort_time(sort_time_str, race_info=None):
     if not sort_time_str:
         return None
 
@@ -236,9 +236,18 @@ def parse_sort_time(sort_time_str):
     if not text:
         return None
 
+    info = race_info if isinstance(race_info, dict) else {}
+    clean_date = str(info.get("clean_date") or "").strip()
+    display_time = str(info.get("time") or "").strip().upper()
+    sort_date = text[:10]
+    looks_ct_local = ("AM" in display_time or "PM" in display_time) or (clean_date and clean_date != sort_date)
+
     for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
         try:
-            return datetime.datetime.strptime(text, fmt).replace(tzinfo=ZoneInfo("Asia/Tokyo"))
+            parsed = datetime.datetime.strptime(text, fmt)
+            if looks_ct_local:
+                return parsed.replace(tzinfo=ZoneInfo("America/Chicago")).astimezone(ZoneInfo("Asia/Tokyo"))
+            return parsed.replace(tzinfo=ZoneInfo("Asia/Tokyo"))
         except (ValueError, TypeError):
             continue
 
@@ -471,7 +480,7 @@ def split_races_by_day_completion(races_by_date):
 
         for race in races:
             info = race.get("info", {})
-            dt_val = parse_sort_time(info.get("sort_time"))
+            dt_val = parse_sort_time(info.get("sort_time"), info)
             if dt_val:
                 day_datetimes.append(dt_val)
                 if day_date is None:
@@ -626,6 +635,117 @@ def _race_id_to_date_str(race_id: str) -> Optional[str]:
     return None
 
 
+def _latest_cached_race_date(weekend_races):
+    latest = None
+    for race in weekend_races or []:
+        info = race.get("info", {}) if isinstance(race, dict) else {}
+        race_date = _parse_clean_date(info.get("clean_date"))
+        if race_date is not None and (latest is None or race_date > latest):
+            latest = race_date
+    return latest
+
+
+def _cache_has_dashboard_detail(weekend_races):
+    """Return True when upcoming/current races have real dashboard fields.
+
+    JV placeholder races can exist with empty BK/PP/Horse/pedigree fields; those should not
+    displace the normal NK dashboard view just because older past races still look complete.
+    """
+    today_jst = datetime.datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    inspected_races = 0
+
+    for race in weekend_races or []:
+        info = race.get("info", {}) if isinstance(race, dict) else {}
+        race_date = _parse_clean_date(info.get("clean_date"))
+        if race_date is not None and race_date < today_jst:
+            continue
+
+        entries_df = race.get("entries") if isinstance(race, dict) else None
+        if entries_df is None or getattr(entries_df, "empty", True):
+            continue
+
+        inspected_races += 1
+        try:
+            rows = entries_df.to_dict(orient="records")
+        except Exception:
+            continue
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            horse_name = str(row.get("Horse") or "").strip()
+            sire = str(row.get("Sire") or "").strip()
+            dam = str(row.get("Dam") or "").strip()
+            bms = str(row.get("BMS") or "").strip()
+            record = str(row.get("Record") or "").strip()
+            pp_val = force_str(row.get("PP"))
+            bk_val = force_str(row.get("BK"))
+
+            has_basic_card_data = horse_name and (
+                (pp_val and pp_val not in {"0", "00"})
+                or (bk_val and bk_val not in {"0", "00"})
+            )
+            has_profile_data = (
+                sire
+                or dam
+                or bms
+                or (record and record not in {"0/0", "0-0", "0"})
+            )
+
+            if has_basic_card_data and has_profile_data:
+                return True
+
+    return False
+
+
+def _load_dashboard_races(app_cfg):
+    active_engine = get_active_data_engine()
+    weekend_races = load_cached_races()
+    today_jst = datetime.datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    latest_date = _latest_cached_race_date(weekend_races)
+    cache_is_stale = latest_date is None or latest_date < (today_jst - datetime.timedelta(days=1))
+    cache_has_detail = _cache_has_dashboard_detail(weekend_races)
+
+    # Fast path: serve the active cache immediately when it looks usable.
+    if weekend_races:
+        if active_engine != "jv":
+            return weekend_races
+        if cache_has_detail and not cache_is_stale:
+            return weekend_races
+
+    # Never perform a heavy live scrape inside GET /api/races. If the active cache is empty,
+    # stale, or JV-placeholder-only, fall back to whichever cached engine has the most usable data.
+    fallback_candidates = []
+    for engine in (["nk", "jv"] if active_engine == "jv" else ["jv", "nk"]):
+        cached = weekend_races if engine == active_engine else load_race_cache(data_engine=engine)
+        if not cached:
+            continue
+        fallback_candidates.append((engine, cached))
+
+    if not fallback_candidates:
+        return weekend_races
+
+    def _candidate_rank(engine_name, races):
+        latest = _latest_cached_race_date(races)
+        stale = latest is None or latest < (today_jst - datetime.timedelta(days=1))
+        detail = _cache_has_dashboard_detail(races)
+        return (
+            1 if engine_name == "nk" else 0,
+            1 if detail else 0,
+            0 if stale else 1,
+            len(races),
+        )
+
+    best_engine, best_races = max(fallback_candidates, key=lambda item: _candidate_rank(item[0], item[1]))
+    if best_races is not weekend_races:
+        logger.info(
+            "Dashboard fallback: using %s cache because %s cache is empty, stale, or incomplete.",
+            best_engine.upper(),
+            active_engine.upper(),
+        )
+    return best_races
+
+
 def run_prefetch_race_check(weekend_races):
     now_jst = datetime.datetime.now(ZoneInfo("Asia/Tokyo"))
     today_jst = now_jst.date()
@@ -669,7 +789,7 @@ def run_prefetch_race_check(weekend_races):
         race_date = _parse_clean_date(info.get("clean_date"))
         if race_date is None or race_date < today_jst:
             continue
-        sort_time = parse_sort_time(info.get("sort_time"))
+        sort_time = parse_sort_time(info.get("sort_time"), info)
         eligible_future.append((race_date, sort_time, race))
 
     future_sort_max = datetime.datetime.max.replace(tzinfo=ZoneInfo("Asia/Tokyo"))
@@ -726,7 +846,7 @@ def run_prefetch_race_check(weekend_races):
         entries_df = race.get("entries")
         if race_has_history_data(entries_df):
             continue  # Already has finish data stored.
-        sort_time = parse_sort_time(info.get("sort_time"))
+        sort_time = parse_sort_time(info.get("sort_time"), info)
         eligible_past.append((race_date, sort_time, race))
 
     # Check most recent past races first.
@@ -901,7 +1021,7 @@ def get_prefetch_check():
 def get_races():
     app_cfg = load_config()
 
-    weekend_races = load_cached_races()
+    weekend_races = _load_dashboard_races(app_cfg)
 
     if not weekend_races:
         return {
