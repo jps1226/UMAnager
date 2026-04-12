@@ -208,6 +208,7 @@
                 </div>
 
                 <button id="btn-live-view-popout" onclick="showExportModal()" class="toolbar-btn toolbar-btn-primary">🪟 Live View Popout</button>
+                <button id="btn-tv-mode" onclick="window.open('/tv', '_blank', 'noopener')" class="toolbar-btn toolbar-btn-primary">📺 TV Mode</button>
                 <button id="btn-winning-votes-focus" onclick="toggleWinningVotesFocus()" class="toolbar-btn toolbar-btn-muted" style="display:none;">🏁 Hit 0% (0/0)</button>
                 <button onclick="collapseVotedRaces()" class="toolbar-btn toolbar-btn-muted">✅ Collapse Voted</button>
                 <button onclick="toggleAllRaces()" class="toolbar-btn toolbar-btn-muted">↕️ Toggle All Races</button>
@@ -341,6 +342,14 @@
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-highlightFallbackBridge" onchange="updateSidebarSettings()">
                             <span>🧷 Highlight NK Fallback Fields</span>
+                        </label>
+                        <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
+                            <span>📺 TV Mode Split %</span>
+                            <input type="number" id="setting-tvModeSplitPercent" min="20" max="80" step="1" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:90px;">
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-tvModePanelsFlipped" onchange="updateSidebarSettings()">
+                            <span>📺 TV Mode Start Flipped</span>
                         </label>
                     </div>
                 </div>

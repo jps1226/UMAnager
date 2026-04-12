@@ -17,6 +17,8 @@ It is built as a personal tool first: scrape upcoming cards, keep pedigree watch
 - Refreshes cached upcoming cards and can auto-refresh missing past-race history when enabled.
 - Creates and restores backups of the local `data/` directory.
 - Includes an in-app scrape console and a local server shutdown button.
+- Provides a TV Mode page with embedded GreenChannel live playback plus synchronized marks panel.
+- Supports split-resize, panel flip, and persistent TV layout preferences.
 
 ## Current UI/Workflow
 
@@ -25,6 +27,8 @@ It is built as a personal tool first: scrape upcoming cards, keep pedigree watch
 - Search bar for horses across the currently loaded races.
 - Auto-pick strategy slider and configurable display/settings toggles.
 - Voting cheat sheet export for building bets outside the app.
+- TV Mode tab/button that opens a side-by-side video + marks view in a new browser tab.
+- TV Mode auto-collapses past races and keeps the current race focused while races are live.
 
 ## Storage Model
 
@@ -59,7 +63,7 @@ pip install -r requirements.txt
 2. Start the app:
 
 ```bash
-uvicorn server:app --reload --host 127.0.0.1 --port 8000
+uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
 
 3. Open:
@@ -70,9 +74,27 @@ http://127.0.0.1:8000
 
 On Windows, you can also use `run.bat`, which opens the browser and writes server output to `server.log`.
 
+For phone/tablet access on the same network, open:
+
+```text
+http://<your-lan-ip>:8000
+```
+
+Example:
+
+```text
+http://192.168.40.175:8000
+```
+
+TV Mode notes:
+
+- The embedded live stream uses the same upstream playback chain as GreenChannel web (`/api/vij` -> Streaks playback API).
+- Playback availability depends on upstream service conditions (including region/network requirements).
+
 ## Project Layout
 
 - `server.py`: FastAPI app assembly, scrape job orchestration, root page, shutdown endpoint
+- `tv.html`: TV Mode page (live stream embed + synchronized marks panel)
 - `routers/maintenance.py`: cache, dictionary, and backup/restore endpoints
 - `routers/lists_config.py`: Favorites/Watchlist and config endpoints
 - `routers/races.py`: marks, race data, history refresh, day import, and day delete endpoints

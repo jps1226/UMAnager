@@ -5329,6 +5329,10 @@ async function showExportModal() {
     const fullHtml = `<!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>🪟 Live View Popout</title>
     <style>
         body { font-family: sans-serif; background-color: #0c0c0c; color: #fafafa; margin: 0; padding: 20px; }
@@ -5360,13 +5364,18 @@ async function showExportModal() {
         body.reverse-horse-layout .export-horse-name { order: 2; text-align: right; }
         body.reverse-horse-layout .export-horse-mark { order: 3; }
         body.reverse-horse-layout .export-horse-post { order: 4; }
+        .fullscreen-btn { background:#222; color:#fafafa; border:1px solid #444; border-radius:4px; padding:6px 12px; font-weight:bold; font-size:13px; cursor:pointer; }
+        .fullscreen-btn:hover { background:#2c2f39; }
         @media (max-width: 720px) {
-            body { padding: 16px; }
+            body { padding: 12px; }
             .popout-head { flex-direction: column; align-items: stretch; }
             .popout-head-main { flex-direction: column; align-items: stretch; }
-            .popout-head-actions { justify-content: stretch; }
-            .popout-layout-btn { width: 100%; }
+            .popout-head-actions { justify-content: stretch; flex-direction: column; }
+            .popout-layout-btn { width: 100%; box-sizing: border-box; text-align: center; }
+            .fullscreen-btn { width: 100%; box-sizing: border-box; text-align: center; }
             .countdown-wrapper { width: 100%; box-sizing: border-box; }
+            .export-horse-line { font-size: 16px; }
+            .export-horse-post, .export-horse-mark { width:26px; height:26px; line-height:26px; flex:0 0 26px; }
         }
     </style>
 </head>
@@ -5382,6 +5391,8 @@ async function showExportModal() {
         </div>
         <div class="popout-head-actions">
             <button id="btn-toggle-horse-layout" class="popout-layout-btn" onclick="toggleHorseLayout()" type="button">⇄ Layout: Numbers Left</button>
+            <button id="btn-fullscreen" class="fullscreen-btn" onclick="toggleFullscreen()" type="button">⛶ Full Screen</button>
+            <a href="/tv" target="_blank" style="background:#f5a623;color:black;padding:6px 12px;text-decoration:none;border-radius:4px;font-weight:bold;font-size:14px;">📺 TV Mode</a>
             <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" style="background:#1dd1a1;color:black;padding:6px 12px;text-decoration:none;border-radius:4px;font-weight:bold;font-size:14px;">🔗 Open OrePro</a>
         </div>
     </div>
@@ -5421,6 +5432,29 @@ async function showExportModal() {
         function toggleHorseLayout() {
             setReverseHorseLayout(!reverseHorseLayout);
         }
+
+        function toggleFullscreen() {
+            var btn = document.getElementById('btn-fullscreen');
+            var el = document.documentElement;
+            if (!document.fullscreenElement) {
+                var req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen;
+                if (req) {
+                    req.call(el).catch(function() {});
+                }
+            } else {
+                var exit = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen;
+                if (exit) exit.call(document);
+            }
+        }
+
+        document.addEventListener('fullscreenchange', function() {
+            var btn = document.getElementById('btn-fullscreen');
+            if (btn) btn.innerText = document.fullscreenElement ? '\u26f6 Exit Full Screen' : '\u26f6 Full Screen';
+        });
+        document.addEventListener('webkitfullscreenchange', function() {
+            var btn = document.getElementById('btn-fullscreen');
+            if (btn) btn.innerText = document.fullscreenElement || document.webkitFullscreenElement ? '\u26f6 Exit Full Screen' : '\u26f6 Full Screen';
+        });
 
         function parsePopoutRaceTime(itemOrSortTime, raceInfo) {
             var sortTime = '';
@@ -5599,7 +5633,11 @@ function showSettingsModal() {
     document.getElementById('setting-autoLockPastVotes').checked = isAutoLockPastVotesEnabled();
     document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
     document.getElementById('setting-highlightFallbackBridge').checked = isFallbackBridgeHighlightEnabled();
-        document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
+    document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
+    document.getElementById('setting-tvModeSplitPercent').value = Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent))
+        ? Number(appConfig.ui?.tvModeSplitPercent)
+        : 50;
+    document.getElementById('setting-tvModePanelsFlipped').checked = !!appConfig.ui?.tvModePanelsFlipped;
     // Populate formula weight inputs
     const fw = getFormulaWeights();
     document.getElementById('fw-oddsCap').value            = fw.oddsCap;
@@ -5637,6 +5675,11 @@ async function updateSidebarSettings() {
         weekendWatchlist: document.getElementById('setting-weekendWatchlist').checked
     };
     const parseFWInput = (id, def) => { const n = parseFloat(document.getElementById(id).value); return isNaN(n) ? def : n; };
+    const parseClampedPercent = (id, def) => {
+        const raw = parseFloat(document.getElementById(id).value);
+        if (isNaN(raw)) return def;
+        return Math.max(20, Math.min(80, raw));
+    };
     appConfig.ui = {
         ...appConfig.ui,
         betSafetyIndicator: document.getElementById('setting-betSafetyIndicator').checked,
@@ -5648,6 +5691,8 @@ async function updateSidebarSettings() {
         showConsole: document.getElementById('setting-showConsole').checked,
         highlightAutoBets: document.getElementById('setting-highlightAutoBets').checked,
         highlightFallbackBridge: document.getElementById('setting-highlightFallbackBridge').checked,
+        tvModeSplitPercent: parseClampedPercent('setting-tvModeSplitPercent', Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent)) ? Number(appConfig.ui?.tvModeSplitPercent) : 50),
+        tvModePanelsFlipped: document.getElementById('setting-tvModePanelsFlipped').checked,
         formulaWeights: {
             oddsCap:            parseFWInput('fw-oddsCap',            100),
             formMultiplier:     parseFWInput('fw-formMultiplier',     100),

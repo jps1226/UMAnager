@@ -52,6 +52,8 @@ APP_CONFIG_DEFAULTS = {
         "autoLockPastVotes": False,
         "showConsole": True,
         "highlightFallbackBridge": False,
+        "tvModeSplitPercent": 50,
+        "tvModePanelsFlipped": False,
     },
 }
 
