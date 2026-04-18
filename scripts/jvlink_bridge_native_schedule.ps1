@@ -2,7 +2,7 @@ param(
     [string]$Sid = "UMANAGER",
     [string]$ServiceKey = "",
     [string]$SavePath = "",
-    [string]$DataSpec = "TOKURACEDIFNBLDNSLOPWOODYSCHSNPNHOSNHOYUCOMMMING",
+    [string]$DataSpec = "TOKU",
     [string]$FromDate,
     [int]$MaxRecords = 20000,
     [int]$DataOption = 1,
@@ -11,6 +11,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.Encoding]::GetEncoding(932)
 
 if (-not $FromDate) {
     throw "FromDate is required"
@@ -77,6 +78,7 @@ public class NativeScheduleReader
             result["statusCode"] = statusCode;
 
             var races = new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);
+            var horses = new List<Dictionary<string, object>>();
             var specCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             string firstBytesHex = "";
             int firstNonZeroCount = 0;
@@ -239,6 +241,12 @@ public class NativeScheduleReader
                         }
                     }
                 }
+                else if (spec == "UM")
+                {
+                    // JV_UM_UMA: horse pedigree record.
+                    var horse = ParseUm(bytes);
+                    horses.Add(horse);
+                }
             }
 
             result["recordsRead"] = recordsRead;
@@ -247,6 +255,7 @@ public class NativeScheduleReader
             result["firstBytesHex"] = firstBytesHex;
             result["firstNonZeroCount"] = firstNonZeroCount;
             result["races"] = new List<Dictionary<string, object>>(races.Values);
+            result["horses"] = horses;
             result["closeCode"] = SafeInt(() => obj.JVClose());
             result["ok"] = true;
         }
@@ -274,6 +283,20 @@ public class NativeScheduleReader
         return Encoding.GetEncoding(932).GetString(slice).Trim('\0', ' ', '\r', '\n');
     }
 
+    // Returns raw bytes as lowercase hex — used for Japanese text fields to bypass
+    // locale-dependent encoding when passing data through stdout to Python.
+    // Python decodes: bytes.fromhex(hex).rstrip(b'\x00').decode('cp932').strip()
+    static string GetHex(byte[] bytes, int start1, int length)
+    {
+        int start = Math.Max(0, start1 - 1);
+        if (start >= bytes.Length) return "";
+        int len = Math.Min(length, bytes.Length - start);
+        var sb = new StringBuilder(len * 2);
+        for (int i = start; i < start + len; i++)
+            sb.Append(bytes[i].ToString("x2"));
+        return sb.ToString();
+    }
+
     static Dictionary<string, object> ParseRa(byte[] bytes)
     {
         string year = GetString(bytes, 12, 4);
@@ -282,8 +305,8 @@ public class NativeScheduleReader
         string kaiji = GetString(bytes, 22, 2);
         string nichiji = GetString(bytes, 24, 2);
         string raceNum = GetString(bytes, 26, 2);
-        string hondai = GetString(bytes, 33, 60);
-        string ryakusyo10 = GetString(bytes, 573, 20);
+        string hondai = GetHex(bytes, 33, 60);
+        string ryakusyo10 = GetHex(bytes, 573, 20);
         string gradeCd = GetString(bytes, 615, 1);
         string kyori = GetString(bytes, 698, 4);
         string trackCd = GetString(bytes, 706, 2);
@@ -336,29 +359,31 @@ public class NativeScheduleReader
         string umaban = GetString(bytes, 29, 2);
         string oddsRaw = GetString(bytes, 360, 4);
         string favRaw = GetString(bytes, 364, 2);
+        string kakuteiJyuni = bytes.Length >= 336 ? GetString(bytes, 335, 2) : "";
         int oddsInt;
         string odds = Int32.TryParse(oddsRaw, out oddsInt) && oddsInt > 0 ? (oddsInt / 10.0m).ToString("0.0") : "";
 
-        // Upcoming entries often use zero placeholders until draw/odds publication.
-        // Normalize those to blanks so UI and downstream logic don't treat them as real values.
+        // Normalize zero-placeholder fields to blanks.
         int tmp;
         if (Int32.TryParse(wakuban, out tmp) && tmp <= 0) wakuban = "";
         if (Int32.TryParse(umaban, out tmp) && tmp <= 0) umaban = "";
         if (Int32.TryParse(favRaw, out tmp) && tmp <= 0) favRaw = "";
+        if (Int32.TryParse(kakuteiJyuni, out tmp) && tmp <= 0) kakuteiJyuni = "";
 
         var entry = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         entry.Add("raceId", year + jyo + kaiji + nichiji + raceNum);
         entry.Add("BK", wakuban);
         entry.Add("PP", umaban);
         entry.Add("Horse_ID", GetString(bytes, 31, 10));
-        entry.Add("Horse", GetString(bytes, 41, 36));
+        entry.Add("Horse", GetHex(bytes, 41, 36));
         entry.Add("Record", "");
+        entry.Add("Finish", kakuteiJyuni);
         entry.Add("Sire", "");
         entry.Add("Dam", "");
         entry.Add("BMS", "");
         entry.Add("Odds", odds);
         entry.Add("Fav", favRaw);
-        entry.Add("Jockey", GetString(bytes, 307, 8));
+        entry.Add("Jockey", GetHex(bytes, 307, 8));
         entry.Add("Sire_ID", "");
         entry.Add("Dam_ID", "");
         entry.Add("BMS_ID", "");
@@ -376,8 +401,8 @@ public class NativeScheduleReader
         string kaiji     = GetString(bytes, 22, 2);
         string nichiji   = GetString(bytes, 24, 2);
         string raceNum   = GetString(bytes, 26, 2);
-        string hondai    = GetString(bytes, 33, 60);
-        string ryakusyo  = GetString(bytes, 573, 20);
+        string hondai    = GetHex(bytes, 33, 60);
+        string ryakusyo  = GetHex(bytes, 573, 20);
         string gradeCd   = bytes.Length >= 615 ? GetString(bytes, 615, 1) : "";
         string kyori     = bytes.Length >= 640 ? GetString(bytes, 637, 4) : "";
         string trackCd   = bytes.Length >= 642 ? GetString(bytes, 641, 2) : "";
@@ -437,6 +462,41 @@ public class NativeScheduleReader
         race.Add("grade",      "");
         race.Add("source",     "JG");
         return race;
+    }
+
+    static Dictionary<string, object> ParseUm(byte[] bytes)
+    {
+        string kettoNum = GetString(bytes, 12, 10);
+        string bamei = GetHex(bytes, 47, 36);
+        string sireId = "";
+        string sireJp = "";
+        string damId = "";
+        string damJp = "";
+        string bmsId = "";
+        string bmsJp = "";
+
+        // Ketto3Info starts at byte 205, each 46 bytes: HansyokuNum(10) + Bamei(36)
+        // Order: sire(1), dam(2), sire-sire(3), sire-dam(4), BMS=dam-sire(5), ...
+        if (bytes.Length >= 205 + 46 * 5)
+        {
+            sireId = GetString(bytes, 205, 10);
+            sireJp = GetHex(bytes, 215, 36);
+            damId  = GetString(bytes, 251, 10);
+            damJp  = GetHex(bytes, 261, 36);
+            bmsId  = GetString(bytes, 389, 10);  // slot 5: 205 + (4 * 46)
+            bmsJp  = GetHex(bytes, 399, 36);
+        }
+        
+        var horse = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        horse.Add("KettoNum", kettoNum);
+        horse.Add("UmaName", bamei);
+        horse.Add("Sire_ID", sireId);
+        horse.Add("Sire_JP", sireJp);
+        horse.Add("Dam_ID", damId);
+        horse.Add("Dam_JP", damJp);
+        horse.Add("BMS_ID", bmsId);
+        horse.Add("BMS_JP", bmsJp);
+        return horse;
     }
 
     static string JyoToPlace(string jyo)

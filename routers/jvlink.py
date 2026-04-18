@@ -246,7 +246,7 @@ def jvlink_refresh_upcoming(payload: JVLinkRefreshUpcomingPayload):
     effective_data_spec = (
         payload.data_spec
         if payload.data_spec
-        else "TOKUTCOVRACERCOVSNAP"
+        else "TOKU"
     )
 
     probe_result = run_open_probe(

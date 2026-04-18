@@ -56,8 +56,9 @@ Needed next:
 2. Verified typed RA/SE extraction using JVRead/JVGets with correct VARIANT marshaling.
 3. Integrated native JV loading into `data_manager.fetch_weekend_timeline()` for `data_engine=jv`.
 4. Switched JV native loader to upcoming-focused stream combo:
-  - `DataSpec = TOKUTCOVRACERCOVSNAP`
-  - `DataOption = 2`
+  - `DataSpec = TOKU` with `DataOption = 2`
+  - `DataSpec = RACE` with `DataOption = 1`
+  - `DataSpec = SNPN` with `DataOption = 2`
 5. Confirmed strict JV engine now assembles real races from RA/SE stream without NK fallback.
 
 ### B) Horse cache isolation (optional but recommended)

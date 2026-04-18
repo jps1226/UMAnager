@@ -7,7 +7,7 @@ Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 var argsMap = ParseArgs(args);
 var sid = GetArg(argsMap, "sid", "UMANAGER");
 var savePath = GetArg(argsMap, "save-path", "");
-var dataSpec = GetArg(argsMap, "data-spec", "TOKURACEDIFNBLDNSLOPWOODYSCHSNPNHOSNHOYUCOMMMING");
+var dataSpec = GetArg(argsMap, "data-spec", "TOKU");
 var fromDate = GetArg(argsMap, "from-date", DateTime.Today.AddDays(-7).ToString("yyyyMMdd000000"));
 var serviceKey = GetArg(argsMap, "service-key", Environment.GetEnvironmentVariable("JVLINK_SERVICE_KEY") ?? "");
 var skipServiceKey = HasFlag(argsMap, "skip-service-key");

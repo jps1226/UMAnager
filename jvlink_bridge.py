@@ -52,10 +52,22 @@ STREAM_SAMPLE_SCRIPT = _resolve_script("jvlink_bridge_stream_sample.ps1")
 NATIVE_SCHEDULE_SCRIPT = SCRIPTS_DIR / "jvlink_bridge_native_schedule.ps1"
 
 JVLINK_DATASPEC_PRESETS = [
-    "TOKURACEDIFNBLDNSLOPWOODYSCHSNPNHOSNHOYUCOMMMING",
-    "TOKUTCVNRACERCVNSNPN",
-    "TOKURACEDIFFBLODSLOPWOODYSCHSNAPHOSEHOYUCOMMMING",
-    "TOKUTCOVRACERCOVSNAP",
+    "TOKU",
+    "RACE",
+    "SNPN",
+    "DIF",
+    "NBL",
+    "DNS",
+    "LOP",
+    "WOO",
+    "DYS",
+    "CHS",
+    "NPN",
+    "HOS",
+    "NHO",
+    "YU",
+    "COM",
+    "MING",
 ]
 
 
@@ -67,7 +79,8 @@ def _run_process(command):
     completed = subprocess.run(
         command,
         capture_output=True,
-        text=True,
+        encoding="cp932",
+        errors="replace",
         check=False,
     )
     stdout = (completed.stdout or "").strip()
@@ -287,7 +300,7 @@ def run_open_probe(
     effective_sid = sid or os.environ.get("JVLINK_SID") or config.JVLINK_DEFAULT_SID
     effective_key = _resolve_service_key(service_key)
     safe_max_reads = max(0, min(int(max_read_calls or 0), 20))
-    safe_data_option = max(1, min(int(data_option or 1), 3))
+    safe_data_option = max(1, min(int(data_option or 1), 4))
 
     cmd = [
         ps32,
@@ -411,7 +424,7 @@ def run_stream_sample(
     effective_sid = sid or os.environ.get("JVLINK_SID") or config.JVLINK_DEFAULT_SID
     effective_key = _resolve_service_key(service_key)
     safe_max_records = max(1, min(int(max_records or 100), 500))
-    safe_data_option = max(1, min(int(data_option or 1), 3))
+    safe_data_option = max(1, min(int(data_option or 1), 4))
 
     cmd = [
         ps32,
@@ -498,7 +511,7 @@ def run_native_schedule(
     effective_key = _resolve_service_key(service_key)
     effective_spec = str(data_spec or JVLINK_DATASPEC_PRESETS[0])
     safe_max_records = max(1, min(int(max_records or 20000), 200000))
-    safe_data_option = max(1, min(int(data_option or 1), 3))
+    safe_data_option = max(1, min(int(data_option or 1), 4))
 
     cmd = [
         ps32,
