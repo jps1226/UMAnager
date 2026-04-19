@@ -477,16 +477,17 @@ public class NativeScheduleReader
         string bmsId = "";
         string bmsJp = "";
 
-        // Ketto3Info starts at byte 205, each 46 bytes: HansyokuNum(10) + Bamei(36)
-        // Order: sire(1), dam(2), sire-sire(3), sire-dam(4), BMS=dam-sire(5), ...
-        if (bytes.Length >= 205 + 46 * 5)
+        // JV-Data 4.9 spec: Ketto3Info pedigree array starts at byte 185 (1-indexed).
+        // Each slot is 46 bytes: HansyokuNum(10) + Bamei(36)
+        // Slot order (0-indexed): sire=0, dam=1, sire-sire=2, sire-dam=3, BMS=dam-sire=4
+        if (bytes.Length >= 415)  // need through slot 4: (185-1) + 4*46 + 46 = 414, so >= 415
         {
-            sireId = GetString(bytes, 205, 10);
-            sireJp = GetHex(bytes, 215, 36);
-            damId  = GetString(bytes, 251, 10);
-            damJp  = GetHex(bytes, 261, 36);
-            bmsId  = GetString(bytes, 389, 10);  // slot 5: 205 + (4 * 46)
-            bmsJp  = GetHex(bytes, 399, 36);
+            sireId = GetString(bytes, 185, 10);
+            sireJp = GetHex(bytes, 195, 36);
+            damId  = GetString(bytes, 231, 10);  // 185 + 46
+            damJp  = GetHex(bytes, 241, 36);
+            bmsId  = GetString(bytes, 369, 10);  // 185 + 4*46
+            bmsJp  = GetHex(bytes, 379, 36);
         }
         
         var horse = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
