@@ -562,14 +562,15 @@ def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, r
     from_date = from_date_base.strftime("%Y%m%d000000")
     window_start = start_date
     spec_queries = [
-        # DataOption=2 specs use "0" so JV-Link re-reads all local cached files for this week,
-        # not just files newer than from_date. This ensures pedigree (TCVN/RCVN) and race
-        # registration (TOKU/SNPN) survive server restarts without re-downloading from the network.
-        {"data_spec": "TOKU", "data_option": 2, "max_records": 50000, "from_date": "0"},
-        {"data_spec": "TCVN", "data_option": 2, "max_records": 50000, "from_date": "0"},
+        # DataOption=2 specs use "00000000000000" (14-zero sentinel) so JV-Link re-reads all
+        # local cached files for this week, not just files newer than from_date. This ensures
+        # pedigree (TCVN/RCVN) and race registration (TOKU/SNPN) survive server restarts
+        # without re-downloading from the network. "0" causes -112 (invalid fromtime).
+        {"data_spec": "TOKU", "data_option": 2, "max_records": 50000, "from_date": "00000000000000"},
+        {"data_spec": "TCVN", "data_option": 2, "max_records": 50000, "from_date": "00000000000000"},
         {"data_spec": "RACE", "data_option": 1, "max_records": 50000, "from_date": from_date},
-        {"data_spec": "RCVN", "data_option": 2, "max_records": 50000, "from_date": "0"},
-        {"data_spec": "SNPN", "data_option": 2, "max_records": 20000, "from_date": "0"},
+        {"data_spec": "RCVN", "data_option": 2, "max_records": 50000, "from_date": "00000000000000"},
+        {"data_spec": "SNPN", "data_option": 2, "max_records": 20000, "from_date": "00000000000000"},
     ]
 
     runs = []
@@ -644,9 +645,16 @@ def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, r
             if not isinstance(entries, list):
                 entries = []
             row_list = []
+            se_dbg_logged = False
             for e in entries:
                 if not isinstance(e, dict):
                     continue
+                if not se_dbg_logged and e.get("_seDbg"):
+                    logger.info(
+                        f"SE debug bytes[326-400] for race {item.get('raceId','?')} horse PP={e.get('PP','?')}: "
+                        f"{e['_seDbg']} | Finish@335={e.get('Finish','?')} OddsRaw@360={e.get('Odds','?')}"
+                    )
+                    se_dbg_logged = True
                 horse_id = str(e.get("Horse_ID") or "").strip()
                 raw_horse_name = _decode_jv_hex(str(e.get("Horse") or "").strip())
                 horse_name = resolve_cached_or_romanized_horse_name(horse_id, raw_horse_name)
