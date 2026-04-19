@@ -567,8 +567,10 @@ def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, r
         # (invalid fromtime) because month/day 00 fail calendar validation.
         {"data_spec": "TOKU", "data_option": 2, "max_records": 50000, "from_date": "20200101000000"},
         {"data_spec": "TCVN", "data_option": 2, "max_records": 50000, "from_date": "20200101000000"},
-        {"data_spec": "RACE", "data_option": 1, "max_records": 50000, "from_date": from_date},
         {"data_spec": "RCVN", "data_option": 2, "max_records": 50000, "from_date": "20200101000000"},
+        # DataOption=2 includes same-day finalized results (KakuteiJyuni) ~10-15 min after each
+        # race becomes official. DataOption=1 only publishes finalized results on Monday evening.
+        {"data_spec": "RACE", "data_option": 2, "max_records": 50000, "from_date": "20200101000000"},
         {"data_spec": "SNPN", "data_option": 2, "max_records": 20000, "from_date": "20200101000000"},
     ]
 
@@ -615,6 +617,30 @@ def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, r
         )
         if not isinstance(native, dict) or not native.get("ok"):
             continue
+
+        # Process pedigree immediately so HORSE_CACHE is populated before RACE entries are built.
+        if query["data_spec"] in ["TCVN", "RCVN"]:
+            inline_horses = native.get("horses") or []
+            for h in inline_horses:
+                if not isinstance(h, dict):
+                    continue
+                hid = str(h.get("KettoNum") or "").strip()
+                if not hid:
+                    continue
+                sj = _decode_jv_hex(str(h.get("Sire_JP") or "").strip())
+                dj = _decode_jv_hex(str(h.get("Dam_JP") or "").strip())
+                bj = _decode_jv_hex(str(h.get("BMS_JP") or "").strip())
+                update_horse_cache_pedigree(
+                    hid,
+                    str(h.get("Sire_ID") or "").strip(),
+                    str(h.get("Dam_ID") or "").strip(),
+                    str(h.get("BMS_ID") or "").strip(),
+                    sj, dj, bj,
+                )
+            logger.info(
+                f"Inline pedigree ({query['data_spec']}): processed {len(inline_horses)} UM records into HORSE_CACHE"
+            )
+            save_horse_dict()
 
         for item in (native.get("races") or []):
             if not isinstance(item, dict):
@@ -728,40 +754,19 @@ def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, r
                 f"JV merge status: spec={query['data_spec']} merged_unique_races={len(races_by_id)}"
             )
 
-    # Process TCVN/RCVN horses for pedigree cache.
-    # These compensation feeds (DataOption=2) bundle UM master records for this week's entrants,
-    # avoiding the need for a full historical BLOD/BLDN bootstrap.
+    # Pedigree is processed inline during TCVN/RCVN spec runs (above), so HORSE_CACHE is already
+    # populated before RACE builds its SE entries. Log a summary for observability.
     pedigree_runs = [r for r in runs if r.get("dataSpec") in ["TCVN", "RCVN"] and r.get("ok") and isinstance(r.get("native"), dict)]
-    all_horses = []
-    for pr in pedigree_runs:
-        all_horses.extend(pr["native"].get("horses") or [])
-    logger.info(
-        f"Pedigree (TCVN/RCVN): found {len(pedigree_runs)} ok runs, {len(all_horses)} total UM horse records"
+    total_um = sum(len(r["native"].get("horses") or []) for r in pedigree_runs)
+    horses_with_sire = sum(
+        1 for r in pedigree_runs
+        for h in (r["native"].get("horses") or [])
+        if isinstance(h, dict) and _decode_jv_hex(str(h.get("Sire_JP") or "").strip())
     )
-    horses_with_sire = 0
-    first_sample = None
-    for horse in all_horses:
-        if not isinstance(horse, dict):
-            continue
-        horse_id = str(horse.get("KettoNum") or "").strip()
-        if not horse_id:
-            continue
-        sire_id = str(horse.get("Sire_ID") or "").strip()
-        dam_id = str(horse.get("Dam_ID") or "").strip()
-        bms_id = str(horse.get("BMS_ID") or "").strip()
-        sire_jp = _decode_jv_hex(str(horse.get("Sire_JP") or "").strip())
-        dam_jp = _decode_jv_hex(str(horse.get("Dam_JP") or "").strip())
-        bms_jp = _decode_jv_hex(str(horse.get("BMS_JP") or "").strip())
-        if sire_jp:
-            horses_with_sire += 1
-            if first_sample is None:
-                first_sample = (horse_id, sire_jp, dam_jp, bms_jp)
-        update_horse_cache_pedigree(horse_id, sire_id, dam_id, bms_id, sire_jp, dam_jp, bms_jp)
     logger.info(
-        f"Pedigree update: {horses_with_sire}/{len(all_horses)} horses had non-empty Sire_JP. "
-        f"First sample: {first_sample}"
+        f"Pedigree summary: {len(pedigree_runs)} ok runs, {total_um} UM records, "
+        f"{horses_with_sire} with non-empty Sire_JP, HORSE_CACHE size={len(HORSE_CACHE)}"
     )
-    save_horse_dict()
 
     # Backfill pedigree into already-built entry rows now that HORSE_CACHE is populated
     for race in races_by_id.values():
@@ -775,7 +780,7 @@ def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, r
             if not hid:
                 continue
             cached = HORSE_CACHE.get(hid)
-            if not cached or not cached.get("sire_id"):
+            if not cached:
                 continue
             if not str(row.get("Sire") or "").strip():
                 row["Sire"] = cached.get("sire", "")
