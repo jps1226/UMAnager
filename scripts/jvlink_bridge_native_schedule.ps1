@@ -359,9 +359,8 @@ public class NativeScheduleReader
         string umaban = GetString(bytes, 29, 2);
         string oddsRaw = GetString(bytes, 360, 4);
         string favRaw = GetString(bytes, 364, 2);
-        // KakuteiJyuni offset unconfirmed — dump bytes 326–400 as hex so the correct
-        // offset can be read from logs for a past race (look for the known finish position).
-        string seDbgHex = bytes.Length >= 400 ? GetHex(bytes, 326, 75) : "";
+        // JV-Data 4.9 spec: KakuteiJyuni at position 335 (1-indexed), length 2.
+        // GetString is 1-indexed (subtracts 1 internally), so pass 335 directly.
         string kakuteiJyuni = bytes.Length >= 336 ? GetString(bytes, 335, 2) : "";
         int oddsInt;
         string odds = Int32.TryParse(oddsRaw, out oddsInt) && oddsInt > 0 ? (oddsInt / 10.0m).ToString("0.0") : "";
@@ -390,7 +389,6 @@ public class NativeScheduleReader
         entry.Add("Sire_ID", "");
         entry.Add("Dam_ID", "");
         entry.Add("BMS_ID", "");
-        entry.Add("_seDbg", seDbgHex);
         return entry;
     }
 
