@@ -562,11 +562,14 @@ def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, r
     from_date = from_date_base.strftime("%Y%m%d000000")
     window_start = start_date
     spec_queries = [
-        {"data_spec": "TOKU", "data_option": 2, "max_records": 50000, "from_date": from_date},
-        {"data_spec": "TCVN", "data_option": 2, "max_records": 50000, "from_date": from_date},
+        # DataOption=2 specs use "0" so JV-Link re-reads all local cached files for this week,
+        # not just files newer than from_date. This ensures pedigree (TCVN/RCVN) and race
+        # registration (TOKU/SNPN) survive server restarts without re-downloading from the network.
+        {"data_spec": "TOKU", "data_option": 2, "max_records": 50000, "from_date": "0"},
+        {"data_spec": "TCVN", "data_option": 2, "max_records": 50000, "from_date": "0"},
         {"data_spec": "RACE", "data_option": 1, "max_records": 50000, "from_date": from_date},
-        {"data_spec": "RCVN", "data_option": 2, "max_records": 50000, "from_date": from_date},
-        {"data_spec": "SNPN", "data_option": 2, "max_records": 20000, "from_date": from_date},
+        {"data_spec": "RCVN", "data_option": 2, "max_records": 50000, "from_date": "0"},
+        {"data_spec": "SNPN", "data_option": 2, "max_records": 20000, "from_date": "0"},
     ]
 
     runs = []
@@ -758,6 +761,7 @@ def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, r
         f"Pedigree update: {horses_with_sire}/{len(all_horses)} horses had non-empty Sire_JP. "
         f"First sample: {first_sample}"
     )
+    save_horse_dict()
 
     # Backfill pedigree into already-built entry rows now that HORSE_CACHE is populated
     for race in races_by_id.values():
