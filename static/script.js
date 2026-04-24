@@ -2864,6 +2864,42 @@ async function runJvlinkCapabilityScanTest() {
     });
 }
 
+async function runJvlinkLoadWeekendRaces() {
+    const payload = jvlinkPanelGetPayload();
+    if (!payload.from_date) {
+        setJvlinkPanelStatus('Load Weekend Races: from_date is required', true);
+        return;
+    }
+
+    await runJvlinkPanelCall('Load Weekend Races', async () => {
+        return await postJson('/api/jvlink/load-weekend-races', {
+            from_date: payload.from_date,
+            max_records: Math.min(5000, Math.max(100, payload.max_records || 5000)),
+            max_status_wait_seconds: 120
+        });
+    });
+}
+
+async function runJvlinkLoadMasterDataInitial() {
+    await runJvlinkPanelCall('Load Master Data (Initial - may take 30-60 min)', async () => {
+        return await postJson('/api/jvlink/load-master-data', {
+            is_initial: true,
+            max_records: 500000,
+            max_status_wait_seconds: 3600
+        });
+    });
+}
+
+async function runJvlinkLoadMasterDataIncremental() {
+    await runJvlinkPanelCall('Load Master Data (Incremental)', async () => {
+        return await postJson('/api/jvlink/load-master-data', {
+            is_initial: false,
+            max_records: 50000,
+            max_status_wait_seconds: 180
+        });
+    });
+}
+
 // Keep these on window for inline onclick handlers in index.html.
 window.runJvlinkStatusTest = runJvlinkStatusTest;
 window.runJvlinkStorageLayoutTest = runJvlinkStorageLayoutTest;
@@ -2873,6 +2909,9 @@ window.runJvlinkStreamSampleTest = runJvlinkStreamSampleTest;
 window.runJvlinkStreamSampleAutoTest = runJvlinkStreamSampleAutoTest;
 window.runJvlinkStreamSummaryTest = runJvlinkStreamSummaryTest;
 window.runJvlinkCapabilityScanTest = runJvlinkCapabilityScanTest;
+window.runJvlinkLoadWeekendRaces = runJvlinkLoadWeekendRaces;
+window.runJvlinkLoadMasterDataInitial = runJvlinkLoadMasterDataInitial;
+window.runJvlinkLoadMasterDataIncremental = runJvlinkLoadMasterDataIncremental;
 
 async function postJson(url, payload) {
     const res = await fetch(url, {
@@ -3249,6 +3288,23 @@ async function triggerScrape(mode) {
 
         await fetchLogs(); // Grab any final lines
         await loadRaces();
+
+        // Load master horse pedigree data (automatic incremental update)
+        try {
+            consoleBox.textContent += "\n\nLoading horse pedigree data...";
+            const masterRes = await postJson('/api/jvlink/load-master-data', {
+                is_initial: false,
+                max_records: 50000,
+                max_status_wait_seconds: 180
+            });
+            if (masterRes.data?.ok) {
+                consoleBox.textContent += `\n✓ Horse pedigree loaded (${masterRes.data.recordsRead || 0} records)`;
+            } else {
+                consoleBox.textContent += `\n⚠ Pedigree load skipped or incomplete`;
+            }
+        } catch (e) {
+            consoleBox.textContent += `\n⚠ Pedigree load error: ${e.message}`;
+        }
 
         if (Number(scrapeData.cached_races || 0) === 0) {
             const activeEngine = String(appConfig?.backend?.dataEngine || scrapeData?.data_engine || 'nk').toLowerCase();

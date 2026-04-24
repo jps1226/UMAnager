@@ -23,6 +23,8 @@ from jvlink_bridge import (
     run_open_settings,
     run_open_probe,
     run_stream_sample,
+    load_jv_weekend_races,
+    load_jv_master_data,
 )
 
 
@@ -233,6 +235,18 @@ class JVLinkRefreshUpcomingPayload(BaseModel):
     skip_set_service_key: bool = False
 
 
+class JVLinkWeekendRacesPayload(BaseModel):
+    from_date: str
+    max_records: int = 5000
+    max_status_wait_seconds: int = 120
+
+
+class JVLinkMasterDataPayload(BaseModel):
+    is_initial: bool = False
+    max_records: int = 200000
+    max_status_wait_seconds: int = 180
+
+
 @router.post("/api/jvlink/refresh-upcoming")
 def jvlink_refresh_upcoming(payload: JVLinkRefreshUpcomingPayload):
     """Download incremental JV cache files and re-index.
@@ -270,4 +284,75 @@ def jvlink_refresh_upcoming(payload: JVLinkRefreshUpcomingPayload):
         "dataSpec": effective_data_spec,
         "probe": probe_result,
         "index": index_result,
+    }
+
+
+@router.post("/api/jvlink/load-weekend-races")
+def jvlink_load_weekend_races(payload: JVLinkWeekendRacesPayload):
+    """Fetch upcoming weekend race cards and entries.
+
+    Uses DataOption=2 (This Week) with concatenated weekend specs.
+    Fast, recent-only race discovery.
+    """
+    result = load_jv_weekend_races(
+        from_date=payload.from_date,
+        max_records=payload.max_records,
+        max_status_wait_seconds=payload.max_status_wait_seconds,
+    )
+    return {
+        "status": "ok" if result.get("ok") else "error",
+        "data": result,
+    }
+
+
+@router.post("/api/jvlink/load-master-data")
+def jvlink_load_master_data(payload: JVLinkMasterDataPayload):
+    """Build/update the master racehorse database with pedigree.
+
+    is_initial=true: Full historical bootstrap (Option 4, downloads ALL historical data, may take 30-60 min)
+    is_initial=false: Incremental update from last checkpoint (Option 1, silent)
+
+    Automatically processes UM records into HORSE_CACHE.
+    """
+    from data_manager import HORSE_CACHE, update_horse_cache_pedigree, save_horse_dict, _decode_jv_hex
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    result = load_jv_master_data(
+        from_date=None,
+        is_initial=payload.is_initial,
+        max_records=payload.max_records,
+        max_status_wait_seconds=payload.max_status_wait_seconds,
+    )
+
+    # Process UM records into HORSE_CACHE
+    if result.get("ok"):
+        horses = result.get("horses") or []
+        processed = 0
+        for h in horses:
+            if not isinstance(h, dict):
+                continue
+            hid = str(h.get("KettoNum") or "").strip()
+            if not hid:
+                continue
+            sj = _decode_jv_hex(str(h.get("Sire_JP") or "").strip())
+            dj = _decode_jv_hex(str(h.get("Dam_JP") or "").strip())
+            bj = _decode_jv_hex(str(h.get("BMS_JP") or "").strip())
+            update_horse_cache_pedigree(
+                hid,
+                str(h.get("Sire_ID") or "").strip(),
+                str(h.get("Dam_ID") or "").strip(),
+                str(h.get("BMS_ID") or "").strip(),
+                sj, dj, bj,
+            )
+            processed += 1
+        if processed:
+            save_horse_dict()
+        logger.info(f"Master data loaded: {processed} horses processed, HORSE_CACHE size={len(HORSE_CACHE)}")
+        result["horses_cached"] = processed
+
+    return {
+        "status": "ok" if result.get("ok") else "error",
+        "data": result,
     }

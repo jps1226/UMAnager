@@ -1055,13 +1055,13 @@ def get_races():
             races_by_date[date_str] = []
 
         scores, icons, status = [], [], []
-        for _, row in df.iterrows():
-            fam = [
-                force_str(row.get("Horse_ID")),
-                force_str(row.get("Sire_ID")),
-                force_str(row.get("Dam_ID")),
-                force_str(row.get("BMS_ID")),
-            ]
+        for idx, row in df.iterrows():
+            horse_id = force_str(row.get("Horse_ID"))
+            sire_id = force_str(row.get("Sire_ID"))
+            dam_id = force_str(row.get("Dam_ID"))
+            bms_id = force_str(row.get("BMS_ID"))
+            
+            fam = [horse_id, sire_id, dam_id, bms_id]
             f_score = config.SCORE_TRACKED_HORSE if fam[0] in tracked_ids else (config.SCORE_TRACKED_SIRE if fam[1] in tracked_ids else 0.0)
             f_score += (config.SCORE_TRACKED_DAM if fam[2] in tracked_ids else 0.0) + (config.SCORE_TRACKED_BMS if fam[3] in tracked_ids else 0.0)
             w_score = config.SCORE_WATCHLIST_HORSE if fam[0] in watchlist_ids else (config.SCORE_WATCHLIST_SIRE if fam[1] in watchlist_ids else 0.0)

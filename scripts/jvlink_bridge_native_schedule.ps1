@@ -469,7 +469,9 @@ public class NativeScheduleReader
     static Dictionary<string, object> ParseUm(byte[] bytes)
     {
         string kettoNum = GetString(bytes, 12, 10);
+        string birthYear = GetString(bytes, 38, 8);
         string bamei = GetHex(bytes, 47, 36);
+        string horseNameEnglish = GetHex(bytes, 118, 60);
         string sireId = "";
         string sireJp = "";
         string damId = "";
@@ -477,22 +479,24 @@ public class NativeScheduleReader
         string bmsId = "";
         string bmsJp = "";
 
-        // JV-Data 4.9 spec: Ketto3Info pedigree array starts at byte 185 (1-indexed).
+        // JV-Data 4.9 spec: Ketto3Info pedigree array starts at byte 205 (1-indexed), 204 (0-indexed).
         // Each slot is 46 bytes: HansyokuNum(10) + Bamei(36)
         // Slot order (0-indexed): sire=0, dam=1, sire-sire=2, sire-dam=3, BMS=dam-sire=4
-        if (bytes.Length >= 415)  // need through slot 4: (185-1) + 4*46 + 46 = 414, so >= 415
+        if (bytes.Length >= 415)  // need through slot 4: 204 + 4*46 + 46 = 388 + 46 = 434, so >= 434
         {
-            sireId = GetString(bytes, 185, 10);
-            sireJp = GetHex(bytes, 195, 36);
-            damId  = GetString(bytes, 231, 10);  // 185 + 46
-            damJp  = GetHex(bytes, 241, 36);
-            bmsId  = GetString(bytes, 369, 10);  // 185 + 4*46
-            bmsJp  = GetHex(bytes, 379, 36);
+            sireId = GetString(bytes, 204, 10);
+            sireJp = GetHex(bytes, 214, 36);
+            damId  = GetString(bytes, 250, 10);  // 204 + 46
+            damJp  = GetHex(bytes, 260, 36);
+            bmsId  = GetString(bytes, 388, 10);  // 204 + 4*46
+            bmsJp  = GetHex(bytes, 398, 36);
         }
         
         var horse = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         horse.Add("KettoNum", kettoNum);
+        horse.Add("BirthYear", birthYear);
         horse.Add("UmaName", bamei);
+        horse.Add("HorseNameEnglish", horseNameEnglish);
         horse.Add("Sire_ID", sireId);
         horse.Add("Sire_JP", sireJp);
         horse.Add("Dam_ID", damId);

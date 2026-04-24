@@ -19,7 +19,7 @@ from storage import (
     normalize_data_engine,
 )
 from jra_van_storage import get_race_keys_in_date_range, get_cache_dates_in_range
-from jvlink_bridge import run_native_schedule
+from jvlink_bridge import run_native_schedule, load_jv_weekend_races, load_jv_master_data
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +27,25 @@ logger = logging.getLogger(__name__)
 def _decode_jv_hex(h):
     """Decode a raw-byte hex string produced by GetHex in the PS1 bridge.
 
-    GetHex outputs Shift-JIS bytes as lowercase hex to avoid any COM/stdout
-    encoding loss. Python converts hex → bytes → cp932 string.
+    GetHex outputs Shift-JIS (cp932) bytes as lowercase hex to avoid COM/stdout
+    encoding loss. The 36-byte fields include padding (0x00 and 0x8140 = full-width space).
     """
     if not h:
         return ""
     try:
-        return bytes.fromhex(h).rstrip(b"\x00").decode("cp932").strip()
-    except Exception:
-        return h
+        b = bytes.fromhex(h)
+        # Strip null bytes and Shift-JIS padding character (0x8140)
+        b = b.rstrip(b"\x00").rstrip(b"\x81\x40")
+        if not b:
+            return ""
+        decoded = b.decode("cp932", errors="replace").strip()
+        # Clean up replacement characters left from invalid sequences
+        return decoded.replace('\ufffd', '').strip()
+    except Exception as e:
+        logger.warning(
+            f"_decode_jv_hex failed for input (len={len(h)}): {type(e).__name__}: {e}"
+        )
+        return ""
 
 # 1. Setup Offline Translators & Caches
 kks = pykakasi.kakasi()
@@ -87,7 +97,7 @@ def save_horse_dict():
 
 
 def _set_horse_cache_entry(horse_id, data):
-    clean_horse_id = str(horse_id or "").replace('.0', '').strip()
+    clean_horse_id = str(horse_id or "").strip()
     if not clean_horse_id:
         return
     HORSE_CACHE[clean_horse_id] = data
@@ -95,7 +105,7 @@ def _set_horse_cache_entry(horse_id, data):
 
 
 def update_horse_cache_pedigree(horse_id, sire_id, dam_id, bms_id, sire_jp, dam_jp, bms_jp):
-    clean_horse_id = str(horse_id or "").replace('.0', '').strip()
+    clean_horse_id = str(horse_id or "").strip()
     if not clean_horse_id:
         return
     existing = HORSE_CACHE.get(clean_horse_id)
@@ -122,16 +132,21 @@ def update_horse_cache_pedigree(horse_id, sire_id, dam_id, bms_id, sire_jp, dam_
     # Always refresh romanized names from JV JP names (JV is authoritative)
     if sire_jp:
         existing["sire"] = romanize(sire_jp)
+        if not existing.get("sire"):
+            logger.warning(
+                f"Pedigree cache {clean_horse_id}: romanize() returned empty for sire_jp={sire_jp!r}"
+            )
     if dam_jp:
         existing["dam"] = romanize(dam_jp)
     if bms_jp:
         existing["bms"] = romanize(bms_jp)
-    logger.debug(
-        f"Pedigree cache update {clean_horse_id}: "
-        f"sire_jp={sire_jp!r} -> sire={existing.get('sire')!r}, "
-        f"dam_jp={dam_jp!r} -> dam={existing.get('dam')!r}, "
-        f"bms_jp={bms_jp!r} -> bms={existing.get('bms')!r}"
-    )
+    # Debug log first 10 horses
+    sire_cached = existing.get('sire', '')
+    if clean_horse_id in ["0"] or len([k for k in HORSE_CACHE if HORSE_CACHE[k].get("sire")]) < 15:
+        logger.info(
+            f"Pedigree cache update {clean_horse_id}: "
+            f"sire_jp={sire_jp[:40] if sire_jp else ''!r} -> sire={sire_cached[:40] if sire_cached else ''!r}"
+        )
     _set_horse_cache_entry(clean_horse_id, existing)
     HORSE_CACHE_DIRTY_IDS.add(clean_horse_id)
 
@@ -395,8 +410,8 @@ def _race_id12_from_jv_key16(race_key_16):
     key = str(race_key_16 or "").strip()
     if not re.fullmatch(r"\d{16}", key):
         return ""
-    # Preserve existing internal race-id shape (12 digits): YYYY + JYO(2) + KAIJI(2) + NICHIJI(2) + RACE(2)
-    return f"{key[0:4]}{key[8:16]}"
+    # Keep the full 16-character JRA-VAN unique identifier
+    return key
 
 
 def _get_jv_race_ids_for_window(start_date, end_date, allow_nk_assist=True):
@@ -555,220 +570,258 @@ def _build_jv_placeholder_race_snapshot(race_id, resolved_source_mode, resolved_
 
 
 def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, resolved_data_engine, progress_callback=None):
-    # DataOption=2 returns changed records since from_date, so backfill a bit
-    # to include races published before the requested weekend window.
-    lookback_days = max(0, int(getattr(config, "JV_NATIVE_FROMDATE_LOOKBACK_DAYS", 14) or 0))
+    # Use DataOption=2 (This Week) with concatenated weekend specs for efficient, fast race card fetching
+    lookback_days = max(0, int(getattr(config, "JV_NATIVE_FROMDATE_LOOKBACK_DAYS", 365) or 0))
     from_date_base = start_date - datetime.timedelta(days=lookback_days)
     from_date = from_date_base.strftime("%Y%m%d000000")
     window_start = start_date
-    spec_queries = [
-        # DataOption=2 specs use a far-past date so JV-Link re-reads all local cached files
-        # for this week on every startup. "00000000000000" and "0" both fail with -112
-        # (invalid fromtime) because month/day 00 fail calendar validation.
-        {"data_spec": "TOKU", "data_option": 2, "max_records": 50000, "from_date": "20200101000000"},
-        {"data_spec": "TCVN", "data_option": 2, "max_records": 50000, "from_date": "20200101000000"},
-        {"data_spec": "RCVN", "data_option": 2, "max_records": 50000, "from_date": "20200101000000"},
-        # DataOption=2 includes same-day finalized results (KakuteiJyuni) ~10-15 min after each
-        # race becomes official. DataOption=1 only publishes finalized results on Monday evening.
-        {"data_spec": "RACE", "data_option": 2, "max_records": 50000, "from_date": "20200101000000"},
-        {"data_spec": "SNPN", "data_option": 2, "max_records": 20000, "from_date": "20200101000000"},
-    ]
 
-    runs = []
+    if progress_callback:
+        progress_callback(
+            f"JV weekend refresher: fetching race cards from {from_date} (lookback={lookback_days} days)"
+        )
+
+    native = load_jv_weekend_races(from_date=from_date, max_records=5000, max_status_wait_seconds=120)
+
+    if progress_callback:
+        if isinstance(native, dict):
+            races_count = len(native.get("races") or [])
+            progress_callback(
+                f"JV weekend refresher done: openCode={native.get('openCode')} "
+                f"records={int(native.get('recordsRead') or 0)} races={races_count}"
+            )
+        else:
+            progress_callback("JV weekend refresher returned non-dict payload")
+
+    logger.info(f"[JV_NATIVE] response type: {type(native).__name__}, keys: {list(native.keys()) if isinstance(native, dict) else 'N/A'}")
+    if isinstance(native, dict):
+        races_list = native.get("races")
+        horses_list = native.get("horses")
+        logger.info(f"[JV_NATIVE] ok={native.get('ok')}, races_type={type(races_list).__name__}, horses_type={type(horses_list).__name__}")
+        logger.info(f"[JV_NATIVE] races_count={len(races_list) if isinstance(races_list, (list, dict)) else 'N/A'}, horses_count={len(horses_list) if isinstance(horses_list, (list, dict)) else 'N/A'}")
+        if isinstance(races_list, (list, dict)) and len(races_list) > 0:
+            first_race = races_list[0] if isinstance(races_list, list) else list(races_list.values())[0]
+            logger.info(f"[JV_NATIVE] first_race_keys={list(first_race.keys()) if isinstance(first_race, dict) else 'N/A'}")
+            if isinstance(first_race, dict) and "entries" in first_race:
+                logger.info(f"[JV_NATIVE] first_race has entries, count={len(first_race.get('entries', []))}")
+        if isinstance(horses_list, (list, dict)) and len(horses_list) > 0:
+            first_horse = horses_list[0] if isinstance(horses_list, list) else list(horses_list.values())[0]
+            logger.info(f"[JV_NATIVE] first_horse_keys={list(first_horse.keys()) if isinstance(first_horse, dict) else 'N/A'}")
+
+    runs = [
+        {
+            "dataSpec": "TOKUTCVNRACERCVNSNPN",
+            "dataOption": 2,
+            "ok": bool(isinstance(native, dict) and native.get("ok")),
+            "recordsRead": int((native or {}).get("recordsRead") or 0) if isinstance(native, dict) else 0,
+            "error": str((native or {}).get("error") or "") if isinstance(native, dict) else "unknown native schedule error",
+            "native": native if isinstance(native, dict) else None,
+        }
+    ]
     races_by_id = {}
 
-    for query in spec_queries:
-        query_from_date = query.get("from_date", from_date)
-        if progress_callback:
-            progress_callback(
-                f"JV read start: spec={query['data_spec']} option={query['data_option']} "
-                f"from={query_from_date} max={query['max_records']}"
-            )
+    logger.info(f"[JV_NATIVE] About to check if should process: is_dict={isinstance(native, dict)}, ok={native.get('ok') if isinstance(native, dict) else 'N/A'}")
 
-        native = run_native_schedule(
-            from_date=query_from_date,
-            data_spec=query["data_spec"],
-            max_records=query["max_records"],
-            max_status_wait_seconds=180,
-            data_option=query["data_option"],
-            skip_set_service_key=False,
-        )
+    if not isinstance(native, dict) or not native.get("ok"):
+        logger.info(f"[JV_NATIVE] Returning early - not dict or not ok")
+        return ([], runs)
 
-        if progress_callback:
-            if isinstance(native, dict):
-                horses_count = len(native.get("horses") or []) if query["data_spec"] in ["TCVN", "RCVN"] else 0
-                races_count = len(native.get("races") or [])
-                progress_callback(
-                    f"JV read done: spec={query['data_spec']} open={native.get('openCode')} "
-                    f"records={int(native.get('recordsRead') or 0)} races={races_count} horses={horses_count}"
-                )
-            else:
-                progress_callback(f"JV read done: spec={query['data_spec']} returned non-dict payload")
+    races_to_process = native.get("races") or []
+    logger.info(f"[JV_NATIVE] Processing {len(races_to_process)} races from native response")
 
-        runs.append(
-            {
-                "dataSpec": query["data_spec"],
-                "dataOption": query["data_option"],
-                "ok": bool(isinstance(native, dict) and native.get("ok")),
-                "recordsRead": int((native or {}).get("recordsRead") or 0) if isinstance(native, dict) else 0,
-                "error": str((native or {}).get("error") or "") if isinstance(native, dict) else "unknown native schedule error",
-                "native": native if isinstance(native, dict) else None,
-            }
-        )
-        if not isinstance(native, dict) or not native.get("ok"):
+    races_skipped = {"non_dict": 0, "bad_id": 0, "jyo_code": 0, "no_date": 0, "bad_date_format": 0, "outside_window": 0}
+
+    for item in races_to_process:
+        if not isinstance(item, dict):
+            races_skipped["non_dict"] += 1
+            continue
+        race_id = str(item.get("raceId") or "").strip()
+        if not re.fullmatch(r"\d{12}", race_id):
+            races_skipped["bad_id"] += 1
+            continue
+        # Keep strict JRA central races only (01-10).
+        try:
+            jyo_cd_int = int(race_id[4:6])
+        except Exception:
+            races_skipped["bad_id"] += 1
+            continue
+        if jyo_cd_int < 1 or jyo_cd_int > 10:
+            races_skipped["jyo_code"] += 1
             continue
 
-        # Process pedigree immediately so HORSE_CACHE is populated before RACE entries are built.
-        if query["data_spec"] in ["TCVN", "RCVN"]:
-            inline_horses = native.get("horses") or []
-            for h in inline_horses:
-                if not isinstance(h, dict):
-                    continue
-                hid = str(h.get("KettoNum") or "").strip()
-                if not hid:
-                    continue
-                sj = _decode_jv_hex(str(h.get("Sire_JP") or "").strip())
-                dj = _decode_jv_hex(str(h.get("Dam_JP") or "").strip())
-                bj = _decode_jv_hex(str(h.get("BMS_JP") or "").strip())
-                update_horse_cache_pedigree(
-                    hid,
-                    str(h.get("Sire_ID") or "").strip(),
-                    str(h.get("Dam_ID") or "").strip(),
-                    str(h.get("BMS_ID") or "").strip(),
-                    sj, dj, bj,
-                )
+        clean_date = str(item.get("date") or "").strip()
+        if not clean_date:
+            races_skipped["no_date"] += 1
+            continue
+        try:
+            d = datetime.datetime.strptime(clean_date, "%Y-%m-%d").date()
+        except Exception:
+            races_skipped["bad_date_format"] += 1
+            continue
+        if not (window_start <= d <= end_date):
+            races_skipped["outside_window"] += 1
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"[JV_NATIVE] race {race_id} date {d} outside window {window_start}..{end_date}")
+            continue
+
+        entries = item.get("entries") or []
+        if not isinstance(entries, list):
+            logger.warning(f"[JV_NATIVE] entries is not list, it's {type(entries)}, converting to []")
+            entries = []
+        row_list = []
+        first_pass_pedigree_filled = 0
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            horse_id = str(e.get("Horse_ID") or "").strip()
+            raw_horse_name = _decode_jv_hex(str(e.get("Horse") or "").strip())
+            horse_name = resolve_cached_or_romanized_horse_name(horse_id, raw_horse_name)
+            # Get pedigree from cache (populated by JV or previous scraping)
+            horse_data = HORSE_CACHE.get(horse_id)
+            if horse_data and horse_data.get("sire_id"):
+                sire = horse_data.get("sire", "")
+                dam = horse_data.get("dam", "")
+                bms = horse_data.get("bms", "")
+                sire_id = horse_data.get("sire_id", "")
+                dam_id = horse_data.get("dam_id", "")
+                bms_id = horse_data.get("bms_id", "")
+                first_pass_pedigree_filled += 1
+            else:
+                sire = ""
+                dam = ""
+                bms = ""
+                sire_id = ""
+                dam_id = ""
+                bms_id = ""
+            row_list.append(
+                {
+                    "BK": str(e.get("BK") or "").strip(),
+                    "PP": str(e.get("PP") or "").strip(),
+                    "Horse": horse_name,
+                    "Finish": str(e.get("Finish") or "").strip(),
+                    "Record": str(e.get("Record") or "").strip(),
+                    "Sire": sire,
+                    "Dam": dam,
+                    "BMS": bms,
+                    "Odds": str(e.get("Odds") or "").strip(),
+                    "Fav": str(e.get("Fav") or "").strip(),
+                    "Horse_ID": horse_id,
+                    "Sire_ID": sire_id,
+                    "Dam_ID": dam_id,
+                    "BMS_ID": bms_id,
+                    "Jockey": _decode_jv_hex(str(e.get("Jockey") or "").strip()),
+                }
+            )
+
+        info = {
+            "race_id": race_id,
+            "clean_date": clean_date,
+            "place": str(item.get("place") or "").strip(),
+            "race_name": _decode_jv_hex(str(item.get("raceName") or "").strip()),
+            "race_number": int(item.get("raceNumber") or 0),
+            "sort_time": str(item.get("sortTime") or "").strip(),
+            "time": str(item.get("time") or "TBA").strip() or "TBA",
+            "kaisai_id": str(item.get("kaisaiId") or "").strip(),
+            "distance": int(item.get("distance") or 0),
+            "surface": str(item.get("surface") or "").strip(),
+            "grade": str(item.get("grade") or "").strip(),
+            "discovery_sources": ["jv"],
+            "discovery_source": "jv",
+            "scrape_source_mode": resolved_source_mode,
+            "data_engine": resolved_data_engine,
+        }
+
+        # JG-derived shells can include race_number=0 records that are not actual race cards.
+        # Keep only real race numbers to avoid confusing UI output.
+        if int(info.get("race_number") or 0) <= 0:
+            continue
+
+        existing = races_by_id.get(race_id)
+        if not existing:
+            if first_pass_pedigree_filled > 0:
+                logger.debug(f"[JV_NATIVE] race {race_id}: first_pass filled {first_pass_pedigree_filled}/{len(row_list)} pedigrees")
+            races_by_id[race_id] = {"info": info, "entries": pd.DataFrame(row_list)}
+            continue
+
+        existing_info = existing.get("info") or {}
+        for field in ["place", "race_name", "sort_time", "time", "kaisai_id", "surface", "grade"]:
+            if not str(existing_info.get(field) or "").strip() and str(info.get(field) or "").strip():
+                existing_info[field] = info[field]
+        if int(existing_info.get("distance") or 0) == 0 and int(info.get("distance") or 0) > 0:
+            existing_info["distance"] = int(info.get("distance") or 0)
+        if int(existing_info.get("race_number") or 0) == 0 and int(info.get("race_number") or 0) > 0:
+            existing_info["race_number"] = int(info.get("race_number") or 0)
+
+        existing_entries = existing.get("entries")
+        existing_len = len(existing_entries) if hasattr(existing_entries, "__len__") else 0
+        if row_list and existing_len == 0:
+            existing["entries"] = pd.DataFrame(row_list)
+
+    logger.info(f"[JV_NATIVE] Processed {len(races_by_id)} races from JV native response, HORSE_CACHE_size={len(HORSE_CACHE)}")
+    logger.info(f"[JV_NATIVE] Skipped races: {races_skipped} (total_processed={len(races_by_id)}, total_input={len(races_to_process)})")
+
+    # Process UM horse master records (pedigree) from the DIFN call merged into native
+    inline_horses = native.get("horses") or []
+    horses_processed = 0
+    horses_with_sire = 0
+    horses_with_decode_fail = 0
+    first_horse_log = True
+    for h in inline_horses:
+        if not isinstance(h, dict):
+            continue
+        hid = str(h.get("KettoNum") or "").strip()
+        if not hid:
+            continue
+        raw_sire_jp = str(h.get("Sire_JP") or "").strip()
+        sj = _decode_jv_hex(raw_sire_jp)
+        dj = _decode_jv_hex(str(h.get("Dam_JP") or "").strip())
+        bj = _decode_jv_hex(str(h.get("BMS_JP") or "").strip())
+
+        # Debug: log first horse to check decode/romanize pipeline
+        if first_horse_log:
             logger.info(
-                f"Inline pedigree ({query['data_spec']}): processed {len(inline_horses)} UM records into HORSE_CACHE"
+                f"[JV_NATIVE] First horse sample: KettoNum={hid}, "
+                f"raw_Sire_JP_len={len(raw_sire_jp)}, first_60chars={raw_sire_jp[:60]}, "
+                f"decoded_sire_jp={sj!r}"
             )
-            save_horse_dict()
+            first_horse_log = False
 
-        for item in (native.get("races") or []):
-            if not isinstance(item, dict):
-                continue
-            race_id = str(item.get("raceId") or "").strip()
-            if not re.fullmatch(r"\d{12}", race_id):
-                continue
-            # Keep strict JRA central races only (01-10).
-            try:
-                jyo_cd_int = int(race_id[4:6])
-            except Exception:
-                continue
-            if jyo_cd_int < 1 or jyo_cd_int > 10:
-                continue
+        if raw_sire_jp and not sj:
+            horses_with_decode_fail += 1
 
-            clean_date = str(item.get("date") or "").strip()
-            if not clean_date:
-                continue
-            try:
-                d = datetime.datetime.strptime(clean_date, "%Y-%m-%d").date()
-            except Exception:
-                continue
-            if not (window_start <= d <= end_date):
-                continue
-
-            entries = item.get("entries") or []
-            if not isinstance(entries, list):
-                entries = []
-            row_list = []
-            for e in entries:
-                if not isinstance(e, dict):
-                    continue
-                horse_id = str(e.get("Horse_ID") or "").strip()
-                raw_horse_name = _decode_jv_hex(str(e.get("Horse") or "").strip())
-                horse_name = resolve_cached_or_romanized_horse_name(horse_id, raw_horse_name)
-                # Get pedigree from cache (populated by JV or previous scraping)
-                horse_data = HORSE_CACHE.get(horse_id)
-                if horse_data:
-                    sire = horse_data.get("sire", "")
-                    dam = horse_data.get("dam", "")
-                    bms = horse_data.get("bms", "")
-                    sire_id = horse_data.get("sire_id", "")
-                    dam_id = horse_data.get("dam_id", "")
-                    bms_id = horse_data.get("bms_id", "")
-                else:
-                    sire = dam = bms = sire_id = dam_id = bms_id = ""
-                row_list.append(
-                    {
-                        "BK": str(e.get("BK") or "").strip(),
-                        "PP": str(e.get("PP") or "").strip(),
-                        "Horse": horse_name,
-                        "Finish": str(e.get("Finish") or "").strip(),
-                        "Record": str(e.get("Record") or "").strip(),
-                        "Sire": sire,
-                        "Dam": dam,
-                        "BMS": bms,
-                        "Odds": str(e.get("Odds") or "").strip(),
-                        "Fav": str(e.get("Fav") or "").strip(),
-                        "Horse_ID": horse_id,
-                        "Sire_ID": sire_id,
-                        "Dam_ID": dam_id,
-                        "BMS_ID": bms_id,
-                        "Jockey": _decode_jv_hex(str(e.get("Jockey") or "").strip()),
-                    }
-                )
-
-            info = {
-                "race_id": race_id,
-                "clean_date": clean_date,
-                "place": str(item.get("place") or "").strip(),
-                "race_name": _decode_jv_hex(str(item.get("raceName") or "").strip()),
-                "race_number": int(item.get("raceNumber") or 0),
-                "sort_time": str(item.get("sortTime") or "").strip(),
-                "time": str(item.get("time") or "TBA").strip() or "TBA",
-                "kaisai_id": str(item.get("kaisaiId") or "").strip(),
-                "distance": int(item.get("distance") or 0),
-                "surface": str(item.get("surface") or "").strip(),
-                "grade": str(item.get("grade") or "").strip(),
-                "discovery_sources": ["jv"],
-                "discovery_source": "jv",
-                "scrape_source_mode": resolved_source_mode,
-                "data_engine": resolved_data_engine,
-            }
-
-            # JG-derived shells can include race_number=0 records that are not actual race cards.
-            # Keep only real race numbers to avoid confusing UI output.
-            if int(info.get("race_number") or 0) <= 0:
-                continue
-
-            existing = races_by_id.get(race_id)
-            if not existing:
-                races_by_id[race_id] = {"info": info, "entries": pd.DataFrame(row_list)}
-                continue
-
-            existing_info = existing.get("info") or {}
-            for field in ["place", "race_name", "sort_time", "time", "kaisai_id", "surface", "grade"]:
-                if not str(existing_info.get(field) or "").strip() and str(info.get(field) or "").strip():
-                    existing_info[field] = info[field]
-            if int(existing_info.get("distance") or 0) == 0 and int(info.get("distance") or 0) > 0:
-                existing_info["distance"] = int(info.get("distance") or 0)
-            if int(existing_info.get("race_number") or 0) == 0 and int(info.get("race_number") or 0) > 0:
-                existing_info["race_number"] = int(info.get("race_number") or 0)
-
-            existing_entries = existing.get("entries")
-            existing_len = len(existing_entries) if hasattr(existing_entries, "__len__") else 0
-            if row_list and existing_len == 0:
-                existing["entries"] = pd.DataFrame(row_list)
-
-        if progress_callback:
-            progress_callback(
-                f"JV merge status: spec={query['data_spec']} merged_unique_races={len(races_by_id)}"
-            )
-
-    # Pedigree is processed inline during TCVN/RCVN spec runs (above), so HORSE_CACHE is already
-    # populated before RACE builds its SE entries. Log a summary for observability.
-    pedigree_runs = [r for r in runs if r.get("dataSpec") in ["TCVN", "RCVN"] and r.get("ok") and isinstance(r.get("native"), dict)]
-    total_um = sum(len(r["native"].get("horses") or []) for r in pedigree_runs)
-    horses_with_sire = sum(
-        1 for r in pedigree_runs
-        for h in (r["native"].get("horses") or [])
-        if isinstance(h, dict) and _decode_jv_hex(str(h.get("Sire_JP") or "").strip())
-    )
+        update_horse_cache_pedigree(
+            hid,
+            str(h.get("Sire_ID") or "").strip(),
+            str(h.get("Dam_ID") or "").strip(),
+            str(h.get("BMS_ID") or "").strip(),
+            sj, dj, bj,
+        )
+        horses_processed += 1
+        if sj:
+            horses_with_sire += 1
+    if horses_processed:
+        save_horse_dict()
+    ped_records_read = int(native.get("pedigreeRecordsRead") or 0)
+    ped_spec_counts = native.get("pedigreeSpecCounts") or {}
+    ped_error = native.get("pedigreeError")
     logger.info(
-        f"Pedigree summary: {len(pedigree_runs)} ok runs, {total_um} UM records, "
-        f"{horses_with_sire} with non-empty Sire_JP, HORSE_CACHE size={len(HORSE_CACHE)}"
+        f"[JV_NATIVE] Pedigree call (DIFN, Option=1): inline_horses_len={len(inline_horses)}, "
+        f"pedigreeRecordsRead={ped_records_read}, specCounts={ped_spec_counts}"
+    )
+    if ped_error:
+        logger.warning(f"[JV_NATIVE] Pedigree call error: {ped_error}")
+    logger.info(
+        f"[JV_NATIVE] Pedigree processed: {horses_processed} UM records, "
+        f"{horses_with_sire} with Sire_JP, {horses_with_decode_fail} decode fails, "
+        f"HORSE_CACHE size={len(HORSE_CACHE)}"
     )
 
     # Backfill pedigree into already-built entry rows now that HORSE_CACHE is populated
+    logger.info(f"[JV_NATIVE] Starting pedigree backfill with HORSE_CACHE size={len(HORSE_CACHE)}")
+    pedigree_fill_count = 0
+    backfill_checked = 0
+    backfill_matched = 0
+    backfill_sample_checked = []
     for race in races_by_id.values():
         df = race.get("entries")
         if df is None or not hasattr(df, "iterrows") or df.empty:
@@ -779,23 +832,36 @@ def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, r
             hid = str(row.get("Horse_ID") or "").strip()
             if not hid:
                 continue
+            backfill_checked += 1
             cached = HORSE_CACHE.get(hid)
             if not cached:
+                if len(backfill_sample_checked) < 3:
+                    backfill_sample_checked.append(f"Horse_ID={hid} not in cache")
                 continue
+            backfill_matched += 1
             if not str(row.get("Sire") or "").strip():
                 row["Sire"] = cached.get("sire", "")
                 row["Sire_ID"] = cached.get("sire_id", "")
                 updated = True
+                pedigree_fill_count += 1
             if not str(row.get("Dam") or "").strip():
                 row["Dam"] = cached.get("dam", "")
                 row["Dam_ID"] = cached.get("dam_id", "")
                 updated = True
+                pedigree_fill_count += 1
             if not str(row.get("BMS") or "").strip():
                 row["BMS"] = cached.get("bms", "")
                 row["BMS_ID"] = cached.get("bms_id", "")
                 updated = True
+                pedigree_fill_count += 1
             if updated:
                 race["entries"] = pd.DataFrame(rows)
+    logger.info(
+        f"[JV_NATIVE] Backfill stats: checked={backfill_checked}, matched_cache={backfill_matched}, "
+        f"filled={pedigree_fill_count}, samples={backfill_sample_checked}"
+    )
+
+    logger.info(f"[JV_NATIVE] Pedigree backfill completed: {pedigree_fill_count} fields filled from cache")
 
     races = list(races_by_id.values())
     races.sort(key=lambda x: (
@@ -813,6 +879,70 @@ def _load_jv_native_race_snapshots(start_date, end_date, resolved_source_mode, r
         if errors:
             meta["error"] = errors[0]
     return races, meta
+
+
+def load_jv_master_data_to_cache(is_initial=False, progress_callback=None):
+    """
+    Load and process master racehorse data (UM records + pedigree) into HORSE_CACHE.
+
+    This function should be called:
+    - Once on first setup with is_initial=True (historical bootstrap via Option 4)
+    - Periodically (weekly/monthly) with is_initial=False (incremental updates via Option 1)
+
+    Args:
+        is_initial: If True, performs a full historical load (Option 4). If False, uses incremental updates (Option 1).
+        progress_callback: Optional callback function for progress messages.
+
+    Returns:
+        dict with status, record counts, and error info.
+    """
+    if progress_callback:
+        mode = "initial bootstrap" if is_initial else "incremental update"
+        progress_callback(f"JV master data: starting {mode}")
+
+    result = load_jv_master_data(is_initial=is_initial, max_records=200000 if is_initial else 50000)
+
+    if progress_callback:
+        if result.get("ok"):
+            horses_count = len(result.get("horses") or [])
+            progress_callback(
+                f"JV master data: openCode={result.get('openCode')} "
+                f"recordsRead={int(result.get('recordsRead') or 0)} UM records={horses_count}"
+            )
+        else:
+            progress_callback(f"JV master data failed: {result.get('error')}")
+
+    if not result.get("ok"):
+        return {"ok": False, "error": result.get("error")}
+
+    inline_horses = result.get("horses") or []
+    processed = 0
+    for h in inline_horses:
+        if not isinstance(h, dict):
+            continue
+        hid = str(h.get("KettoNum") or "").strip()
+        if not hid:
+            continue
+        sj = _decode_jv_hex(str(h.get("Sire_JP") or "").strip())
+        dj = _decode_jv_hex(str(h.get("Dam_JP") or "").strip())
+        bj = _decode_jv_hex(str(h.get("BMS_JP") or "").strip())
+        update_horse_cache_pedigree(
+            hid,
+            str(h.get("Sire_ID") or "").strip(),
+            str(h.get("Dam_ID") or "").strip(),
+            str(h.get("BMS_ID") or "").strip(),
+            sj, dj, bj,
+        )
+        processed += 1
+
+    save_horse_dict()
+    logger.info(f"JV master data: processed {processed} UM records into HORSE_CACHE")
+
+    return {
+        "ok": True,
+        "recordsProcessed": processed,
+        "lastFileTimestamp": result.get("lastFileTimestamp"),
+    }
 
 
 def _is_placeholder_numeric_text(value):
@@ -1190,6 +1320,7 @@ def format_entry_data(entry_list, predictions=None):
 
 def fetch_weekend_timeline(mode="load", progress_callback=None, source_mode=None, data_engine=None):
     today = datetime.datetime.now(ZoneInfo("Asia/Tokyo")).date()
+    logger.info(f"[FETCH_WEEKEND] Starting with today={today}, mode={mode}, data_engine={data_engine}")
     lookahead_days = max(1, int(getattr(config, "UPCOMING_LOOKAHEAD_DAYS", 28)))
     end_date = today + datetime.timedelta(days=lookahead_days)
     resolved_data_engine = normalize_data_engine(data_engine)
@@ -1211,14 +1342,18 @@ def fetch_weekend_timeline(mode="load", progress_callback=None, source_mode=None
 
     if resolved_data_engine == "jv":
         lookback_days = max(0, int(getattr(config, "JV_DISCOVERY_LOOKBACK_DAYS", 7)))
+        # Expand window significantly for JV since it returns all races in database
+        # Allow races from the past week and far into the future (365+ days)
         jv_start_date = today - datetime.timedelta(days=lookback_days)
+        jv_end_date = today + datetime.timedelta(days=365)  # One full year ahead
+        logger.info(f"[FETCH_WEEKEND] JV mode: window={jv_start_date}..{jv_end_date} (lookback={lookback_days}, lookahead=365)")
         if progress_callback:
             progress_callback(
-                f"JV config: window={jv_start_date}..{end_date} lookbackDays={lookback_days} mode={mode}"
+                f"JV config: window={jv_start_date}..{jv_end_date} lookbackDays={lookback_days} mode={mode}"
             )
         native_races, native_meta = _load_jv_native_race_snapshots(
             start_date=jv_start_date,
-            end_date=end_date,
+            end_date=jv_end_date,
             resolved_source_mode=resolved_source_mode,
             resolved_data_engine=resolved_data_engine,
             progress_callback=progress_callback,

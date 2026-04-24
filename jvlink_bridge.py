@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -120,6 +121,55 @@ def get_dataspec_presets():
             "from_date accepts YYYYMMDD or YYYYMMDDHHMMSS strings.",
         ],
     }
+
+
+def _ensure_metadata_table():
+    """Create jv_metadata table if it doesn't exist."""
+    db_file = config.JRA_VAN_DB_FILE
+    db_file.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS jv_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def get_last_file_timestamp(key="master_data_last_timestamp"):
+    """Retrieve the last JVOpen lastFileTimestamp for a given function."""
+    try:
+        _ensure_metadata_table()
+        db_file = config.JRA_VAN_DB_FILE
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM jv_metadata WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def save_last_file_timestamp(timestamp, key="master_data_last_timestamp"):
+    """Save the JVOpen lastFileTimestamp for continuous accumulation."""
+    try:
+        _ensure_metadata_table()
+        db_file = config.JRA_VAN_DB_FILE
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO jv_metadata (key, value) VALUES (?, ?)",
+            (key, timestamp),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Warning: failed to save timestamp: {e}")
 
 
 def get_bridge_status():
@@ -483,7 +533,7 @@ def run_native_schedule(
     service_key=None,
     sid=None,
     data_option=1,
-    skip_set_service_key=False,
+    skip_set_service_key=True,
 ):
     ps32 = get_32bit_powershell_path()
     if not Path(ps32).exists():
@@ -673,3 +723,105 @@ def run_capability_scan(
             "When observedRecordSpecs remains narrow (e.g., HC only), this often indicates account/feed scope rather than bridge failure.",
         ],
     }
+
+
+def load_jv_weekend_races(from_date, max_records=5000, max_status_wait_seconds=120):
+    """
+    Fetch upcoming weekend race cards, entries, and pedigree via two separate JVOpen calls.
+
+    Call 1: TOKURACESNPN DataOption=2 (This Week / 非蓄積系)
+        — gets this week's races with horse entries (RA+SE).
+    Call 2: DIFN DataOption=1 (Normal / 蓄積系)
+        — gets UM horse master records (pedigree) since from_date.
+
+    Only DIFN (diff) returns UM records. RCVN/TCVN return RC coverage but no UM.
+    BLDN returns HN/SK but no UM. DIFN is the only spec empirically returning pedigree.
+
+    Mixing accumulating and non-accumulating specs causes JV-Link to revert to full historical
+    cache (thousands of races without entries), so they must be separate calls.
+
+    Returns: merged dict with races, entries, and horses (pedigree).
+    """
+    race_result = run_native_schedule(
+        from_date=from_date,
+        data_spec="TOKURACESNPN",
+        max_records=max_records,
+        max_status_wait_seconds=max_status_wait_seconds,
+        data_option=2,
+        skip_set_service_key=True,
+    )
+
+    if not isinstance(race_result, dict) or not race_result.get("ok"):
+        return race_result
+
+    pedigree_result = run_native_schedule(
+        from_date=from_date,
+        data_spec="DIFN",
+        max_records=max_records,
+        max_status_wait_seconds=max_status_wait_seconds,
+        data_option=1,
+        skip_set_service_key=True,
+    )
+
+    if isinstance(pedigree_result, dict) and pedigree_result.get("ok"):
+        horses = pedigree_result.get("horses") or []
+        race_result["horses"] = horses
+        race_result["pedigreeRecordsRead"] = int(pedigree_result.get("recordsRead") or 0)
+        race_result["pedigreeSpecCounts"] = pedigree_result.get("specCounts") or {}
+    else:
+        race_result["horses"] = []
+        race_result["pedigreeError"] = (pedigree_result or {}).get("error") if isinstance(pedigree_result, dict) else "unknown"
+
+    return race_result
+
+
+def load_jv_master_data(from_date=None, is_initial=False, max_records=200000, max_status_wait_seconds=3600):
+    """
+    Build/update the master racehorse database with complete pedigree tree.
+
+    ARCHITECTURE NOTE: This function is SEPARATE from load_jv_weekend_races().
+    - Master data: Accumulating (蓄積系) - historical database of 100,000+ horses with pedigrees
+    - Weekend races: Non-accumulating (非蓄積系) - this week's races with latest updates
+
+    For first run (is_initial=True): Uses DataOption=4 (Setup/Silent) to bootstrap all historical data.
+      Option=4 suppresses CD-ROM dialogs and downloads entire DIFN/RACE/BLDN file archives.
+      Downloads decades of data: complete breeding family tree, all horse master records, historical races.
+
+    For subsequent runs: Uses DataOption=1 (Normal) with lastFileTimestamp tracking for daily incremental updates.
+
+    Args:
+        from_date: If None, retrieves from saved lastFileTimestamp. If is_initial=True, ignored.
+        is_initial: If True, uses DataOption=4 and ignores saved timestamp for full historical bootstrap.
+        max_records: Max records per run (default 200000 for historical bootstrap).
+        max_status_wait_seconds: Timeout for downloads (expect 30-60 min for initial Option=4).
+
+    Returns: dict with complete UM records, BLDN pedigree data, metadata, and updated lastFileTimestamp.
+    """
+    if is_initial:
+        # Initial bootstrap: Option 4 (Setup/Silent) downloads ALL historical data without dialogs
+        effective_from_date = "20100101000000"
+        effective_option = 4
+    else:
+        # Incremental updates: Option 1 (Normal) with timestamp tracking
+        if not from_date:
+            saved_timestamp = get_last_file_timestamp("master_data_last_timestamp")
+            from_date = saved_timestamp or "20240101000000"
+        effective_from_date = from_date
+        effective_option = 1
+
+    # Use complete concatenated spec for accumulating (蓄積系) data
+    # Includes: TOKU (setup), RACE (historical races), DIFN (differential UM), BLDN (breeding tree),
+    # SLOP (turf), WOOD (woodchip), YSCH (schedule), SNPN (new format snap), HOSN (new format horse market)
+    result = run_native_schedule(
+        from_date=effective_from_date,
+        data_spec="TOKURACEDIFNBLDNSLOPWOODYSCHSNPN",
+        max_records=max_records,
+        max_status_wait_seconds=max_status_wait_seconds,
+        data_option=effective_option,
+        skip_set_service_key=True,
+    )
+
+    if result.get("ok") and result.get("lastFileTimestamp"):
+        save_last_file_timestamp(result["lastFileTimestamp"], "master_data_last_timestamp")
+
+    return result
