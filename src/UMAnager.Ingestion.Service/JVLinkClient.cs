@@ -51,10 +51,51 @@ public sealed class JVLinkClient : IDisposable
     }
 
     /// <summary>
-    /// Open a data request and wait for download completion.
+    /// Open a data request and wait for download completion with retry logic.
+    /// Automatically retries on -502 (Download Failure) with exponential backoff.
     /// Returns when downloadCount files have been downloaded.
     /// </summary>
     public async Task<JVOpenResult> OpenAndWaitForDownloadAsync(
+        string dataSpec,
+        string fromTime,
+        int option,
+        CancellationToken cancellationToken = default)
+    {
+        const int maxRetries = 3;
+        int retryDelayMs = 30_000; // Start with 30 seconds
+
+        for (int attempt = 0; attempt < maxRetries; attempt++)
+        {
+            try
+            {
+                return await OpenAndWaitForDownloadInternalAsync(dataSpec, fromTime, option, cancellationToken);
+            }
+            catch (JVLinkException ex) when (ex.ErrorCode == -502)
+            {
+                attempt++;
+                if (attempt >= maxRetries)
+                {
+                    _logger.LogError("Download failed with -502 after {Retries} attempts", maxRetries);
+                    throw;
+                }
+
+                _logger.LogWarning(
+                    "Download failed with -502 (network error). Retrying in {DelaySeconds}s (attempt {Attempt}/{Max})",
+                    retryDelayMs / 1000, attempt, maxRetries);
+
+                await Task.Delay(retryDelayMs, cancellationToken);
+                retryDelayMs *= 2; // Exponential backoff
+            }
+        }
+
+        throw new JVLinkException(-1, "Unexpected retry loop exit");
+    }
+
+    /// <summary>
+    /// Internal implementation of OpenAndWaitForDownload (called with retry wrapper).
+    /// Returns when downloadCount files have been downloaded.
+    /// </summary>
+    private async Task<JVOpenResult> OpenAndWaitForDownloadInternalAsync(
         string dataSpec,
         string fromTime,
         int option,
@@ -120,7 +161,7 @@ public sealed class JVLinkClient : IDisposable
 
     /// <summary>
     /// Read the next record. Returns byte array, filename, and status code.
-    /// Status: > 0 = bytes read, -1 = file boundary, 0 = EOF, < -1 = error
+    /// Status: > 0 = bytes read, -1 = file boundary, 0 = EOF, -502 = download failure (retryable), < -1 = other error
     /// </summary>
     public JVGetsResult ReadRecord()
     {
@@ -134,7 +175,8 @@ public sealed class JVLinkClient : IDisposable
 
             int result = (int)_jvLink!.JVGets(buffData, buffSize, fileName);
 
-            if (result < -1)
+            // -502 is retryable; other negative codes are errors
+            if (result < -1 && result != -502)
                 throw new JVLinkException(result, $"JVGets failed with code {result}");
 
             // Trim the buffer to actual size returned

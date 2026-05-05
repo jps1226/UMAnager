@@ -174,6 +174,50 @@ public sealed class SyncStateRepository
     }
 
     /// <summary>
+    /// Insert or update a horse record (upsert).
+    /// If horse_id exists, update with new data. Otherwise, insert.
+    /// </summary>
+    public async Task InsertOrUpdateHorseAsync(Horse horse)
+    {
+        try
+        {
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            const string sql = @"
+                INSERT INTO horses (horse_id, horse_name_japanese, horse_name_romaji, birth_year, sire_id, dam_id, broodmare_sire_id, data_source, last_updated)
+                VALUES (@horseId, @nameJp, @nameRomaji, @birthYear, @sireId, @damId, @bmsId, @dataSource, @lastUpdated)
+                ON CONFLICT (horse_id) DO UPDATE SET
+                    horse_name_japanese = COALESCE(EXCLUDED.horse_name_japanese, horses.horse_name_japanese),
+                    horse_name_romaji = COALESCE(EXCLUDED.horse_name_romaji, horses.horse_name_romaji),
+                    birth_year = COALESCE(EXCLUDED.birth_year, horses.birth_year),
+                    sire_id = COALESCE(EXCLUDED.sire_id, horses.sire_id),
+                    dam_id = COALESCE(EXCLUDED.dam_id, horses.dam_id),
+                    broodmare_sire_id = COALESCE(EXCLUDED.broodmare_sire_id, horses.broodmare_sire_id),
+                    data_source = EXCLUDED.data_source,
+                    last_updated = EXCLUDED.last_updated";
+
+            await using var cmd = new NpgsqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@horseId", horse.HorseId ?? "");
+            cmd.Parameters.AddWithValue("@nameJp", horse.HorseNameJapanese ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@nameRomaji", horse.HorseNameRomaji ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@birthYear", horse.BirthYear ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@sireId", horse.SireId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@damId", horse.DamId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@bmsId", horse.BroodmareSireId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@dataSource", horse.DataSource ?? "");
+            cmd.Parameters.AddWithValue("@lastUpdated", horse.LastUpdated ?? DateTime.UtcNow);
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to insert/update horse {HorseId}", horse.HorseId);
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Create the database schema if it doesn't exist.
     /// Reads from database.sql in the src folder.
     /// </summary>

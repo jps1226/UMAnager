@@ -77,15 +77,15 @@ public sealed class Worker : BackgroundService
 
             _logger.LogInformation("Starting data sync");
 
-            // Determine which data pulls to perform
+            // Phase 2: Bootstrap horse master data
             bool needsBootstrap = _syncStateRepo.NeedsBootstrap(syncState);
-            // int bootstrapOption = needsBootstrap ? 4 : 0; // option 4 = setup, 0 = normal (Phase 2)
-            // int weeklyOption = 2; // option 2 = this week (Phase 3)
+            if (needsBootstrap)
+            {
+                _logger.LogInformation("Performing master data bootstrap (Option=4). User interaction may be required.");
+                await PerformBootstrapAsync(syncState, cancellationToken);
+            }
 
-            // TODO: Phase 2 - Bootstrap horse master (DIFN) with option=(needsBootstrap ? 4 : 1)
-            // TODO: Phase 3 - Pull weekly races (TOKURACESNPN) with option=2
-            // TODO: Parse RA, SE, CK records and insert into database
-            // TODO: Update sync state timestamp on success
+            // Phase 3: TODO - Pull weekly races (TOKURACETCOVSNPN) with option=2
 
             _logger.LogInformation("Data sync complete");
         }
@@ -101,5 +101,106 @@ public sealed class Worker : BackgroundService
             await _syncStateRepo.RecordErrorAsync($"Sync error: {ex.Message}");
             throw;
         }
+    }
+
+    /// <summary>
+    /// Phase 2: Bootstrap horse master data (UM records) from JRA-VAN.
+    /// Opens DIFN dataspec with Option=4 (setup, downloads all historical data).
+    /// Reads UM records, parses them, and inserts into horses table.
+    /// </summary>
+    private async Task PerformBootstrapAsync(SyncState syncState, CancellationToken cancellationToken)
+    {
+        const string dataSpec = "DIFN";
+        const int bootstrapOption = 4; // Option 4: setup mode, downloads all data
+        string fromTime = "19860101000000"; // JRA-VAN era start (1986-01-01)
+
+        _logger.LogInformation("Opening {DataSpec} with Option={Option} (bootstrap mode)", dataSpec, bootstrapOption);
+
+        var openResult = await _jvLink.OpenAndWaitForDownloadAsync(dataSpec, fromTime, bootstrapOption, cancellationToken);
+        _logger.LogInformation(
+            "Download complete: readCount={ReadCount}, downloadCount={DownloadCount}, lastFileTimestamp={LastFileTimestamp}",
+            openResult.ReadCount, openResult.DownloadCount, openResult.LastFileTimestamp);
+
+        // Read UM records in a loop
+        int umRecordsRead = 0;
+        int umRecordsInserted = 0;
+        int umRecordsFailed = 0;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var result = _jvLink.ReadRecord();
+
+            // Status codes:
+            // > 0 = bytes read
+            // -1 = file boundary (move to next file)
+            // 0 = EOF (done reading)
+            if (result.StatusCode == 0)
+            {
+                _logger.LogInformation("EOF reached");
+                break;
+            }
+
+            if (result.StatusCode == -1)
+            {
+                _logger.LogDebug("File boundary encountered");
+                continue;
+            }
+
+            if (result.StatusCode <= -2)
+            {
+                _logger.LogError("Error reading record: status={Status}", result.StatusCode);
+                continue;
+            }
+
+            // Decode the raw bytes as CP932 (Shift-JIS)
+            string recordLine = JVEncoding.DecodeRecord(result.Data);
+
+            // Try to parse as UM record
+            var horse = UMRecordParser.ParseUMRecord(recordLine);
+            if (horse == null)
+            {
+                umRecordsFailed++;
+                continue;
+            }
+
+            // Validate pedigree completeness
+            if (!UMRecordParser.HasCompletePedigree(horse))
+            {
+                _logger.LogWarning(
+                    "Incomplete pedigree for horse {HorseId}: sire={Sire}, dam={Dam}, bms={BMS}",
+                    horse.HorseId, horse.SireId, horse.DamId, horse.BroodmareSireId);
+            }
+
+            // Insert or update horse in database
+            try
+            {
+                await _syncStateRepo.InsertOrUpdateHorseAsync(horse);
+                umRecordsInserted++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to insert horse {HorseId}", horse.HorseId);
+                umRecordsFailed++;
+            }
+
+            umRecordsRead++;
+
+            // Log progress every 500 records
+            if (umRecordsRead % 500 == 0)
+                _logger.LogInformation("Progress: {ReadCount} records read, {InsertedCount} inserted", umRecordsRead, umRecordsInserted);
+        }
+
+        _logger.LogInformation(
+            "Bootstrap complete: {ReadCount} records read, {InsertedCount} inserted, {FailedCount} failed",
+            umRecordsRead, umRecordsInserted, umRecordsFailed);
+
+        // Update sync state with new timestamp
+        if (!string.IsNullOrEmpty(openResult.LastFileTimestamp))
+        {
+            await _syncStateRepo.SaveTimestampAsync("UM", openResult.LastFileTimestamp);
+            _logger.LogInformation("Sync state updated: lastFileTimestamp={Timestamp}", openResult.LastFileTimestamp);
+        }
+
+        _jvLink.Close();
     }
 }
