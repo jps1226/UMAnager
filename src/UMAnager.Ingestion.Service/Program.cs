@@ -18,6 +18,9 @@ try
 
     var builder = Host.CreateApplicationBuilder(args);
 
+    // Load local config (appsettings.local.json) if it exists, overriding appsettings.json values
+    builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: false);
+
     // Configure Serilog as the logging provider
     builder.Logging.ClearProviders();
     builder.Services.AddSerilog();

@@ -3,6 +3,9 @@ using UMAnager.Common;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Load local config (appsettings.local.json) if it exists, overriding appsettings.json values
+builder.Configuration.AddJsonFile("appsettings.local.json", optional: true, reloadOnChange: false);
+
 // Add services
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
