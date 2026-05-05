@@ -1,0 +1,34 @@
+# Build and IDE
+bin/
+obj/
+.vs/
+.vscode/
+*.user
+*.sln.iml
+*.swp
+*.swo
+
+# Local development
+appsettings.local.json
+appsettings.*.json
+!appsettings.json
+.env
+.env.local
+
+# Database and logs
+*.log
+C:\Logs\
+*.db
+*.sqlite
+
+# OS
+.DS_Store
+Thumbs.db
+
+# JRA-VAN sensitive data
+JVLinkServiceKey.txt
+service_key.txt
+
+# Runtime/temp
+*.tmp
+*.temp
