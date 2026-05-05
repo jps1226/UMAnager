@@ -8,6 +8,10 @@ obj/
 *.swp
 *.swo
 
+# Project documentation
+CLAUDE.md
+CORRECTIONS.md
+
 # Local development
 appsettings.local.json
 appsettings.*.json

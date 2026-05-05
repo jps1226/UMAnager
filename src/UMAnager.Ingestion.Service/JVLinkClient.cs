@@ -70,7 +70,7 @@ public sealed class JVLinkClient : IDisposable
             {
                 return await OpenAndWaitForDownloadInternalAsync(dataSpec, fromTime, option, cancellationToken);
             }
-            catch (JVLinkException ex) when (ex.ErrorCode == -502)
+            catch (JVLinkException ex) when (ex.ErrorCode == JVLinkErrorCode.CommunicationError)
             {
                 attempt++;
                 if (attempt >= maxRetries)

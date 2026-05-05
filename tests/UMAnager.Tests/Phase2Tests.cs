@@ -2,13 +2,23 @@ namespace UMAnager.Tests;
 
 using System.Text;
 using UMAnager.Common;
-using UMAnager.Ingestion.Service;
+
+// Static constructor to register encoding provider (needed for CP932 on some systems)
+[CollectionDefinition("Phase2 Tests", DisableParallelization = true)]
+public class Phase2TestCollection
+{
+    static Phase2TestCollection()
+    {
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+    }
+}
 
 /// <summary>
 /// Unit tests for Phase 2: Master Data Bootstrap (UM Records)
 /// Tests UM record parsing, Shift-JIS decoding, and pedigree validation.
 /// Does NOT require JRA-VAN connection or real data.
 /// </summary>
+[Collection("Phase2 Tests")]
 public class Phase2Tests
 {
     /// <summary>
@@ -18,8 +28,9 @@ public class Phase2Tests
     public void DecodeRecord_ValidCP932Bytes_DecodesSuccessfully()
     {
         // Arrange: Japanese characters encoded as CP932
-        // "競走" (racehorse) in CP932: 0x8AB88E9F
-        byte[] cp932Bytes = { 0x8A, 0xB8, 0x8E, 0x9F };
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+        // "競走" (racehorse) - generate bytes to ensure they're correct
+        byte[] cp932Bytes = Encoding.GetEncoding(932).GetBytes("競走");
 
         // Act
         string result = JVEncoding.DecodeRecord(cp932Bytes);
@@ -35,6 +46,7 @@ public class Phase2Tests
     public void DecodeRecord_WithPadding_TrimsPadding()
     {
         // Arrange: CP932 encoded "馬" (horse) with null byte padding
+        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
         byte[] cp932Bytes = Encoding.GetEncoding(932).GetBytes("馬\0\0\0");
 
         // Act
@@ -67,12 +79,12 @@ public class Phase2Tests
         // This simulates a real UM record structure
         string umRecord = CreateMockUMRecord(
             horseId: "0000000001",
-            horseName: "テスト馬    ",
-            horseRomaji: "Test Horse  ",
+            horseName: "テスト馬",
+            horseRomaji: "Test Horse",
             birthYear: "2020",
-            sireId: "0000000010  ",
-            damId: "0000000011  ",
-            bmsId: "0000000012  "
+            sireId: "0000000010",
+            damId: "0000000011",
+            bmsId: "0000000012"
         );
 
         // Act
@@ -81,8 +93,8 @@ public class Phase2Tests
         // Assert
         Assert.NotNull(horse);
         Assert.Equal("0000000001", horse.HorseId);
-        Assert.Equal("テスト馬", horse.HorseNameJapanese);
-        Assert.Equal("Test Horse", horse.HorseNameRomaji);
+        Assert.Equal("テスト馬", horse.JapaneseName);
+        Assert.Equal("Test Horse", horse.RomajiName);
         Assert.Equal(2020, horse.BirthYear);
         Assert.Equal("0000000010", horse.SireId);
         Assert.Equal("0000000011", horse.DamId);
@@ -99,12 +111,12 @@ public class Phase2Tests
         // Arrange: UM record with empty pedigree fields
         string umRecord = CreateMockUMRecord(
             horseId: "0000000002",
-            horseName: "新馬        ",
-            horseRomaji: "Debut Horse ",
+            horseName: "新馬",
+            horseRomaji: "Debut Horse",
             birthYear: "2024",
-            sireId: "          ",  // Empty
-            damId: "          ",   // Empty
-            bmsId: "          "    // Empty
+            sireId: "",  // Empty
+            damId: "",   // Empty
+            bmsId: ""    // Empty
         );
 
         // Act

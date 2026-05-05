@@ -4,7 +4,20 @@ using System.Text;
 
 public static class JVEncoding
 {
-    private static readonly Encoding Cp932 = Encoding.GetEncoding(932);
+    private static Encoding? _cp932;
+
+    private static Encoding Cp932
+    {
+        get
+        {
+            if (_cp932 == null)
+            {
+                System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+                _cp932 = Encoding.GetEncoding(932);
+            }
+            return _cp932;
+        }
+    }
 
     /// <summary>
     /// Decode raw Shift-JIS (CP932) bytes from JV-Link to a readable string.

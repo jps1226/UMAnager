@@ -199,14 +199,14 @@ public sealed class SyncStateRepository
 
             await using var cmd = new NpgsqlCommand(sql, conn);
             cmd.Parameters.AddWithValue("@horseId", horse.HorseId ?? "");
-            cmd.Parameters.AddWithValue("@nameJp", horse.HorseNameJapanese ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@nameRomaji", horse.HorseNameRomaji ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@birthYear", horse.BirthYear ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@sireId", horse.SireId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@damId", horse.DamId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@bmsId", horse.BroodmareSireId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@nameJp", (object?)horse.JapaneseName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@nameRomaji", (object?)horse.RomajiName ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@birthYear", (object?)horse.BirthYear ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@sireId", (object?)horse.SireId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@damId", (object?)horse.DamId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@bmsId", (object?)horse.BroodmareSireId ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@dataSource", horse.DataSource ?? "");
-            cmd.Parameters.AddWithValue("@lastUpdated", horse.LastUpdated ?? DateTime.UtcNow);
+            cmd.Parameters.AddWithValue("@lastUpdated", (object?)horse.LastUpdated ?? DateTime.UtcNow);
 
             await cmd.ExecuteNonQueryAsync();
         }

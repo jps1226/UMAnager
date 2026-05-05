@@ -1,6 +1,4 @@
-namespace UMAnager.Ingestion.Service;
-
-using UMAnager.Common;
+namespace UMAnager.Common;
 
 /// <summary>
 /// Parser for UM (Horse Master) records from JRA-VAN.
@@ -55,8 +53,8 @@ public static class UMRecordParser
             return new Horse
             {
                 HorseId = record["HorseId"],
-                HorseNameJapanese = string.IsNullOrWhiteSpace(record["HorseName"]) ? null : record["HorseName"],
-                HorseNameRomaji = string.IsNullOrWhiteSpace(record["HorseRomaji"]) ? null : record["HorseRomaji"],
+                JapaneseName = string.IsNullOrWhiteSpace(record["HorseName"]) ? null : record["HorseName"],
+                RomajiName = string.IsNullOrWhiteSpace(record["HorseRomaji"]) ? null : record["HorseRomaji"],
                 BirthYear = birthYear > 0 ? birthYear : null,
                 SireId = string.IsNullOrWhiteSpace(record["SireId"]) ? null : record["SireId"],
                 DamId = string.IsNullOrWhiteSpace(record["DamId"]) ? null : record["DamId"],
