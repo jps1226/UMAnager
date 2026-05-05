@@ -16,14 +16,23 @@ public record Horse
 public record Race
 {
     public string RaceId { get; init; } = string.Empty;
-    public DateOnly RaceDate { get; init; }
+    public string? RaceKey { get; init; }  // 16-char SDK key: YYYYMMDDJJKKHHRR
+    public int RaceYear { get; init; }
+    public int RaceMonth { get; init; }
+    public int RaceDay { get; init; }
     public string? TrackCode { get; init; }
+    public int Round { get; init; }
+    public int DayOfRound { get; init; }
     public int RaceNumber { get; init; }
+    public DateTime? RaceDate { get; init; }
     public string? JapaneseName { get; init; }
     public int Distance { get; init; }
     public string? Surface { get; init; }
     public string? Grade { get; init; }
-    public string? Conditions { get; init; }
+    public string? Conditions2yo { get; init; }
+    public string? Conditions3yo { get; init; }
+    public string? Conditions4yo { get; init; }
+    public string? Conditions5plus { get; init; }
     public DateTime? LastUpdated { get; init; }
 }
 
@@ -35,7 +44,9 @@ public record RaceEntry
     public int? PostPosition { get; init; }
     public int? FrameNumber { get; init; }
     public int? HorseWeight { get; init; }
+    public string? JockeyCode { get; init; }
     public string? JockeyName { get; init; }
+    public string? TrainerCode { get; init; }
     public string? TrainerName { get; init; }
     public decimal? MorningLineOdds { get; init; }
     public decimal? LatestOdds { get; init; }

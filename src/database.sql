@@ -24,15 +24,24 @@ CREATE TABLE IF NOT EXISTS horses (
 
 -- Race metadata
 CREATE TABLE IF NOT EXISTS races (
-    race_id VARCHAR(16) PRIMARY KEY,  -- YYYYMMDDPPNNNNNN
-    race_date DATE,
-    track_code VARCHAR(10),
+    race_id VARCHAR(16) PRIMARY KEY,  -- Composite key for querying: concatenate year+month+day+track+round+day+race_number
+    race_key VARCHAR(16) NOT NULL UNIQUE,  -- 16-char SDK key: YYYYMMDDJJKKHHRR (for JVRTOpen, JVMVPlay calls)
+    race_year INT,
+    race_month INT,
+    race_day INT,
+    track_code VARCHAR(2),
+    round INT,
+    day_of_round INT,
     race_number INT,
+    race_date DATE,
     race_name_japanese TEXT,
     distance INT,                     -- meters
-    surface VARCHAR(10),              -- 'turf' or 'dirt'
-    grade VARCHAR(10),                -- 'G1', 'G2', 'listed', 'open', etc.
-    race_conditions TEXT,             -- age/sex restrictions
+    surface VARCHAR(2),               -- turf vs dirt code per JRA-VAN spec
+    grade VARCHAR(1),                 -- G1/G2/listed/open per spec
+    conditions_2yo TEXT,              -- age-specific conditions (3 bytes)
+    conditions_3yo TEXT,
+    conditions_4yo TEXT,
+    conditions_5plus TEXT,
     last_updated TIMESTAMPTZ
 );
 
@@ -44,7 +53,9 @@ CREATE TABLE IF NOT EXISTS race_entries (
     post_position INT,
     frame_number INT,
     horse_weight INT,
+    jockey_code VARCHAR(5),
     jockey_name TEXT,
+    trainer_code VARCHAR(5),
     trainer_name TEXT,
     morning_line_odds DECIMAL(10, 2),
     latest_odds DECIMAL(10, 2),
@@ -53,14 +64,15 @@ CREATE TABLE IF NOT EXISTS race_entries (
     payoff_win DECIMAL(10, 2),
     payoff_place DECIMAL(10, 2),
     payoff_show DECIMAL(10, 2),
-    updated_at TIMESTAMPTZ
+    updated_at TIMESTAMPTZ,
+    UNIQUE(race_id, horse_id)  -- Allow upsert by race+horse combination
 );
 
 -- JV-Link synchronization state
 CREATE TABLE IF NOT EXISTS sync_state (
     id INT PRIMARY KEY,
-    last_timestamp_um BIGINT,         -- LastFileTimestamp from DIFN/DIFF fetch
-    last_timestamp_races BIGINT,      -- LastFileTimestamp from TOKURACESNPN fetch
+    last_timestamp_um BIGINT,         -- LastFileTimestamp from DIFN/DIFF fetch (bootstrap)
+    last_timestamp_races BIGINT,      -- LastFileTimestamp from TOKURACETCOV fetch (weekly)
     last_sync_at TIMESTAMPTZ,
     last_error TEXT,
     sync_count INT
@@ -84,7 +96,7 @@ ON CONFLICT (id) DO NOTHING;
 
 -- Initialize schema_version
 INSERT INTO schema_version (id, version, jvlink_version, sdk_version)
-VALUES (1, 1, '1.12', '4.9.0.1')
+VALUES (1, 2, '1.12', '4.9.0.1')
 ON CONFLICT (id) DO NOTHING;
 
 -- Create indexes for performance
@@ -93,5 +105,7 @@ CREATE INDEX IF NOT EXISTS idx_race_entries_horse_id ON race_entries(horse_id);
 CREATE INDEX IF NOT EXISTS idx_horses_sire_id ON horses(sire_id);
 CREATE INDEX IF NOT EXISTS idx_horses_dam_id ON horses(dam_id);
 CREATE INDEX IF NOT EXISTS idx_races_race_date ON races(race_date);
+CREATE INDEX IF NOT EXISTS idx_races_race_key ON races(race_key);  -- For Phase 5 SDK calls
+CREATE INDEX IF NOT EXISTS idx_races_track_code ON races(track_code);  -- For filtering by track
 CREATE INDEX IF NOT EXISTS idx_bets_saved_race_id ON bets_saved(race_id);
 CREATE INDEX IF NOT EXISTS idx_bets_saved_created_at ON bets_saved(created_at);

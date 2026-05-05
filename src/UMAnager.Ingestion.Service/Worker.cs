@@ -85,7 +85,9 @@ public sealed class Worker : BackgroundService
                 await PerformBootstrapAsync(syncState, cancellationToken);
             }
 
-            // Phase 3: TODO - Pull weekly races (TOKURACETCOVSNPN) with option=2
+            // Phase 3: Fetch weekly races (TOKURACETCOV with option=2)
+            _logger.LogInformation("Performing weekly data fetch (Option=2)");
+            await PerformWeeklyFetchAsync(syncState, cancellationToken);
 
             _logger.LogInformation("Data sync complete");
         }
@@ -199,6 +201,180 @@ public sealed class Worker : BackgroundService
         {
             await _syncStateRepo.SaveTimestampAsync("UM", openResult.LastFileTimestamp);
             _logger.LogInformation("Sync state updated: lastFileTimestamp={Timestamp}", openResult.LastFileTimestamp);
+        }
+
+        _jvLink.Close();
+    }
+
+    /// <summary>
+    /// Phase 3: Fetch weekly race and entry data (RA, SE, UM records).
+    /// Opens TOKURACETCOV dataspec with Option=2 (incremental, respects FromTime).
+    /// Parses RA (race), SE (entry), and UM (horse master) records.
+    /// Saves timestamp per file boundary (-1) for crash recovery.
+    /// </summary>
+    private async Task PerformWeeklyFetchAsync(SyncState syncState, CancellationToken cancellationToken)
+    {
+        const string dataSpec = "TOKURACETCOV"; // 4 dataspecs: TOKU (race entries), RACE (race meta), TCOV (UM pedigree), no SNPN (CK stats)
+        const int weeklyOption = 2; // Option 2: incremental fetch within current week cycle
+        string fromTime = _syncStateRepo.GetFromTime(syncState, "RACE"); // Use last saved races timestamp
+
+        _logger.LogInformation("Opening {DataSpec} with Option={Option} (weekly fetch). FromTime={FromTime}", dataSpec, weeklyOption, fromTime);
+
+        var openResult = await _jvLink.OpenAndWaitForDownloadAsync(dataSpec, fromTime, weeklyOption, cancellationToken);
+        _logger.LogInformation(
+            "Download complete: readCount={ReadCount}, downloadCount={DownloadCount}, lastFileTimestamp={LastFileTimestamp}",
+            openResult.ReadCount, openResult.DownloadCount, openResult.LastFileTimestamp);
+
+        // Read records in a loop, dispatching by record type
+        int raRecordsRead = 0, raRecordsInserted = 0, raRecordsFailed = 0;
+        int seRecordsRead = 0, seRecordsInserted = 0, seRecordsFailed = 0;
+        int umRecordsRead = 0, umRecordsInserted = 0, umRecordsFailed = 0;
+        string currentRaceId = "";
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var result = _jvLink.ReadRecord();
+
+            // Status codes:
+            // > 0 = bytes read
+            // -1 = file boundary (save timestamp, move to next file)
+            // 0 = EOF (done reading)
+            if (result.StatusCode == 0)
+            {
+                _logger.LogInformation("EOF reached");
+                break;
+            }
+
+            if (result.StatusCode == -1)
+            {
+                // File boundary: save timestamp for crash recovery
+                _logger.LogDebug("File boundary encountered. Saving timestamp.");
+                string currentFileTimestamp = _jvLink.GetCurrentFileTimestamp();
+                if (!string.IsNullOrEmpty(currentFileTimestamp))
+                {
+                    try
+                    {
+                        await _syncStateRepo.SaveTimestampAsync("RACE", currentFileTimestamp);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to save timestamp for file boundary");
+                    }
+                }
+                continue;
+            }
+
+            if (result.StatusCode <= -2)
+            {
+                _logger.LogError("Error reading record: status={Status}", result.StatusCode);
+                continue;
+            }
+
+            // Decode the raw bytes as CP932 (Shift-JIS)
+            string recordLine = JVEncoding.DecodeRecord(result.Data);
+
+            // Dispatch by record type (first 2 bytes)
+            if (recordLine.Length < 2)
+                continue;
+
+            string recordType = recordLine.Substring(0, 2);
+
+            if (recordType == "RA")
+            {
+                raRecordsRead++;
+                var race = RARecordParser.ParseRARecord(recordLine);
+                if (race == null)
+                {
+                    raRecordsFailed++;
+                    continue;
+                }
+
+                try
+                {
+                    await _syncStateRepo.InsertOrUpdateRaceAsync(race);
+                    raRecordsInserted++;
+                    currentRaceId = race.RaceId;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to insert race {RaceId}", race.RaceId);
+                    raRecordsFailed++;
+                }
+            }
+            else if (recordType == "SE")
+            {
+                seRecordsRead++;
+                var entry = SERecordParser.ParseSERecord(recordLine, currentRaceId);
+                if (entry == null)
+                {
+                    seRecordsFailed++;
+                    continue;
+                }
+
+                try
+                {
+                    await _syncStateRepo.InsertOrUpdateRaceEntryAsync(entry);
+                    seRecordsInserted++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to insert entry {RaceId}/{HorseId}", entry.RaceId, entry.HorseId);
+                    seRecordsFailed++;
+                }
+            }
+            else if (recordType == "UM")
+            {
+                umRecordsRead++;
+                var horse = UMRecordParser.ParseUMRecord(recordLine);
+                if (horse == null)
+                {
+                    umRecordsFailed++;
+                    continue;
+                }
+
+                try
+                {
+                    await _syncStateRepo.InsertOrUpdateHorseAsync(horse);
+                    umRecordsInserted++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to insert horse {HorseId}", horse.HorseId);
+                    umRecordsFailed++;
+                }
+            }
+            // Silently skip other record types (e.g., CK which we're not downloading anyway)
+
+            // Log progress every 100 records total
+            int totalRead = raRecordsRead + seRecordsRead + umRecordsRead;
+            if (totalRead > 0 && totalRead % 100 == 0)
+                _logger.LogInformation(
+                    "Progress: RA={RaRead}/{RaInserted}, SE={SeRead}/{SeInserted}, UM={UmRead}/{UmInserted}",
+                    raRecordsRead, raRecordsInserted, seRecordsRead, seRecordsInserted, umRecordsRead, umRecordsInserted);
+        }
+
+        int totalInserted = raRecordsInserted + seRecordsInserted + umRecordsInserted;
+        int totalFailed = raRecordsFailed + seRecordsFailed + umRecordsFailed;
+
+        _logger.LogInformation(
+            "Weekly fetch complete: RA={RaRead}/{RaInserted}/{RaFailed}, SE={SeRead}/{SeInserted}/{SeFailed}, UM={UmRead}/{UmInserted}/{UmFailed} (total inserted={TotalInserted})",
+            raRecordsRead, raRecordsInserted, raRecordsFailed,
+            seRecordsRead, seRecordsInserted, seRecordsFailed,
+            umRecordsRead, umRecordsInserted, umRecordsFailed,
+            totalInserted);
+
+        // Final timestamp save (should have been saved per file, but do it again to be sure)
+        if (!string.IsNullOrEmpty(openResult.LastFileTimestamp))
+        {
+            try
+            {
+                await _syncStateRepo.SaveTimestampAsync("RACE", openResult.LastFileTimestamp);
+                _logger.LogInformation("Final sync state update: lastFileTimestamp={Timestamp}", openResult.LastFileTimestamp);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to save final timestamp");
+            }
         }
 
         _jvLink.Close();

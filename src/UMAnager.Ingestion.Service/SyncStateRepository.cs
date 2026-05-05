@@ -218,6 +218,101 @@ public sealed class SyncStateRepository
     }
 
     /// <summary>
+    /// Insert or update a race record (upsert).
+    /// If race_id exists, update with new data. Otherwise, insert.
+    /// </summary>
+    public async Task InsertOrUpdateRaceAsync(Race race)
+    {
+        try
+        {
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            const string sql = @"
+                INSERT INTO races (race_id, race_key, race_year, race_month, race_day, track_code, round, day_of_round, race_number, race_date, distance, surface, grade, conditions_2yo, conditions_3yo, conditions_4yo, conditions_5plus, last_updated)
+                VALUES (@raceId, @raceKey, @raceYear, @raceMonth, @raceDay, @trackCode, @round, @dayOfRound, @raceNumber, @raceDate, @distance, @surface, @grade, @conditions2yo, @conditions3yo, @conditions4yo, @conditions5plus, @lastUpdated)
+                ON CONFLICT (race_id) DO UPDATE SET
+                    race_key = COALESCE(EXCLUDED.race_key, races.race_key),
+                    distance = COALESCE(EXCLUDED.distance, races.distance),
+                    surface = COALESCE(EXCLUDED.surface, races.surface),
+                    grade = COALESCE(EXCLUDED.grade, races.grade),
+                    conditions_2yo = COALESCE(EXCLUDED.conditions_2yo, races.conditions_2yo),
+                    conditions_3yo = COALESCE(EXCLUDED.conditions_3yo, races.conditions_3yo),
+                    conditions_4yo = COALESCE(EXCLUDED.conditions_4yo, races.conditions_4yo),
+                    conditions_5plus = COALESCE(EXCLUDED.conditions_5plus, races.conditions_5plus),
+                    last_updated = EXCLUDED.last_updated";
+
+            await using var cmd = new NpgsqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@raceId", race.RaceId ?? "");
+            cmd.Parameters.AddWithValue("@raceKey", (object?)race.RaceKey ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@raceYear", (object?)race.RaceYear ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@raceMonth", (object?)race.RaceMonth ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@raceDay", (object?)race.RaceDay ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@trackCode", (object?)race.TrackCode ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@round", (object?)race.Round ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@dayOfRound", (object?)race.DayOfRound ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@raceNumber", (object?)race.RaceNumber ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@raceDate", (object?)race.RaceDate ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@distance", (object?)race.Distance ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@surface", (object?)race.Surface ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@grade", (object?)race.Grade ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@conditions2yo", (object?)race.Conditions2yo ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@conditions3yo", (object?)race.Conditions3yo ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@conditions4yo", (object?)race.Conditions4yo ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@conditions5plus", (object?)race.Conditions5plus ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@lastUpdated", (object?)race.LastUpdated ?? DateTime.UtcNow);
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to insert/update race {RaceId}", race.RaceId);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Insert or update a race entry record (upsert).
+    /// If horse_id and race_id exist, update. Otherwise, insert.
+    /// </summary>
+    public async Task InsertOrUpdateRaceEntryAsync(RaceEntry entry)
+    {
+        try
+        {
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            const string sql = @"
+                INSERT INTO race_entries (race_id, horse_id, post_position, frame_number, jockey_code, trainer_code, morning_line_odds, updated_at)
+                VALUES (@raceId, @horseId, @postPosition, @frameNumber, @jockeyCode, @trainerCode, @morningLineOdds, @updatedAt)
+                ON CONFLICT (race_id, horse_id) DO UPDATE SET
+                    post_position = COALESCE(EXCLUDED.post_position, race_entries.post_position),
+                    frame_number = COALESCE(EXCLUDED.frame_number, race_entries.frame_number),
+                    jockey_code = COALESCE(EXCLUDED.jockey_code, race_entries.jockey_code),
+                    trainer_code = COALESCE(EXCLUDED.trainer_code, race_entries.trainer_code),
+                    morning_line_odds = COALESCE(EXCLUDED.morning_line_odds, race_entries.morning_line_odds),
+                    updated_at = EXCLUDED.updated_at";
+
+            await using var cmd = new NpgsqlCommand(sql, conn);
+            cmd.Parameters.AddWithValue("@raceId", entry.RaceId ?? "");
+            cmd.Parameters.AddWithValue("@horseId", entry.HorseId ?? "");
+            cmd.Parameters.AddWithValue("@postPosition", (object?)entry.PostPosition ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@frameNumber", (object?)entry.FrameNumber ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@jockeyCode", (object?)entry.JockeyCode ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@trainerCode", (object?)entry.TrainerCode ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@morningLineOdds", (object?)entry.MorningLineOdds ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@updatedAt", (object?)entry.UpdatedAt ?? DateTime.UtcNow);
+
+            await cmd.ExecuteNonQueryAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to insert/update race entry {RaceId}/{HorseId}", entry.RaceId, entry.HorseId);
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Create the database schema if it doesn't exist.
     /// Reads from database.sql in the src folder.
     /// </summary>

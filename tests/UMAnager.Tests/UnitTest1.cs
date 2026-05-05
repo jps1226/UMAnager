@@ -57,17 +57,18 @@ public class ModelTests
         var race = new Race
         {
             RaceId = "202605040101",
-            RaceDate = new DateOnly(2026, 5, 4),
+            RaceKey = "2026050402010101",
+            RaceDate = new DateTime(2026, 5, 4),
             Distance = 2000,
-            Surface = "turf",
-            Grade = "G1"
+            Surface = "01",
+            Grade = "1"
         };
 
         // Assert
         Assert.Equal("202605040101", race.RaceId);
-        Assert.Equal(new DateOnly(2026, 5, 4), race.RaceDate);
+        Assert.Equal(new DateTime(2026, 5, 4), race.RaceDate);
         Assert.Equal(2000, race.Distance);
-        Assert.Equal("turf", race.Surface);
-        Assert.Equal("G1", race.Grade);
+        Assert.Equal("01", race.Surface);
+        Assert.Equal("1", race.Grade);
     }
 }
