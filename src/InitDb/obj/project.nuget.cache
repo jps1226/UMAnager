@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "dgSpecHash": "51wU8cYqsGQ=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\UMAnager\\UMAnager_RE\\src\\InitDb\\InitDb.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\UMAnager\\.nuget\\packages\\microsoft.extensions.dependencyinjection.abstractions\\8.0.0\\microsoft.extensions.dependencyinjection.abstractions.8.0.0.nupkg.sha512",
+    "C:\\Users\\UMAnager\\.nuget\\packages\\microsoft.extensions.logging.abstractions\\8.0.0\\microsoft.extensions.logging.abstractions.8.0.0.nupkg.sha512",
+    "C:\\Users\\UMAnager\\.nuget\\packages\\npgsql\\8.0.5\\npgsql.8.0.5.nupkg.sha512"
+  ],
+  "logs": []
+}

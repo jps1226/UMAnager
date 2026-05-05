@@ -1,0 +1,11 @@
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\bin\Debug\net8.0\UMAnager.Common.deps.json
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\bin\Debug\net8.0\UMAnager.Common.dll
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\bin\Debug\net8.0\UMAnager.Common.pdb
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\UMAnager.Common.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\UMAnager.Common.AssemblyInfoInputs.cache
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\UMAnager.Common.AssemblyInfo.cs
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\UMAnager.Common.csproj.CoreCompileInputs.cache
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\UMAnager.Common.dll
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\refint\UMAnager.Common.dll
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\UMAnager.Common.pdb
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\ref\UMAnager.Common.dll

@@ -1,0 +1,39 @@
+{
+  "Version": 1,
+  "Hash": "DspTq9tvn6yl62Z3NdOKkFWrJhYLDbQX9k96l53LpAo=",
+  "Source": "UMAnager.WebApi",
+  "BasePath": "_content/UMAnager.WebApi",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [
+    {
+      "Name": "UMAnager.WebApi\\wwwroot",
+      "Source": "UMAnager.WebApi",
+      "ContentRoot": "C:\\Users\\UMAnager\\UMAnager_RE\\src\\UMAnager.WebApi\\wwwroot\\",
+      "BasePath": "_content/UMAnager.WebApi",
+      "Pattern": "**"
+    }
+  ],
+  "Assets": [
+    {
+      "Identity": "C:\\Users\\UMAnager\\UMAnager_RE\\src\\UMAnager.WebApi\\wwwroot\\index.html",
+      "SourceId": "UMAnager.WebApi",
+      "SourceType": "Discovered",
+      "ContentRoot": "C:\\Users\\UMAnager\\UMAnager_RE\\src\\UMAnager.WebApi\\wwwroot\\",
+      "BasePath": "_content/UMAnager.WebApi",
+      "RelativePath": "index.html",
+      "AssetKind": "All",
+      "AssetMode": "All",
+      "AssetRole": "Primary",
+      "AssetMergeBehavior": "PreferTarget",
+      "AssetMergeSource": "",
+      "RelatedAsset": "",
+      "AssetTraitName": "",
+      "AssetTraitValue": "",
+      "CopyToOutputDirectory": "Never",
+      "CopyToPublishDirectory": "PreserveNewest",
+      "OriginalItemSpec": "wwwroot\\index.html"
+    }
+  ]
+}

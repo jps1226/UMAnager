@@ -1,0 +1,25 @@
+{
+  "Files": [
+    {
+      "Id": "C:\\Users\\UMAnager\\UMAnager_RE\\src\\UMAnager.WebApi\\wwwroot\\index.html",
+      "PackagePath": "staticwebassets\\index.html"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.UMAnager.WebApi.Microsoft.AspNetCore.StaticWebAssets.props",
+      "PackagePath": "build\\Microsoft.AspNetCore.StaticWebAssets.props"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.build.UMAnager.WebApi.props",
+      "PackagePath": "build\\UMAnager.WebApi.props"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.buildMultiTargeting.UMAnager.WebApi.props",
+      "PackagePath": "buildMultiTargeting\\UMAnager.WebApi.props"
+    },
+    {
+      "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.buildTransitive.UMAnager.WebApi.props",
+      "PackagePath": "buildTransitive\\UMAnager.WebApi.props"
+    }
+  ],
+  "ElementsToRemove": []
+}
