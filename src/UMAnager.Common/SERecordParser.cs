@@ -14,7 +14,7 @@ public static class SERecordParser
     /// </summary>
     public static RaceEntry? ParseSERecord(string seLine, string raceId)
     {
-        if (string.IsNullOrWhiteSpace(seLine) || seLine.Length < 555)
+        if (string.IsNullOrWhiteSpace(seLine) || seLine.Length < 360)
             return null;
 
         try

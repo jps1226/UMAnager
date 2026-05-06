@@ -14,7 +14,7 @@ public static class RARecordParser
     /// </summary>
     public static Race? ParseRARecord(string raLine)
     {
-        if (string.IsNullOrWhiteSpace(raLine) || raLine.Length < 1272)
+        if (string.IsNullOrWhiteSpace(raLine) || raLine.Length < 700)
             return null;
 
         try
