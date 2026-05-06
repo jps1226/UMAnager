@@ -34,6 +34,7 @@ public static class JVEncoding
 
     /// <summary>
     /// Parse a fixed-width field from a JV-Link record line.
+    /// Removes embedded and trailing null bytes to prevent PostgreSQL UTF-8 encoding errors.
     /// </summary>
     public static string ExtractField(string record, int startIndex, int length)
     {
@@ -41,7 +42,11 @@ public static class JVEncoding
             return string.Empty;
 
         var end = Math.Min(startIndex + length, record.Length);
-        return record[startIndex..end].Trim();
+        var field = record[startIndex..end];
+
+        // Remove embedded null bytes and ideographic spaces that cause PostgreSQL UTF-8 errors
+        field = field.Replace("\0", string.Empty).Replace("　", string.Empty);
+        return field.Trim();
     }
 
     /// <summary>

@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-UMAnager.Ingestion.Service-520174e3-56bb-44c7-b9bb-29f3cb67c32e</UserSecretsId>
     <PlatformTarget>x86</PlatformTarget>
+    <RuntimeIdentifier>win-x86</RuntimeIdentifier>
     <UseWindowsService>true</UseWindowsService>
   </PropertyGroup>
 
@@ -21,4 +22,24 @@
   <ItemGroup>
     <ProjectReference Include="..\UMAnager.Common\UMAnager.Common.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Interop.JVDTLabLib.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="appsettings.local.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Interop.JVDTLabLib">
+      <HintPath>Interop.JVDTLabLib.dll</HintPath>
+      <EmbedInteropTypes>true</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="CopyInteropBeforeBuild" BeforeTargets="Build">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)Interop.JVDTLabLib.dll"
+          DestinationFolder="$(OutputPath)"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

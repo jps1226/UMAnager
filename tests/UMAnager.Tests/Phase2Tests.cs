@@ -316,27 +316,42 @@ public class Phase2Tests
         string damId,
         string bmsId)
     {
-        // Build a fixed-width record matching UMRecordParser expectations
-        // Record Type (0-2): "UM"
-        // Horse ID (2-12): 10 chars
-        // Padding (12): empty
-        // Horse Name JP (12-76): 64 chars
-        // Horse Name Romaji (76-116): 40 chars
-        // Birth Year (116-120): 4 chars
-        // Sire ID (120-130): 10 chars
-        // Dam ID (130-140): 10 chars
-        // BMS ID (140-150): 10 chars
+        // Build a fixed-width record matching official JRA-VAN UM spec (0-based offsets):
+        //   0  -  2 : Record type "UM"
+        //   2  - 11 : Header padding (9 bytes)
+        //  11  - 21 : HorseId (血統登録番号, 10 bytes)
+        //  21  - 38 : Padding (17 bytes)
+        //  38  - 46 : BirthDate YYYYMMDD (生年月日, 8 bytes)
+        //  46  - 82 : HorseName Japanese (馬名, 36 bytes)
+        //  82  -118 : Padding (36 bytes)
+        // 118  -178 : HorseRomaji (馬名欧字, 60 bytes)
+        // 178  -204 : Padding (26 bytes)
+        // 204  -214 : SireId (父, 10 bytes)
+        // 214  -250 : Sire name (36 bytes)
+        // 250  -260 : DamId (母, 10 bytes)
+        // 260  -296 : Dam name (36 bytes)
+        // 296  -342 : PGS block (46 bytes)
+        // 342  -388 : PGD block (46 bytes)
+        // 388  -398 : BroodmareSireId (母父, 10 bytes)
 
-        var sb = new StringBuilder();
-        sb.Append("UM");                           // 0-2
-        sb.Append(horseId.PadRight(10));          // 2-12
-        sb.Append(horseName.PadRight(64));        // 12-76
-        sb.Append(horseRomaji.PadRight(40));      // 76-116
-        sb.Append(birthYear.PadRight(4));         // 116-120
-        sb.Append(sireId.PadRight(10));           // 120-130
-        sb.Append(damId.PadRight(10));            // 130-140
-        sb.Append(bmsId.PadRight(10));            // 140-150
+        var buf = new char[500];
+        Array.Fill(buf, ' ');
 
-        return sb.ToString();
+        void Place(int offset, string value, int length)
+        {
+            for (int i = 0; i < length && i < value.Length; i++)
+                buf[offset + i] = value[i];
+        }
+
+        Place(0,   "UM",                          2);
+        Place(11,  horseId,                       10);
+        Place(38,  (birthYear + "0101").PadRight(8), 8); // YYYYMMDD
+        Place(46,  horseName,                     36);
+        Place(118, horseRomaji,                   60);
+        Place(204, sireId,                        10);
+        Place(250, damId,                         10);
+        Place(388, bmsId,                         10);
+
+        return new string(buf);
     }
 }

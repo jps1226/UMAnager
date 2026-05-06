@@ -1,11 +1,21 @@
 namespace UMAnager.Ingestion.Service;
 
 using System.Runtime.InteropServices;
+using System.Text;
 using UMAnager.Common;
 
 /// <summary>
-/// Wrapper around the JV-Link COM object for safe, typed access.
-/// JV-Link is a 32-bit InprocServer COM component; this project must target x86.
+/// Wrapper around the JV-Link COM object via dynamic COM dispatch.
+///
+/// JV-Link is a 32-bit InprocServer COM component. The project MUST target x86 with
+/// RuntimeIdentifier=win-x86 to ensure in-process COM loading. If the process runs as
+/// x64, Windows loads JV-Link in a COM surrogate (dllhost.exe) as out-of-process,
+/// causing RPC_E_SERVERFAULT on method calls.
+///
+/// JVRead semantics (per JRA-VAN SDK docs):
+///   - buff: caller pre-allocates a string of null chars; JV-Link fills it with record data
+///   - size: input parameter specifying the max buffer length
+///   - Returns: bytes read (>0), -1 (file boundary), 0 (EOF), negative (error)
 /// </summary>
 public sealed class JVLinkClient : IDisposable
 {
@@ -27,16 +37,32 @@ public sealed class JVLinkClient : IDisposable
 
         try
         {
-            // Create COM object: JVDTLab.JVLink (CLSID {2AB1774D-0C41-11D7-916F-0003479BEB3F})
-            var jvLinkType = Type.GetTypeFromProgID("JVDTLab.JVLink");
-            if (jvLinkType == null)
-                throw new JVLinkException(0, "JV-Link COM object not found. Ensure JV-Link is installed and registered.");
+            // Trim whitespace—JVInit rejects sid with leading spaces (error -103)
+            softwareId = (softwareId ?? "UNKNOWN").Trim();
+            if (string.IsNullOrEmpty(softwareId))
+                softwareId = "UNKNOWN";
 
-            _jvLink = Activator.CreateInstance(jvLinkType)
-                ?? throw new JVLinkException(0, "Failed to instantiate JV-Link COM object");
+            // Log process architecture — JV-Link requires 32-bit in-process loading
+            _logger.LogInformation("Process architecture: Is64Bit={Is64Bit}, PID={PID}",
+                Environment.Is64BitProcess, Environment.ProcessId);
 
-            int result = (int)_jvLink.JVInit(softwareId);
-            _logger.LogInformation("JVInit returned {Result}", result);
+            // CP932 (Shift-JIS) encoding is not available by default in .NET Core
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
+            // Create COM object via dynamic dispatch (requires win-x86 RID for in-process loading)
+            try
+            {
+                Type jvLinkType = Type.GetTypeFromProgID("JVDTLab.JVLink")
+                    ?? throw new InvalidOperationException("JVDTLab.JVLink ProgID not found in registry");
+                _jvLink = Activator.CreateInstance(jvLinkType);
+            }
+            catch (Exception ex)
+            {
+                throw new JVLinkException(0, "JV-Link COM object not found. Ensure JV-Link is installed and registered.", ex);
+            }
+
+            int result = _jvLink!.JVInit(softwareId);
+            _logger.LogInformation("JVInit returned {Result} with sid='{SoftwareId}'", result, softwareId);
 
             if (result != 0)
                 throw new JVLinkException(result, $"JVInit failed with code {result}");
@@ -107,21 +133,28 @@ public sealed class JVLinkClient : IDisposable
         {
             _logger.LogInformation("JVOpen({DataSpec}, {FromTime}, option={Option})", dataSpec, fromTime, option);
 
-            // Parameters are passed by reference for out params
-            dynamic readCount = 0;
-            dynamic downloadCount = 0;
-            dynamic lastFileTimestamp = "";
+            // Typed interop: JVOpen(string, string, int, ref int, ref int, out string)
+            int readCount = 0;
+            int downloadCount = 0;
 
-            int result = (int)_jvLink!.JVOpen(dataSpec, fromTime, option, readCount, downloadCount, lastFileTimestamp);
-
-            // Cast dynamic results to proper types for logging
-            int rc = (int)readCount;
-            int dc = (int)downloadCount;
-            string ts = (string)lastFileTimestamp;
+            int result = _jvLink!.JVOpen(dataSpec, fromTime, option, ref readCount, ref downloadCount, out string? lastFileTimestamp);
 
             _logger.LogInformation(
                 "JVOpen returned {Result}: readCount={ReadCount}, downloadCount={DownloadCount}, lastFileTimestamp={LastFileTimestamp}",
-                result, rc, dc, ts);
+                result, readCount, downloadCount, lastFileTimestamp);
+
+            // -1 = NoData: no new files since FromTime; return immediately with empty result
+            if (result == -1)
+            {
+                _logger.LogInformation("JVOpen: no new data since fromTime={FromTime}", fromTime);
+                return new JVOpenResult
+                {
+                    ReadCount = 0,
+                    DownloadCount = 0,
+                    LastFileTimestamp = lastFileTimestamp ?? "",
+                    NoData = true
+                };
+            }
 
             if (result != 0)
                 throw new JVLinkException(result, $"JVOpen failed with code {result}");
@@ -143,9 +176,9 @@ public sealed class JVLinkClient : IDisposable
 
             return new JVOpenResult
             {
-                ReadCount = rc,
-                DownloadCount = dc,
-                LastFileTimestamp = ts
+                ReadCount = readCount,
+                DownloadCount = downloadCount,
+                LastFileTimestamp = lastFileTimestamp
             };
         }
         catch (JVLinkException)
@@ -161,7 +194,11 @@ public sealed class JVLinkClient : IDisposable
 
     /// <summary>
     /// Read the next record. Returns byte array, filename, and status code.
-    /// Status: > 0 = bytes read, -1 = file boundary, 0 = EOF, -502 = download failure (retryable), < -1 = other error
+    /// Status: > 0 = bytes read, -1 = file boundary, 0 = EOF, negative = error
+    ///
+    /// Per JRA-VAN SDK: buff is a caller-allocated string buffer that JV-Link fills with
+    /// record data. The size parameter is the maximum length of that buffer (input only).
+    /// JV-Link manages the buffer content internally; the caller must pre-allocate it.
     /// </summary>
     public JVGetsResult ReadRecord()
     {
@@ -169,25 +206,45 @@ public sealed class JVLinkClient : IDisposable
 
         try
         {
-            dynamic buffData = new byte[110000];
-            dynamic buffSize = 110000;
-            dynamic fileName = "";
+            // JVRead per JRA-VAN SDK spec:
+            //   buff  — caller pre-allocates; JV-Link fills with record bytes
+            //   size  — input: max buffer length (not returned by JV-Link)
+            //   filename — output: name of the file currently being read
+            // VB.NET canonical form: Dim buff As String = New String(vbNullChar, buffSize)
+            const int bufferSize = 16384;  // generously covers any record type
+            string buff = new string('\0', bufferSize);
+            string fileName = "";
 
-            int result = (int)_jvLink!.JVGets(buffData, buffSize, fileName);
+            // Use dynamic dispatch so size is passed by value (not out),
+            // matching the actual COM signature. Typed interop (tlbimp) emits
+            // incorrect 'out' modifiers which cause in-process access violations.
+            // buff is ref so JV-Link can write record data into the pre-allocated buffer.
+            int result = _jvLink!.JVRead(ref buff, bufferSize, ref fileName);
 
-            // -502 is retryable; other negative codes are errors
-            if (result < -1 && result != -502)
-                throw new JVLinkException(result, $"JVGets failed with code {result}");
+            if (result < -1)
+                throw new JVLinkException(result, $"JVRead failed with code {result}");
 
-            // Trim the buffer to actual size returned
-            byte[] data = result > 0 ? ((byte[])buffData).Take(result).ToArray() : [];
-            string fn = (string)fileName;
+            byte[] data = [];
+            if (result > 0)
+            {
+                // JV-Link writes raw CP932 bytes into the pre-allocated string buffer.
+                // The bytes are stored as individual characters (each byte becomes a Unicode char).
+                // Extract only the first 'result' bytes from the buffer.
+                // We extract them without re-encoding, since they're already raw bytes masked as characters.
+                byte[] extracted = new byte[result];
+                for (int i = 0; i < result && i < buff.Length; i++)
+                {
+                    extracted[i] = (byte)(buff[i] & 0xFF);
+                }
+                data = extracted;
+                _logger.LogDebug("JVRead: {Bytes} bytes, file={File}", data.Length, fileName);
+            }
 
             return new JVGetsResult
             {
                 StatusCode = result,
                 Data = data,
-                FileName = fn ?? ""
+                FileName = fileName ?? ""
             };
         }
         catch (JVLinkException)
@@ -196,8 +253,8 @@ public sealed class JVLinkClient : IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "JVGets failed");
-            throw new JVLinkException(0, "JVGets failed", ex);
+            _logger.LogError(ex, "JVRead failed");
+            throw new JVLinkException(0, "JVRead failed", ex);
         }
     }
 
@@ -207,7 +264,25 @@ public sealed class JVLinkClient : IDisposable
     public string GetCurrentFileTimestamp()
     {
         ThrowIfDisposed();
-        return _jvLink?.m_CurrentFileTimestamp ?? "";
+        return _jvLink?.m_CurrentFileTimeStamp ?? "";
+    }
+
+    /// <summary>
+    /// Skip the current file and move to the next one in the stream.
+    /// Used to skip unwanted record types (e.g., RA, KS) when reading DIFN.
+    /// </summary>
+    public void Skip()
+    {
+        ThrowIfDisposed();
+
+        try
+        {
+            _jvLink!.JVSkip();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "JVSkip failed");
+        }
     }
 
     /// <summary>
@@ -219,7 +294,7 @@ public sealed class JVLinkClient : IDisposable
 
         try
         {
-            int result = (int)_jvLink.JVClose();
+            int result = _jvLink.JVClose();
             _logger.LogInformation("JVClose returned {Result}", result);
 
             if (result != 0)
@@ -261,7 +336,7 @@ public sealed class JVLinkClient : IDisposable
 
             try
             {
-                int status = (int)_jvLink!.JVStatus();
+                int status = _jvLink!.JVStatus();
 
                 if (status < 0)
                     throw new JVLinkException(status, $"JVStatus returned error code {status}");
@@ -316,6 +391,7 @@ public record JVOpenResult
     public int ReadCount { get; init; }
     public int DownloadCount { get; init; }
     public string LastFileTimestamp { get; init; } = "";
+    public bool NoData { get; init; }
 }
 
 public record JVGetsResult

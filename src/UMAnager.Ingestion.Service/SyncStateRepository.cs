@@ -320,26 +320,147 @@ public sealed class SyncStateRepository
     {
         try
         {
-            // This would normally read the SQL file and execute it
-            // For now, just log that this would run
-            _logger.LogInformation("Database initialization should be run manually via: psql -U postgres < src/database.sql");
+            // First, create the database if it doesn't exist
+            var dbConfig = _connectionString.Split(';')
+                .Select(s => s.Split('='))
+                .Where(s => s.Length == 2)
+                .ToDictionary(s => s[0].Trim(), s => s[1].Trim());
 
+            string host = dbConfig.ContainsKey("Host") ? dbConfig["Host"] : "localhost";
+            string port = dbConfig.ContainsKey("Port") ? dbConfig["Port"] : "5432";
+            string database = dbConfig.ContainsKey("Database") ? dbConfig["Database"] : "umanager";
+            string username = dbConfig.ContainsKey("Username") ? dbConfig["Username"] : "postgres";
+            string password = dbConfig.ContainsKey("Password") ? dbConfig["Password"] : "";
+
+            // Connect to 'postgres' database to create 'umanager' if needed
+            var masterConnStr = $"Host={host};Port={port};Database=postgres;Username={username};Password={password}";
+            await using (var masterConn = new NpgsqlConnection(masterConnStr))
+            {
+                await masterConn.OpenAsync();
+
+                // Check if database exists
+                using var checkCmd = new NpgsqlCommand(
+                    "SELECT 1 FROM pg_database WHERE datname = @dbname",
+                    masterConn);
+                checkCmd.Parameters.AddWithValue("@dbname", database);
+                var exists = await checkCmd.ExecuteScalarAsync();
+
+                if (exists == null)
+                {
+                    _logger.LogInformation("Creating database '{Database}'", database);
+                    using var createCmd = new NpgsqlCommand($"CREATE DATABASE {database}", masterConn);
+                    await createCmd.ExecuteNonQueryAsync();
+                    _logger.LogInformation("Database '{Database}' created successfully", database);
+                }
+            }
+
+            // Now connect to the actual database and run schema
             await using var conn = new NpgsqlConnection(_connectionString);
             await conn.OpenAsync();
 
-            // Verify the tables exist by querying sync_state
-            const string sql = "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'sync_state'";
-            await using var cmd = new NpgsqlCommand(sql, conn);
-            int count = (int)(await cmd.ExecuteScalarAsync() ?? 0);
+            // Check if tables exist
+            const string tableCheckSql = "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'sync_state'";
+            using var tableCheckCmd = new NpgsqlCommand(tableCheckSql, conn);
+            long tableCountLong = (long)(await tableCheckCmd.ExecuteScalarAsync() ?? 0L);
+            int tableCount = (int)tableCountLong;
 
-            if (count == 0)
-                _logger.LogWarning("sync_state table not found. Run: psql -U postgres < src/database.sql");
+            if (tableCount == 0)
+            {
+                _logger.LogInformation("Initializing database schema");
+
+                // Try multiple paths to find database.sql
+                string[] schemaPaths = new[]
+                {
+                    "src/database.sql",
+                    Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "database.sql"),
+                    Path.Combine(AppContext.BaseDirectory, "database.sql"),
+                    @"C:\Users\UMAnager\UMAnager_RE\src\database.sql"
+                };
+
+                string schemaPath = schemaPaths.FirstOrDefault(File.Exists);
+
+                if (schemaPath != null)
+                {
+                    string schema = await File.ReadAllTextAsync(schemaPath);
+                    using var schemaCmd = new NpgsqlCommand(schema, conn);
+                    await schemaCmd.ExecuteNonQueryAsync();
+                    _logger.LogInformation("Database schema initialized successfully from {Path}", schemaPath);
+                }
+                else
+                {
+                    _logger.LogError("Schema file not found. Tried: {Paths}", string.Join(", ", schemaPaths));
+                    throw new FileNotFoundException("database.sql not found");
+                }
+            }
             else
-                _logger.LogInformation("Database schema verified");
+            {
+                _logger.LogInformation("Database schema already exists");
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to initialize database");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Temporarily disable foreign key constraints for bulk import by dropping them.
+    /// Call EnableForeignKeyConstraintsAsync() in a finally block to recreate them.
+    /// </summary>
+    public async Task DisableForeignKeyConstraintsAsync()
+    {
+        try
+        {
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            // Drop all FK constraints on the horses table
+            const string sql = @"
+                ALTER TABLE horses DROP CONSTRAINT IF EXISTS horses_sire_id_fkey;
+                ALTER TABLE horses DROP CONSTRAINT IF EXISTS horses_dam_id_fkey;
+                ALTER TABLE horses DROP CONSTRAINT IF EXISTS horses_broodmare_sire_id_fkey;
+            ";
+            await using var cmd = new NpgsqlCommand(sql, conn);
+            await cmd.ExecuteNonQueryAsync();
+
+            _logger.LogInformation("Dropped foreign key constraints for bulk import");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to drop foreign key constraints");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Re-create foreign key constraints after bulk import.
+    /// Uses NOT VALID to allow incomplete pedigree data (horses may reference sires not yet in database).
+    /// </summary>
+    public async Task EnableForeignKeyConstraintsAsync()
+    {
+        try
+        {
+            await using var conn = new NpgsqlConnection(_connectionString);
+            await conn.OpenAsync();
+
+            // Recreate FK constraints as NOT VALID (allows referential violations during initial load)
+            const string sql = @"
+                ALTER TABLE horses ADD CONSTRAINT horses_sire_id_fkey
+                    FOREIGN KEY (sire_id) REFERENCES horses(horse_id) ON DELETE SET NULL NOT VALID;
+                ALTER TABLE horses ADD CONSTRAINT horses_dam_id_fkey
+                    FOREIGN KEY (dam_id) REFERENCES horses(horse_id) ON DELETE SET NULL NOT VALID;
+                ALTER TABLE horses ADD CONSTRAINT horses_broodmare_sire_id_fkey
+                    FOREIGN KEY (broodmare_sire_id) REFERENCES horses(horse_id) ON DELETE SET NULL NOT VALID;
+            ";
+            await using var cmd = new NpgsqlCommand(sql, conn);
+            await cmd.ExecuteNonQueryAsync();
+
+            _logger.LogInformation("Recreated foreign key constraints (NOT VALID) after bulk import");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to recreate foreign key constraints");
             throw;
         }
     }

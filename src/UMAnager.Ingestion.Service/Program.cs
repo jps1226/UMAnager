@@ -26,15 +26,33 @@ try
     builder.Services.AddSerilog();
 
     // Register application services
-    builder.Services.AddScoped<SyncStateRepository>(sp =>
+    builder.Services.AddSingleton<SyncStateRepository>(sp =>
     {
         var config = sp.GetRequiredService<IConfiguration>();
         var dbConfig = config.GetSection("Database");
-        var connectionString = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        var host = dbConfig["Host"];
+        var port = dbConfig["Port"];
+        var database = dbConfig["Database"];
+        var username = dbConfig["Username"];
+        var password = dbConfig["Password"];
+
+        // Fallback to defaults if not configured
+        if (string.IsNullOrWhiteSpace(host)) host = "localhost";
+        if (string.IsNullOrWhiteSpace(port)) port = "5432";
+        if (string.IsNullOrWhiteSpace(database)) database = "umanager";
+        if (string.IsNullOrWhiteSpace(username)) username = "postgres";
+        if (string.IsNullOrWhiteSpace(password)) password = "";
+
+        var connectionString = $"Host={host};Port={port};Database={database};Username={username};Password={password}";
+
+        Log.Information("PostgreSQL Connection: Host={Host}, Port={Port}, Database={Database}, Username={Username}",
+            host, port, database, username);
+
         var logger = sp.GetRequiredService<ILogger<SyncStateRepository>>();
         return new SyncStateRepository(connectionString, logger);
     });
-    builder.Services.AddScoped<JVLinkClient>();
+    builder.Services.AddSingleton<JVLinkClient>();
     builder.Services.AddHostedService<Worker>();
 
     var host = builder.Build();

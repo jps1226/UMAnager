@@ -18,18 +18,19 @@ public static class UMRecordParser
 
         try
         {
-            // UM Record Format (per JRA-VAN spec):
-            // Byte offsets and field lengths
+            // UM Record Format (official JRA-VAN spec, 0-based offsets):
             var record = new Dictionary<string, string>
             {
-                { "RecordType", JVEncoding.ExtractField(umLine, 0, 2) },          // "UM"
-                { "HorseId", JVEncoding.ExtractField(umLine, 2, 10) },            // Horse ID (1-10)
-                { "HorseName", JVEncoding.ExtractField(umLine, 12, 64) },         // Horse name Japanese
-                { "HorseRomaji", JVEncoding.ExtractField(umLine, 76, 40) },       // Horse name Romaji
-                { "BirthYear", JVEncoding.ExtractField(umLine, 116, 4) },         // Birth year (YYYY)
-                { "SireId", JVEncoding.ExtractField(umLine, 120, 10) },           // Sire ID
-                { "DamId", JVEncoding.ExtractField(umLine, 130, 10) },            // Dam ID
-                { "BroodmareSireId", JVEncoding.ExtractField(umLine, 140, 10) }, // Broodmare Sire ID
+                { "RecordType",      JVEncoding.ExtractField(umLine,   0,  2) }, // Record type "UM"
+                { "HorseId",         JVEncoding.ExtractField(umLine,  11, 10) }, // 血統登録番号
+                { "BirthDate",       JVEncoding.ExtractField(umLine,  38,  8) }, // 生年月日 YYYYMMDD
+                { "HorseName",       JVEncoding.ExtractField(umLine,  46, 36) }, // 馬名 (Japanese)
+                { "HorseRomaji",     JVEncoding.ExtractField(umLine, 118, 60) }, // 馬名欧字 (Romaji)
+                // 3-generation pedigree block starts at 204; each entry is 46 bytes (10 ID + 36 name)
+                // Order: Sire(0), Dam(1), PGS(2), PGD(3), BMS(4), MGD(5), ...
+                { "SireId",          JVEncoding.ExtractField(umLine, 204, 10) }, // 父
+                { "DamId",           JVEncoding.ExtractField(umLine, 250, 10) }, // 母
+                { "BroodmareSireId", JVEncoding.ExtractField(umLine, 388, 10) }, // 母父 (4th entry: 204 + 4*46)
             };
 
             // Validate record type
@@ -40,16 +41,12 @@ public static class UMRecordParser
             if (string.IsNullOrWhiteSpace(record["HorseId"]))
                 return null;
 
-            // Parse birth year (if present)
+            // Parse birth year from YYYYMMDD — take first 4 chars
             int birthYear = 0;
-            if (!string.IsNullOrWhiteSpace(record["BirthYear"]) &&
-                int.TryParse(record["BirthYear"], out var year) &&
-                year > 0)
-            {
+            string birthDate = record["BirthDate"];
+            if (birthDate.Length >= 4 && int.TryParse(birthDate[..4], out var year) && year > 1900)
                 birthYear = year;
-            }
 
-            // Create horse entity with pedigree
             return new Horse
             {
                 HorseId = record["HorseId"],

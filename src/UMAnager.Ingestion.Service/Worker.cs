@@ -31,7 +31,7 @@ public sealed class Worker : BackgroundService
             await _syncStateRepo.InitializeDatabaseAsync();
 
             // Initialize JV-Link
-            string softwareId = _config["JVLink:SoftwareId"] ?? "UMANAGER-2.0";
+            string softwareId = _config["JVLink:SoftwareId"] ?? "UMANAGER20";
             _jvLink.Initialize(softwareId);
 
             // Load sync state
@@ -116,9 +116,14 @@ public sealed class Worker : BackgroundService
         const int bootstrapOption = 4; // Option 4: setup mode, downloads all data
         string fromTime = "19860101000000"; // JRA-VAN era start (1986-01-01)
 
-        _logger.LogInformation("Opening {DataSpec} with Option={Option} (bootstrap mode)", dataSpec, bootstrapOption);
+        // Disable FK constraints during bulk import (allows self-referential inserts in any order)
+        await _syncStateRepo.DisableForeignKeyConstraintsAsync();
 
-        var openResult = await _jvLink.OpenAndWaitForDownloadAsync(dataSpec, fromTime, bootstrapOption, cancellationToken);
+        try
+        {
+            _logger.LogInformation("Opening {DataSpec} with Option={Option} (bootstrap mode)", dataSpec, bootstrapOption);
+
+            var openResult = await _jvLink.OpenAndWaitForDownloadAsync(dataSpec, fromTime, bootstrapOption, cancellationToken);
         _logger.LogInformation(
             "Download complete: readCount={ReadCount}, downloadCount={DownloadCount}, lastFileTimestamp={LastFileTimestamp}",
             openResult.ReadCount, openResult.DownloadCount, openResult.LastFileTimestamp);
@@ -127,6 +132,7 @@ public sealed class Worker : BackgroundService
         int umRecordsRead = 0;
         int umRecordsInserted = 0;
         int umRecordsFailed = 0;
+        int totalRecordsProcessed = 0;
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -134,17 +140,36 @@ public sealed class Worker : BackgroundService
 
             // Status codes:
             // > 0 = bytes read
-            // -1 = file boundary (move to next file)
-            // 0 = EOF (done reading)
+            // -1 = file boundary (end of current file, timestamp updated)
+            // 0 = EOF (done reading all files)
             if (result.StatusCode == 0)
             {
-                _logger.LogInformation("EOF reached");
+                _logger.LogInformation("EOF reached. Total records processed: {Total}", totalRecordsProcessed);
                 break;
             }
 
             if (result.StatusCode == -1)
             {
-                _logger.LogDebug("File boundary encountered");
+                // File boundary encountered
+                // Per JRA-VAN spec for Option=4: save the current timestamp and continue
+                _logger.LogInformation("File boundary after {Records} UM records. Last file: {FileName}", umRecordsRead, result.FileName);
+
+                // Save the current file timestamp at this boundary for crash recovery
+                string currentTimestamp = _jvLink.GetCurrentFileTimestamp();
+                if (!string.IsNullOrEmpty(currentTimestamp))
+                {
+                    try
+                    {
+                        await _syncStateRepo.SaveTimestampAsync("DIFN", currentTimestamp);
+                        _logger.LogInformation("Saved DIFN file boundary timestamp: {Timestamp}", currentTimestamp);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to save file boundary timestamp");
+                    }
+                }
+
+                // Continue reading next file — JVRead continues the stream automatically
                 continue;
             }
 
@@ -154,8 +179,44 @@ public sealed class Worker : BackgroundService
                 continue;
             }
 
+            // Log first few records to understand structure
+            totalRecordsProcessed++;
+            if (totalRecordsProcessed <= 5)
+            {
+                _logger.LogDebug("Record {Num}: status={Status}, size={Size}, data={Data}",
+                    totalRecordsProcessed, result.StatusCode, result.Data.Length,
+                    result.Data.Length > 0 ? System.Text.Encoding.UTF8.GetString(result.Data[..Math.Min(50, result.Data.Length)]) : "(empty)");
+            }
+
             // Decode the raw bytes as CP932 (Shift-JIS)
             string recordLine = JVEncoding.DecodeRecord(result.Data);
+
+            // Strip CR/LF from end of record (JRA-VAN terminates every record with 0x0D 0x0A)
+            recordLine = recordLine.TrimEnd('\r', '\n');
+
+            // Check record type (first 2 characters)
+            if (recordLine.Length < 2)
+            {
+                continue;
+            }
+
+            string recordType = recordLine[..2];
+
+            // Log first few record types to debug
+            if (umRecordsRead + umRecordsFailed < 50)
+                _logger.LogDebug("Record type: {Type} (first 20 chars: {Preview})", recordType, recordLine[..Math.Min(20, recordLine.Length)]);
+
+            // Only process UM (Horse Master) records; skip all others
+            if (recordType != "UM")
+            {
+                // Skip unwanted record types using JVSkip to avoid processing them
+                if (recordType is "RA" or "SE" or "KS" or "CH" or "BR" or "BN" or "RC")
+                {
+                    _jvLink.Skip();
+                }
+                // Don't count skipped records as failures
+                continue;
+            }
 
             // Try to parse as UM record
             var horse = UMRecordParser.ParseUMRecord(recordLine);
@@ -192,18 +253,24 @@ public sealed class Worker : BackgroundService
                 _logger.LogInformation("Progress: {ReadCount} records read, {InsertedCount} inserted", umRecordsRead, umRecordsInserted);
         }
 
-        _logger.LogInformation(
-            "Bootstrap complete: {ReadCount} records read, {InsertedCount} inserted, {FailedCount} failed",
-            umRecordsRead, umRecordsInserted, umRecordsFailed);
+            _logger.LogInformation(
+                "Bootstrap complete: {ReadCount} records read, {InsertedCount} inserted, {FailedCount} failed",
+                umRecordsRead, umRecordsInserted, umRecordsFailed);
 
-        // Update sync state with new timestamp
-        if (!string.IsNullOrEmpty(openResult.LastFileTimestamp))
-        {
-            await _syncStateRepo.SaveTimestampAsync("UM", openResult.LastFileTimestamp);
-            _logger.LogInformation("Sync state updated: lastFileTimestamp={Timestamp}", openResult.LastFileTimestamp);
+            // Update sync state with new timestamp
+            if (!string.IsNullOrEmpty(openResult.LastFileTimestamp))
+            {
+                await _syncStateRepo.SaveTimestampAsync("DIFN", openResult.LastFileTimestamp);
+                _logger.LogInformation("Sync state updated: lastFileTimestamp={Timestamp}", openResult.LastFileTimestamp);
+            }
+
+            _jvLink.Close();
         }
-
-        _jvLink.Close();
+        finally
+        {
+            // Re-enable FK constraints after bulk import
+            await _syncStateRepo.EnableForeignKeyConstraintsAsync();
+        }
     }
 
     /// <summary>
@@ -221,6 +288,13 @@ public sealed class Worker : BackgroundService
         _logger.LogInformation("Opening {DataSpec} with Option={Option} (weekly fetch). FromTime={FromTime}", dataSpec, weeklyOption, fromTime);
 
         var openResult = await _jvLink.OpenAndWaitForDownloadAsync(dataSpec, fromTime, weeklyOption, cancellationToken);
+
+        if (openResult.NoData)
+        {
+            _logger.LogInformation("Weekly fetch: no new data since {FromTime}", fromTime);
+            return;
+        }
+
         _logger.LogInformation(
             "Download complete: readCount={ReadCount}, downloadCount={DownloadCount}, lastFileTimestamp={LastFileTimestamp}",
             openResult.ReadCount, openResult.DownloadCount, openResult.LastFileTimestamp);
