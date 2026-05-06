@@ -25,6 +25,7 @@ public record Race
     public int DayOfRound { get; init; }
     public int RaceNumber { get; init; }
     public DateTime? RaceDate { get; init; }
+    public TimeOnly? RaceStartTime { get; init; }
     public string? JapaneseName { get; init; }
     public int Distance { get; init; }
     public string? Surface { get; init; }

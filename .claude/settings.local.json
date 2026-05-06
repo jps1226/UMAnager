@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build *)",
+      "Bash(git push *)",
+      "Bash(git rm *)",
+      "Bash(git commit -m 'gitignore: Exclude CLAUDE.md and CORRECTIONS.md from tracking *)"
+    ]
+  }
+}

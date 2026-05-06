@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>UMAnager</title>
+    <link rel="stylesheet" href="/static/style.css?v=20260321-1"> 
+</head>
+<body>
+
+<div class="sidebar">
+    <div class="sidebar-brand-row">
+        <h2 class="sidebar-brand-title">🐎 UMAnager</h2>
+        <div class="sidebar-brand-actions">
+            <span class="app-version-badge">V1.0</span>
+            <button onclick="showSettingsModal()" title="Settings" class="settings-icon-btn">⚙️</button>
+        </div>
+    </div>
+
+    <div class="sidebar-top-controls">
+        <div class="view-switcher view-switcher-sidebar">
+            <button id="main-view-races" onclick="switchMainView('races')" class="toolbar-btn toolbar-btn-muted is-active">🏠 Main</button>
+            <button id="main-view-voting" onclick="switchMainView('voting')" class="toolbar-btn toolbar-btn-muted">🗳️ Voting</button>
+        </div>
+        <div class="active-date-nav active-date-nav-sidebar">
+            <button type="button" id="active-date-prev" class="active-date-nav-btn" onclick="shiftActiveDate(-1)">◀</button>
+            <div class="active-date-display">
+                <div id="active-date-label" class="active-date-label">No day selected</div>
+                <div id="active-date-meta" class="active-date-meta">0 races</div>
+            </div>
+            <button type="button" id="active-date-next" class="active-date-nav-btn" onclick="shiftActiveDate(1)">▶</button>
+        </div>
+        <div id="prefetch-status-banner" class="prefetch-status-banner" style="display:none;"></div>
+    </div>
+
+    <div class="sidebar-scroll">
+        <div id="voting-sidebar-panel" class="voting-sidebar-panel" style="display:none;">
+            <div class="voting-sidebar-head">
+                <h3 id="voting-sidebar-title">By Racecourse</h3>
+            </div>
+            <div id="voting-sidebar-display" class="voting-sidebar-display"></div>
+        </div>
+
+        <details id="calendar-group" class="sidebar-group calendar-group" open>
+        <summary>🗓️ Race Calendar</summary>
+        <div class="sidebar-group-content">
+            <div id="race-calendar" class="race-calendar-panel race-calendar-sidebar"></div>
+        </div>
+    </details>
+    
+    <details id="race-database-group" class="sidebar-group" open>
+        <summary>🔄 Race Database</summary>
+        <div class="sidebar-group-content">
+            
+            <button class="btn-full btn-primary-prominent" onclick="triggerScrape('new')" id="btn-new-race">🔍 Fetch Upcoming Races</button>
+            <button class="btn-full btn-compact" onclick="refreshUpcomingRacesLite()" id="btn-upcoming-refresh" data-action="check">🛰️ Check Pending Updates</button>
+            <button class="btn-full btn-compact" onclick="enrichHorseInfoAfterScrape()" id="btn-enrich-horse-info" data-action="enrich">🧬 Fill Horse Names / Parents</button>
+            
+            <details class="advanced-tools-panel">
+                <summary class="advanced-tools-summary">⚙️ Advanced Tools</summary>
+                <div class="advanced-tools-body">
+                    <button class="btn-full btn-micro" onclick="triggerScrape('all')" id="btn-all-race">📅 Load All Races (Test)</button>
+                    <button class="btn-full btn-micro" onclick="triggerPost('/api/cache/clear')">🗑️ Clear Cached Races</button>
+                    <button class="btn-full btn-danger btn-micro" onclick="triggerPost('/api/dict/wipe')">🚨 Reset Translation Memory</button>
+                    <button class="btn-full btn-micro" onclick="createDataBackup()">💾 Backup Data Folder</button>
+                    <button class="btn-full btn-micro" onclick="restoreLatestBackup()">♻️ Restore Latest Backup</button>
+                    <button class="btn-full btn-micro" onclick="exportLegacyBundle()">📦 Export Legacy Recovery Bundle</button>
+                    <button class="btn-full btn-danger btn-micro" onclick="importLegacyBundle()">📥 Import Legacy Files To DB</button>
+
+                    <div class="tool-block">
+                        <label class="tool-block-label">Import Results For Day</label>
+                        <input type="date" id="import-day-date" class="tool-input-compact">
+                        <button class="btn-full btn-micro btn-no-margin" onclick="importDayResultsFromCalendar()">📅 Import Day Results</button>
+                    </div>
+
+                    <div class="tool-block">
+                        <label class="tool-block-label">Delete Selected Day Data</label>
+                        <input type="date" id="delete-day-date" class="tool-input-compact">
+                        <select id="delete-day-scope" class="tool-input-compact">
+                            <option value="marks">Delete Marks Only</option>
+                            <option value="entries">Delete Horse Entries Only</option>
+                            <option value="all">Delete All Day Data</option>
+                        </select>
+                        <button class="btn-full btn-danger btn-micro btn-no-margin" onclick="deleteDayData()">🧹 Delete This Day</button>
+                    </div>
+
+                    <div class="tool-block jvlink-tool-block">
+                        <label class="tool-block-label">JRA-VAN / JV-Link Test Panel</label>
+                        <input type="text" id="jvlink-test-dataspec" class="tool-input-compact" value="TOKU" placeholder="DataSpec">
+                        <input type="text" id="jvlink-test-from-date" class="tool-input-compact" value="20250323000000" placeholder="FromDate (YYYYMMDD or YYYYMMDDHHMMSS)">
+                        <div class="jvlink-inline-grid">
+                            <input type="number" id="jvlink-test-max-records" class="tool-input-compact" value="20" min="1" max="500" placeholder="Max records">
+                            <select id="jvlink-test-data-option" class="tool-input-compact">
+                                <option value="1" selected>DataOption 1</option>
+                                <option value="2">DataOption 2</option>
+                                <option value="3">DataOption 3</option>
+                            </select>
+                        </div>
+                        <input type="text" id="jvlink-test-sid" class="tool-input-compact" placeholder="SID override (optional)">
+                        <label class="jvlink-checkbox-row">
+                            <input type="checkbox" id="jvlink-test-skip-key" checked>
+                            <span>Skip JVSetServiceKey</span>
+                        </label>
+                        <label class="jvlink-checkbox-row">
+                            <input type="checkbox" id="jvlink-test-compact" checked>
+                            <span>Compact output</span>
+                        </label>
+                        <div class="jvlink-btn-grid">
+                            <button class="btn-full btn-micro" onclick="runJvlinkRefreshUpcoming()">🔄 Refresh Cache</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkStatusTest()">🔎 Status</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkStorageLayoutTest()">📁 Storage</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkOpenSettingsTest()">⚙️ Open Settings</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkProbeOpenTest()">🧪 Probe Open</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkStreamSampleTest()">🌊 Stream Sample</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkStreamSampleAutoTest()">⏱️ Auto Wait Stream</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkCapabilityScanTest()">🧭 Capability Scan</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkStreamSummaryTest()">📊 Stream Summary</button>
+                        </div>
+                        <div class="jvlink-btn-grid">
+                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadWeekendRaces()" title="Fetch upcoming weekend race cards">📅 Load Weekend Races</button>
+                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadMasterDataInitial()" title="Bootstrap full horse master (initial setup)">🎓 Master Data (Initial)</button>
+                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadMasterDataIncremental()" title="Update horse master from checkpoint">🔄 Master Data (Update)</button>
+                        </div>
+                        <div id="jvlink-test-status" class="jvlink-test-status">Ready.</div>
+                        <pre id="jvlink-test-output" class="jvlink-test-output">{}</pre>
+                    </div>
+                </div>
+            </details>
+            
+        </div>
+    </details>
+
+    <details id="pedigree-lists-group" class="sidebar-group" open>
+        <summary>🎯 Pedigree Lists</summary>
+        <div class="sidebar-group-content">
+            <label class="sidebar-label">Add to list:</label>
+            <select id="snipe-type" class="sidebar-select-full">
+                <option value="favorites">⭐ Favorites</option>
+                <option value="watchlist">👁️ Watchlist</option>
+            </select>
+            <div class="inline-input-row">
+                <input type="text" id="snipe-url" placeholder="https://db.netkeiba.com/...">
+                <button onclick="snipeHorse()">Add</button>
+            </div>
+            
+            <div class="tab-bar tab-bar-spaced">
+                <button class="tab-btn active" onclick="switchSidebarTab('fav')">Favorites</button>
+                <button class="tab-btn" onclick="switchSidebarTab('watch')">Watchlist</button>
+            </div>
+            
+            <div id="side-tab-fav" class="tab-content active">
+                <div id="list-fav" class="horse-list-container"></div>
+            </div>
+            <div id="side-tab-watch" class="tab-content">
+                <div id="list-watch" class="horse-list-container"></div>
+            </div>
+        </div>
+    </details>
+
+    <details id="auto-pick-group" class="sidebar-group" open>
+            <summary>⚙️ Auto-Pick Strategy</summary>
+            <div class="sidebar-group-content strategy-panel-content">
+                <div class="strategy-mode-label">
+                    Mode: <span id="risk-label" class="risk-label-value">Balanced (50)</span>
+                </div>
+                <input type="range" id="risk-slider" min="0" max="100" value="50" oninput="updateRiskLabel(this.value)">
+                <div class="strategy-scale-labels">
+                    <span>SAFE / CHALK</span>
+                    <span>CHAOS / VALUE</span>
+                </div>
+            </div>
+        </details>
+        
+    <details id="weekend-watchlist-group" class="sidebar-group" open>
+            <summary>🏆 Weekend Watchlist</summary>
+            <div class="sidebar-group-content" id="sidebar-weekend-watchlist">
+                </div>
+        </details>
+    </div>
+
+    <div class="sidebar-footer">
+        <button id="global-close-server-btn" class="global-close-server-btn" onclick="closeServerInstances()" title="Close all running UMAnager server instances">⏻ Close Server</button>
+    </div>
+</div>
+
+<div class="main-content">
+    <div class="top-sticky-bar">
+        <div class="top-bar-clock-row">
+            <div class="clock-container">
+                <div class="clock-box">
+                    <div class="clock-label">JAPAN (JST)</div>
+                    <div class="clock-time" id="jst">--:--:--</div>
+                </div>
+                
+                <div id="countdown-container" class="countdown-wrapper" style="display: none;">
+                    <div class="countdown-title">Next Race In</div>
+                    <div id="countdown-time" class="countdown-time">--:--:--</div>
+                    <div id="countdown-race" class="countdown-race">Loading...</div>
+                </div>
+
+                <div class="clock-box">
+                    <div class="clock-label">CENTRAL (CT)</div>
+                    <div class="clock-time" id="cst">--:--:--</div>
+                </div>
+            </div>
+            <div id="scrape-console" class="console-box console-top-bar"></div>
+        </div>
+
+        <div class="main-toolbar">
+            <div class="main-toolbar-left">
+                <div class="search-container">
+                    <input type="text" id="horse-search" placeholder="🔍 Search horse..." autocomplete="off" oninput="handleSearchInput()" onkeydown="handleSearchKey(event)">
+                    <div id="search-suggestions" class="suggestions-box"></div>
+                </div>
+
+                <button id="btn-live-view-popout" onclick="showExportModal()" class="toolbar-btn toolbar-btn-primary">🪟 Live View Popout</button>
+                <button id="btn-tv-mode" onclick="window.open('/tv', '_blank', 'noopener')" class="toolbar-btn toolbar-btn-primary">📺 TV Mode</button>
+                <button id="btn-winning-votes-focus" onclick="toggleWinningVotesFocus()" class="toolbar-btn toolbar-btn-muted" style="display:none;">🏁 Hit 0% (0/0)</button>
+                <button onclick="collapseVotedRaces()" class="toolbar-btn toolbar-btn-muted">✅ Collapse Voted</button>
+                <button onclick="toggleAllRaces()" class="toolbar-btn toolbar-btn-muted">↕️ Toggle All Races</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="schedules-container" class="scrollable-races"></div>
+    <div id="live-view-container" class="voting-main-shell" style="display:none;">
+        <div class="voting-main-head">
+            <h3 id="voting-main-title">Voting Workspace</h3>
+            <div class="voting-main-head-actions">
+                <button id="btn-orepro-open" onclick="openOreProCompanion()" class="toolbar-btn toolbar-btn-muted">🌐 Open OrePro</button>
+                <button id="btn-orepro-focus" onclick="focusOreProCompanion()" class="toolbar-btn toolbar-btn-muted">🎯 Focus OrePro</button>
+                <button id="btn-orepro-auto-day" onclick="autoBetActiveDay()" class="toolbar-btn toolbar-btn-primary" title="Auto-pick the rest of the day with the current risk slider, then apply those marks to OrePro">⚡ Auto Bet Day</button>
+                <button id="btn-orepro-clear-day" onclick="clearActiveDayBets()" class="toolbar-btn toolbar-btn-muted" title="Clear all saved marks for the selected day so you can re-evaluate the card">🧹 Clear Day Bets</button>
+                <button id="btn-orepro-apply" onclick="applyVotesToOrePro()" class="toolbar-btn toolbar-btn-muted">🪄 Apply Votes</button>
+                <button id="btn-orepro-sync" onclick="syncOreProResults()" class="toolbar-btn toolbar-btn-muted">📥 Sync Results</button>
+                <button id="btn-reestimate-day" onclick="reEstimateActiveDay()" class="toolbar-btn toolbar-btn-muted">🧮 Re-estimate Day</button>
+                <button id="btn-voting-orepro-toggle" onclick="toggleVotingOrePro()" class="toolbar-btn toolbar-btn-muted">🧾 Collapse OrePro</button>
+                <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" rel="noopener noreferrer" class="modal-link-btn modal-link-btn-muted">↗ Open External</a>
+            </div>
+        </div>
+        <div id="orepro-session-status" class="orepro-session-status">Use Open OrePro to place bets in a dedicated window, then Sync Results here afterward.</div>
+        <div id="orepro-lifetime-bar" class="orepro-lifetime-bar">No saved OrePro history yet.</div>
+        <div id="orepro-companion-panel" class="orepro-companion-panel">
+            <div class="orepro-companion-help">
+                Companion window mode avoids iframe restrictions in Brave/Chrome and lets you verify your profile before syncing.
+            </div>
+            <div class="orepro-session-row">
+                <label>Sync date</label>
+                <span id="orepro-sync-date-display" class="orepro-sync-date-display">← select a day in the calendar</span>
+                <label for="orepro-kaisai-id" style="margin-left:8px;">Venue ID (optional)</label>
+                <input id="orepro-kaisai-id" type="text" autocomplete="off" placeholder="e.g. 2026060205" maxlength="12" style="width:130px;">
+                <label for="orepro-yosoka-id" style="margin-left:8px;">Profile ID</label>
+                <input id="orepro-yosoka-id" type="text" autocomplete="off" value="20021241" placeholder="e.g. 20021241" maxlength="10" style="width:110px;">
+            </div>
+            <div id="orepro-username-display" class="orepro-username-display" style="display:none;"></div>
+            <div id="orepro-sync-meta" class="orepro-sync-meta">Cookie storage is disabled. Sync uses public OrePro endpoints/profile ID.</div>
+            <div id="orepro-sync-results" class="orepro-sync-results">No results synced yet.</div>
+        </div>
+        <div id="voting-recap-panel" class="voting-recap-panel" style="display:none;"></div>
+    </div>
+</div>
+<div id="export-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content modal-content-wide">
+        <div class="modal-header">
+            <h3 class="modal-title">🪟 Live View Popout</h3>
+            <div class="modal-header-actions">
+                <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" rel="noopener noreferrer" class="modal-link-btn modal-link-btn-muted">↗ Open External</a>
+                <button onclick="closeExportModal()" class="close-btn">✖</button>
+            </div>
+        </div>
+        <div id="export-display"></div>
+        <button onclick="closeExportModal()" class="btn-full modal-close-btn">Close</button>
+    </div>
+</div>
+
+<div id="settings-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content modal-content-settings">
+        <div class="modal-header">
+            <h3 class="modal-title">⚙️ Settings</h3>
+            <button onclick="closeSettingsModal()" class="close-btn">✖</button>
+        </div>
+        <div class="settings-body">
+            <div class="settings-grid">
+                <div class="settings-card">
+                    <h4 class="settings-section-title settings-section-title-first">Default Sidebar Sections</h4>
+                    <div class="settings-option-list">
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-raceDatabase" onchange="updateSidebarSettings()">
+                            <span>🔄 Race Database</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-pedigreeLists" onchange="updateSidebarSettings()">
+                            <span>🎯 Pedigree Lists</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-autoPickStrategy" onchange="updateSidebarSettings()">
+                            <span>⚙️ Auto-Pick Strategy</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-weekendWatchlist" onchange="updateSidebarSettings()">
+                            <span>🏆 Weekend Watchlist</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="settings-card">
+                    <h4 class="settings-section-title">Display & Automation</h4>
+                    <div class="settings-option-list">
+                        <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
+                            <span>🧭 Data Engine</span>
+                            <select id="setting-dataEngine" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:140px;">
+                                <option value="nk">Netkeiba</option>
+                                <option value="jv">JRA-VAN</option>
+                            </select>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-betSafetyIndicator" onchange="updateSidebarSettings()">
+                            <span>⚡ Bet Safety Indicator</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-voteSortingTop" onchange="updateSidebarSettings()">
+                            <span>🗳️ Float Votes To Top</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-autoFetchPastResults" onchange="updateSidebarSettings()">
+                            <span>🏁 Auto-Fetch Past Results</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-prefetchRaceCheck" onchange="updateSidebarSettings()">
+                            <span>🔎 Prefetch Race Check Alerts</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-autoLockPastVotes" onchange="updateSidebarSettings()">
+                            <span>🔒 Auto-Lock Past Race Votes</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-showConsole" onchange="updateSidebarSettings()">
+                            <span>🖥️ Show Console Log</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-debugConsole" onchange="updateSidebarSettings()">
+                            <span>🧪 Debug Console Mode</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-highlightAutoBets" onchange="updateSidebarSettings()">
+                            <span>💡 Highlight Auto-Bets</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-highlightFallbackBridge" onchange="updateSidebarSettings()">
+                            <span>🧷 Highlight NK Fallback Fields</span>
+                        </label>
+                        <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
+                            <span>📺 TV Mode Split %</span>
+                            <input type="number" id="setting-tvModeSplitPercent" min="20" max="80" step="1" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:90px;">
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-tvModePanelsFlipped" onchange="updateSidebarSettings()">
+                            <span>📺 TV Mode Start Flipped</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="settings-card settings-card-full">
+                    <h4 class="settings-section-title settings-section-title-tight">⚗️ Auto-Pick Formula</h4>
+                    <div class="settings-helper-text">Tune the scoring engine weights. Changes affect new auto-picks and the Bet Safety indicator.</div>
+                    <div class="settings-formula-grid">
+                        <label title="Max points a horse can earn from odds (formula: oddsCap ÷ odds). Higher = odds have bigger absolute impact.">Odds Cap</label>
+                        <input type="number" id="fw-oddsCap" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
+
+                        <label title="Max points from win rate (wins÷starts × scale). Higher = race record matters more.">Win Rate Scale</label>
+                        <input type="number" id="fw-formMultiplier" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
+
+                        <label title="Points awarded per start below the breakeven count. Set to 0 to disable the freshness bonus entirely.">Freshness Bonus</label>
+                        <input type="number" id="fw-freshnessBonus" min="-20" max="20" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
+
+                        <label title="Starts count where freshness is neutral (neither bonus nor penalty). Horses with fewer starts get the bonus; more get a penalty.">Freshness Breakeven</label>
+                        <input type="number" id="fw-freshnessBreakeven" min="0" max="50" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
+
+                        <label title="Multiplier on pedigree score from tracked bloodlines. Higher = pedigree matters more at higher risk settings.">Pedigree Scale</label>
+                        <input type="number" id="fw-pedigreeMultiplier" min="0" max="500" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
+                    </div>
+                    <button onclick="resetFormulaWeights()" class="settings-reset-btn">↺ Reset to Defaults</button>
+                </div>
+
+                <div class="settings-card settings-card-full">
+                    <h4 class="settings-section-title">Race Table Columns</h4>
+                    <div class="settings-helper-text settings-helper-text-tight">Toggle visibility and move columns up/down. This applies globally.</div>
+                    <div id="setting-race-columns" class="setting-columns-wrap"></div>
+                </div>
+            </div>
+        </div>
+        <button onclick="closeSettingsModal()" class="btn-full modal-close-btn">Close</button>
+    </div>
+</div>
+</div>
+<script src="/static/script.js?v=20260410-8"></script>
+</body>
+</html>

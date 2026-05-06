@@ -9,3 +9,4 @@ C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\UMAnager.Comm
 C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\refint\UMAnager.Common.dll
 C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\UMAnager.Common.pdb
 C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\ref\UMAnager.Common.dll
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.Common\obj\Debug\net8.0\UMAnager.Common.sourcelink.json

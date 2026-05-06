@@ -17,6 +17,16 @@ try
     cmd.ExecuteNonQuery();
     Console.WriteLine("✓ Database schema initialized");
 
+    // Read and execute the Phase 4 migration
+    string migrationPath = @"C:\Users\UMAnager\UMAnager_RE\src\InitDb\migration_phase4_schema.sql";
+    if (File.Exists(migrationPath))
+    {
+        string migration = File.ReadAllText(migrationPath);
+        using var migrationCmd = new NpgsqlCommand(migration, conn);
+        migrationCmd.ExecuteNonQuery();
+        Console.WriteLine("✓ Phase 4 schema migration applied");
+    }
+
     // Verify sync_state table was initialized
     using var verifyCmd = new NpgsqlCommand("SELECT id, sync_count FROM sync_state WHERE id = 1", conn);
     using var reader = await verifyCmd.ExecuteReaderAsync();

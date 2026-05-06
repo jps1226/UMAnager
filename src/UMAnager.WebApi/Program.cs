@@ -17,10 +17,24 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// Enable CORS for all origins (needed for frontend access)
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policyBuilder =>
+    {
+        policyBuilder.AllowAnyOrigin()
+            .AllowAnyMethod()
+            .AllowAnyHeader();
+    });
+});
+
 var dbConfig = builder.Configuration.GetSection("Database");
 var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
 
 var app = builder.Build();
+
+// Use CORS
+app.UseCors();
 
 // Serve static files (index.html, CSS, JS)
 app.UseDefaultFiles();
@@ -81,42 +95,7 @@ app.MapGet("/api/status", async (IConfiguration config) =>
     }
 });
 
-app.MapGet("/api/races", async (IConfiguration config) =>
-{
-    try
-    {
-        var dbConfig = config.GetSection("Database");
-        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
-
-        using var conn = new NpgsqlConnection(connStr);
-        await conn.OpenAsync();
-
-        using var cmd = new NpgsqlCommand("SELECT race_id, race_date, track_code, race_number, race_name_japanese, distance, surface, grade FROM races ORDER BY race_date DESC LIMIT 20", conn);
-        using var reader = await cmd.ExecuteReaderAsync();
-
-        var races = new List<object>();
-        while (await reader.ReadAsync())
-        {
-            races.Add(new
-            {
-                raceId = reader.GetString(0),
-                raceDate = reader.GetDateTime(1).ToString("yyyy-MM-dd"),
-                trackCode = reader.GetString(2),
-                raceNumber = reader.GetInt32(3),
-                raceName = reader.IsDBNull(4) ? null : reader.GetString(4),
-                distance = reader.GetInt32(5),
-                surface = reader.IsDBNull(6) ? null : reader.GetString(6),
-                grade = reader.IsDBNull(7) ? null : reader.GetString(7)
-            });
-        }
-
-        return Results.Ok(races);
-    }
-    catch
-    {
-        return Results.Ok(new List<object>());
-    }
-});
+// Note: /api/races endpoint is now in Phase 4 MVP section with date filtering support
 
 app.MapGet("/api/horses", async (IConfiguration config) =>
 {
@@ -200,9 +179,16 @@ app.MapGet("/api/races/{race_id}", async (string race_id, IConfiguration config)
         const string entriesSql = @"
             SELECT e.id, e.race_id, e.horse_id, e.post_position, e.frame_number,
                    e.jockey_code, e.trainer_code, e.morning_line_odds,
-                   h.horse_name_japanese, h.horse_name_romaji, h.birth_year
+                   h.horse_name_japanese, h.horse_name_romaji, h.birth_year,
+                   h.sire_id, h.dam_id, h.broodmare_sire_id,
+                   sire.horse_name_japanese, sire.horse_name_romaji,
+                   dam.horse_name_japanese, dam.horse_name_romaji,
+                   bms.horse_name_japanese, bms.horse_name_romaji
             FROM race_entries e
             LEFT JOIN horses h ON e.horse_id = h.horse_id
+            LEFT JOIN horses sire ON h.sire_id = sire.horse_id
+            LEFT JOIN horses dam ON h.dam_id = dam.horse_id
+            LEFT JOIN horses bms ON h.broodmare_sire_id = bms.horse_id
             WHERE e.race_id = @raceId
             ORDER BY e.post_position ASC";
 
@@ -222,9 +208,25 @@ app.MapGet("/api/races/{race_id}", async (string race_id, IConfiguration config)
                 jockeyCode = entriesReader.IsDBNull(5) ? null : entriesReader.GetString(5),
                 trainerCode = entriesReader.IsDBNull(6) ? null : entriesReader.GetString(6),
                 morningLineOdds = entriesReader.IsDBNull(7) ? (decimal?)null : entriesReader.GetDecimal(7),
-                horseName = entriesReader.IsDBNull(8) ? null : entriesReader.GetString(8),
-                horseRomaji = entriesReader.IsDBNull(9) ? null : entriesReader.GetString(9),
-                birthYear = entriesReader.IsDBNull(10) ? (int?)null : entriesReader.GetInt32(10)
+                horse = new
+                {
+                    horseId = entriesReader.GetString(2),
+                    japaneseeName = entriesReader.IsDBNull(8) ? null : entriesReader.GetString(8),
+                    romajiName = entriesReader.IsDBNull(9) ? null : entriesReader.GetString(9),
+                    birthYear = entriesReader.IsDBNull(10) ? (int?)null : entriesReader.GetInt32(10),
+                    pedigree = new
+                    {
+                        sireId = entriesReader.IsDBNull(11) ? null : entriesReader.GetString(11),
+                        sireName = entriesReader.IsDBNull(14) ? null : entriesReader.GetString(14),
+                        sireRomaji = entriesReader.IsDBNull(15) ? null : entriesReader.GetString(15),
+                        damId = entriesReader.IsDBNull(12) ? null : entriesReader.GetString(12),
+                        damName = entriesReader.IsDBNull(16) ? null : entriesReader.GetString(16),
+                        damRomaji = entriesReader.IsDBNull(17) ? null : entriesReader.GetString(17),
+                        broodmareSireId = entriesReader.IsDBNull(13) ? null : entriesReader.GetString(13),
+                        broodmareSireName = entriesReader.IsDBNull(18) ? null : entriesReader.GetString(18),
+                        broodmareSireRomaji = entriesReader.IsDBNull(19) ? null : entriesReader.GetString(19)
+                    }
+                }
             });
         }
 
@@ -301,12 +303,522 @@ app.MapGet("/api/horses/{horse_id}", async (string horse_id, IConfiguration conf
     }
 });
 
+// Phase 4 MVP Endpoints
+
+// GET /api/calendar — calendar with race days marked
+app.MapGet("/api/calendar", async (IConfiguration config, int year, int month) =>
+{
+    try
+    {
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        var sql = @"
+            SELECT DISTINCT DATE_PART('day', race_date)::int as day,
+                   race_date >= CURRENT_DATE as isUpcoming,
+                   COUNT(*) as raceCount
+            FROM races
+            WHERE DATE_PART('year', race_date)::int = @year
+              AND DATE_PART('month', race_date)::int = @month
+            GROUP BY DATE_PART('day', race_date)::int, isUpcoming
+            ORDER BY day ASC";
+
+        using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@year", year);
+        cmd.Parameters.AddWithValue("@month", month);
+        using var reader = await cmd.ExecuteReaderAsync();
+
+        var days = new List<object>();
+        while (await reader.ReadAsync())
+        {
+            days.Add(new
+            {
+                day = reader.GetInt32(0),
+                isUpcoming = reader.GetBoolean(1),
+                raceCount = (int)reader.GetInt64(2)
+            });
+        }
+
+        return Results.Ok(days);
+    }
+    catch
+    {
+        return Results.Ok(new List<object>());
+    }
+});
+
+// GET /api/races?date=YYYY-MM-DD — races for a specific date, ordered by start time
+app.MapGet("/api/races", async (IConfiguration config, string? date) =>
+{
+    try
+    {
+        if (!DateTime.TryParse(date ?? "", out var raceDate))
+            return Results.Ok(new List<object>());
+
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        var sql = @"
+            SELECT race_id, race_number, track_code, race_date, race_start_time,
+                   distance, surface, grade, race_name_japanese
+            FROM races
+            WHERE race_date = @raceDate
+            ORDER BY race_start_time ASC, track_code ASC, race_number ASC";
+
+        using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@raceDate", raceDate.Date);
+        using var reader = await cmd.ExecuteReaderAsync();
+
+        var races = new List<object>();
+        while (await reader.ReadAsync())
+        {
+            races.Add(new
+            {
+                raceId = reader.GetString(0),
+                raceNumber = reader.GetInt32(1),
+                trackCode = reader.GetString(2),
+                raceDate = reader.IsDBNull(3) ? null : reader.GetDateTime(3).ToString("yyyy-MM-dd"),
+                raceStartTime = reader.IsDBNull(4) ? null : reader.GetTimeSpan(4).ToString(@"hh\:mm"),
+                distance = reader.GetInt32(5),
+                surface = reader.IsDBNull(6) ? null : reader.GetString(6),
+                grade = reader.IsDBNull(7) ? null : reader.GetString(7),
+                raceName = reader.IsDBNull(8) ? null : reader.GetString(8)
+            });
+        }
+
+        return Results.Ok(races);
+    }
+    catch
+    {
+        return Results.Ok(new List<object>());
+    }
+});
+
+// GET /api/horses/search — horse search with autocomplete
+app.MapGet("/api/horses/search", async (IConfiguration config, string q, int limit = 10) =>
+{
+    try
+    {
+        if (string.IsNullOrWhiteSpace(q) || q.Length < 2)
+            return Results.Ok(new List<object>());
+
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        // Use trigram similarity for fuzzy matching, with limit
+        var sql = @"
+            SELECT horse_id, horse_name_japanese, horse_name_romaji, birth_year
+            FROM horses
+            WHERE horse_name_japanese ILIKE @q || '%'
+               OR horse_name_romaji ILIKE @q || '%'
+            ORDER BY
+              CASE
+                WHEN horse_name_japanese ILIKE @q || '%' THEN 0
+                WHEN horse_name_romaji ILIKE @q || '%' THEN 1
+                ELSE 2
+              END,
+              horse_name_japanese ASC
+            LIMIT @limit";
+
+        using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@q", q);
+        cmd.Parameters.AddWithValue("@limit", limit);
+        using var reader = await cmd.ExecuteReaderAsync();
+
+        var horses = new List<object>();
+        while (await reader.ReadAsync())
+        {
+            horses.Add(new
+            {
+                horseId = reader.GetString(0),
+                japaneseeName = reader.IsDBNull(1) ? null : reader.GetString(1),
+                romajiName = reader.IsDBNull(2) ? null : reader.GetString(2),
+                birthYear = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3)
+            });
+        }
+
+        return Results.Ok(horses);
+    }
+    catch
+    {
+        return Results.Ok(new List<object>());
+    }
+});
+
+// GET /api/races/next — next race on a given date
+app.MapGet("/api/races/next", async (IConfiguration config, string? date) =>
+{
+    try
+    {
+        if (!DateTime.TryParse(date ?? "", out var raceDate))
+            return Results.NotFound();
+
+        var now = DateTime.UtcNow.AddHours(9); // JST
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        var sql = @"
+            SELECT race_id, race_number, track_code, race_start_time
+            FROM races
+            WHERE race_date = @raceDate AND race_start_time > @nowTime
+            ORDER BY race_start_time ASC
+            LIMIT 1";
+
+        using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@raceDate", raceDate.Date);
+        cmd.Parameters.AddWithValue("@nowTime", TimeOnly.FromDateTime(now));
+        using var reader = await cmd.ExecuteReaderAsync();
+
+        if (!await reader.ReadAsync())
+            return Results.NotFound();
+
+        return Results.Ok(new
+        {
+            raceId = reader.GetString(0),
+            raceNumber = reader.GetInt32(1),
+            trackCode = reader.GetString(2),
+            raceStartTime = reader.IsDBNull(3) ? null : reader.GetTimeSpan(3).ToString(@"hh\:mm")
+        });
+    }
+    catch
+    {
+        return Results.NotFound();
+    }
+});
+
+// GET /api/user/lists/favorites — get favorites list
+app.MapGet("/api/user/lists/favorites", async (IConfiguration config) =>
+{
+    try
+    {
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        var sql = @"
+            SELECT h.horse_id, h.horse_name_japanese, h.horse_name_romaji, h.birth_year
+            FROM user_horse_lists uhl
+            JOIN horses h ON uhl.horse_id = h.horse_id
+            WHERE uhl.list_type = 'favorites'
+            ORDER BY uhl.created_at DESC";
+
+        using var cmd = new NpgsqlCommand(sql, conn);
+        using var reader = await cmd.ExecuteReaderAsync();
+
+        var horses = new List<object>();
+        while (await reader.ReadAsync())
+        {
+            horses.Add(new
+            {
+                horseId = reader.GetString(0),
+                japaneseeName = reader.IsDBNull(1) ? null : reader.GetString(1),
+                romajiName = reader.IsDBNull(2) ? null : reader.GetString(2),
+                birthYear = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3)
+            });
+        }
+
+        return Results.Ok(horses);
+    }
+    catch
+    {
+        return Results.Ok(new List<object>());
+    }
+});
+
+// POST /api/user/lists/favorites — add horse to favorites
+app.MapPost("/api/user/lists/favorites", async (IConfiguration config, PostListRequest req) =>
+{
+    try
+    {
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        // Verify horse exists
+        using var checkCmd = new NpgsqlCommand("SELECT 1 FROM horses WHERE horse_id = @id", conn);
+        checkCmd.Parameters.AddWithValue("@id", req.HorseId);
+        if (await checkCmd.ExecuteScalarAsync() == null)
+            return Results.BadRequest(new { error = "Horse not found" });
+
+        // Insert or ignore if already exists
+        var sql = @"
+            INSERT INTO user_horse_lists (horse_id, list_type)
+            VALUES (@horseId, 'favorites')
+            ON CONFLICT (horse_id, list_type) DO NOTHING";
+
+        using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@horseId", req.HorseId);
+        await cmd.ExecuteNonQueryAsync();
+
+        return Results.Ok(new { success = true });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message, statusCode: 500);
+    }
+});
+
+// DELETE /api/user/lists/favorites/{horseId} — remove from favorites
+app.MapDelete("/api/user/lists/favorites/{horseId}", async (IConfiguration config, string horseId) =>
+{
+    try
+    {
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        var sql = "DELETE FROM user_horse_lists WHERE horse_id = @id AND list_type = 'favorites'";
+        using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@id", horseId);
+        await cmd.ExecuteNonQueryAsync();
+
+        return Results.Ok(new { success = true });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message, statusCode: 500);
+    }
+});
+
+// GET /api/user/lists/watchlist — get watchlist
+app.MapGet("/api/user/lists/watchlist", async (IConfiguration config) =>
+{
+    try
+    {
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        var sql = @"
+            SELECT h.horse_id, h.horse_name_japanese, h.horse_name_romaji, h.birth_year
+            FROM user_horse_lists uhl
+            JOIN horses h ON uhl.horse_id = h.horse_id
+            WHERE uhl.list_type = 'watchlist'
+            ORDER BY uhl.created_at DESC";
+
+        using var cmd = new NpgsqlCommand(sql, conn);
+        using var reader = await cmd.ExecuteReaderAsync();
+
+        var horses = new List<object>();
+        while (await reader.ReadAsync())
+        {
+            horses.Add(new
+            {
+                horseId = reader.GetString(0),
+                japaneseeName = reader.IsDBNull(1) ? null : reader.GetString(1),
+                romajiName = reader.IsDBNull(2) ? null : reader.GetString(2),
+                birthYear = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3)
+            });
+        }
+
+        return Results.Ok(horses);
+    }
+    catch
+    {
+        return Results.Ok(new List<object>());
+    }
+});
+
+// POST /api/user/lists/watchlist — add horse to watchlist
+app.MapPost("/api/user/lists/watchlist", async (IConfiguration config, PostListRequest req) =>
+{
+    try
+    {
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        // Verify horse exists
+        using var checkCmd = new NpgsqlCommand("SELECT 1 FROM horses WHERE horse_id = @id", conn);
+        checkCmd.Parameters.AddWithValue("@id", req.HorseId);
+        if (await checkCmd.ExecuteScalarAsync() == null)
+            return Results.BadRequest(new { error = "Horse not found" });
+
+        // Insert or ignore if already exists
+        var sql = @"
+            INSERT INTO user_horse_lists (horse_id, list_type)
+            VALUES (@horseId, 'watchlist')
+            ON CONFLICT (horse_id, list_type) DO NOTHING";
+
+        using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@horseId", req.HorseId);
+        await cmd.ExecuteNonQueryAsync();
+
+        return Results.Ok(new { success = true });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message, statusCode: 500);
+    }
+});
+
+// DELETE /api/user/lists/watchlist/{horseId} — remove from watchlist
+app.MapDelete("/api/user/lists/watchlist/{horseId}", async (IConfiguration config, string horseId) =>
+{
+    try
+    {
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        var sql = "DELETE FROM user_horse_lists WHERE horse_id = @id AND list_type = 'watchlist'";
+        using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@id", horseId);
+        await cmd.ExecuteNonQueryAsync();
+
+        return Results.Ok(new { success = true });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message, statusCode: 500);
+    }
+});
+
+// GET /api/user/lists/watchlist/upcoming — weekend watchlist
+app.MapGet("/api/user/lists/watchlist/upcoming", async (IConfiguration config) =>
+{
+    try
+    {
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        // Get next Saturday and Sunday
+        var now = DateTime.UtcNow.AddHours(9); // JST
+        var daysUntilSaturday = (DayOfWeek.Saturday - now.DayOfWeek + 7) % 7;
+        if (daysUntilSaturday == 0) daysUntilSaturday = 7;
+        var saturday = now.AddDays(daysUntilSaturday).Date;
+        var sunday = saturday.AddDays(1);
+
+        var sql = @"
+            SELECT DISTINCT h.horse_id, h.horse_name_japanese, h.horse_name_romaji, h.birth_year, r.race_date
+            FROM user_horse_lists uhl
+            JOIN horses h ON uhl.horse_id = h.horse_id
+            JOIN race_entries re ON h.horse_id = re.horse_id
+            JOIN races r ON re.race_id = r.race_id
+            WHERE uhl.list_type = 'watchlist'
+              AND r.race_date >= @saturday
+              AND r.race_date <= @sunday
+            ORDER BY r.race_date ASC, h.horse_name_japanese ASC";
+
+        using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@saturday", saturday);
+        cmd.Parameters.AddWithValue("@sunday", sunday);
+        using var reader = await cmd.ExecuteReaderAsync();
+
+        var horses = new List<object>();
+        while (await reader.ReadAsync())
+        {
+            horses.Add(new
+            {
+                horseId = reader.GetString(0),
+                japaneseeName = reader.IsDBNull(1) ? null : reader.GetString(1),
+                romajiName = reader.IsDBNull(2) ? null : reader.GetString(2),
+                birthYear = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3),
+                raceDate = reader.GetDateTime(4).ToString("yyyy-MM-dd")
+            });
+        }
+
+        return Results.Ok(horses);
+    }
+    catch
+    {
+        return Results.Ok(new List<object>());
+    }
+});
+
+// GET /api/user/settings — get user settings
+app.MapGet("/api/user/settings", async (IConfiguration config) =>
+{
+    try
+    {
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        using var cmd = new NpgsqlCommand("SELECT settings_json FROM user_settings WHERE id = 1", conn);
+        var result = await cmd.ExecuteScalarAsync();
+
+        if (result == null)
+            return Results.Ok(new { });
+
+        // Return as-is; the JSON is already a string from PostgreSQL
+        return Results.Ok(result.ToString());
+    }
+    catch
+    {
+        return Results.Ok(new { });
+    }
+});
+
+// PUT /api/user/settings — save user settings
+app.MapPut("/api/user/settings", async (IConfiguration config, SettingsRequest req) =>
+{
+    try
+    {
+        var dbConfig = config.GetSection("Database");
+        var connStr = $"Host={dbConfig["Host"]};Port={dbConfig["Port"]};Database={dbConfig["Database"]};Username={dbConfig["Username"]};Password={dbConfig["Password"]}";
+
+        using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        var sql = @"
+            INSERT INTO user_settings (id, settings_json, updated_at)
+            VALUES (1, @json, NOW())
+            ON CONFLICT (id) DO UPDATE SET
+              settings_json = @json,
+              updated_at = NOW()";
+
+        using var cmd = new NpgsqlCommand(sql, conn);
+        var settingsToSave = req.Settings ?? new Dictionary<string, object>();
+        cmd.Parameters.AddWithValue("@json", System.Text.Json.JsonSerializer.Serialize(settingsToSave));
+        await cmd.ExecuteNonQueryAsync();
+
+        return Results.Ok(new { success = true });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message, statusCode: 500);
+    }
+});
+
 // Serve index.html for unknown routes (SPA fallback)
 app.MapFallback(() =>
 {
     var wwwrootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "index.html");
     if (!File.Exists(wwwrootPath))
         wwwrootPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "index.html");
+
+    if (!File.Exists(wwwrootPath))
+        return Results.NotFound(new { error = "index.html not found" });
 
     return Results.File(wwwrootPath, "text/html");
 });
@@ -331,3 +843,7 @@ async Task<object?> GetHorseBasicAsync(NpgsqlConnection conn, string horseId)
         birthYear = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3)
     };
 }
+
+// Helper records for API requests/responses
+public record PostListRequest(string HorseId);
+public record SettingsRequest(Dictionary<string, object>? Settings);

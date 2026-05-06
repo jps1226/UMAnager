@@ -39,6 +39,7 @@ public static class RARecordParser
                 return null;
 
             // Parse other fields
+            string raceStartTimeStr = JVEncoding.ExtractField(raLine, 38, 4);  // Pos 39 in spec (HHMM)
             string distanceStr = JVEncoding.ExtractField(raLine, 697, 4);  // Pos 698 in spec
             string surfaceCode = JVEncoding.ExtractField(raLine, 705, 2);  // Pos 706 in spec
             string gradeCode = JVEncoding.ExtractField(raLine, 614, 1);    // Pos 615 in spec
@@ -49,6 +50,7 @@ public static class RARecordParser
 
             // Parse numeric fields
             int distance = int.TryParse(distanceStr, out var d) ? d : 0;
+            TimeOnly? raceStartTime = ParseRaceStartTime(raceStartTimeStr);
 
             // Parse date components
             if (!int.TryParse(year, out var y) || !int.TryParse(monthDay, out var md))
@@ -75,6 +77,7 @@ public static class RARecordParser
                 DayOfRound = int.TryParse(dayOfRound, out var dor) ? dor : 0,
                 RaceNumber = int.TryParse(raceNumber, out var rn) ? rn : 0,
                 RaceDate = TryConstructDate(y, month, day),
+                RaceStartTime = raceStartTime,
                 Distance = distance,
                 Surface = surfaceCode,
                 Grade = gradeCode,
@@ -109,5 +112,23 @@ public static class RARecordParser
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Parse race start time from HHMM format (4 characters).
+    /// Returns null if invalid or empty.
+    /// </summary>
+    private static TimeOnly? ParseRaceStartTime(string timeStr)
+    {
+        if (string.IsNullOrWhiteSpace(timeStr) || timeStr.Length < 4)
+            return null;
+
+        if (int.TryParse(timeStr[..2], out var hour) && int.TryParse(timeStr[2..4], out var minute))
+        {
+            if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60)
+                return new TimeOnly(hour, minute);
+        }
+
+        return null;
     }
 }

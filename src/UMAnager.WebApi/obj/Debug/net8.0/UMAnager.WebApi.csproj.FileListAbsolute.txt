@@ -61,3 +61,5 @@ C:\Users\UMAnager\UMAnager_RE\src\UMAnager.WebApi\obj\Debug\net8.0\refint\UMAnag
 C:\Users\UMAnager\UMAnager_RE\src\UMAnager.WebApi\obj\Debug\net8.0\UMAnager.WebApi.pdb
 C:\Users\UMAnager\UMAnager_RE\src\UMAnager.WebApi\obj\Debug\net8.0\UMAnager.WebApi.genruntimeconfig.cache
 C:\Users\UMAnager\UMAnager_RE\src\UMAnager.WebApi\obj\Debug\net8.0\ref\UMAnager.WebApi.dll
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.WebApi\obj\Debug\net8.0\UMAnager.WebApi.sourcelink.json
+C:\Users\UMAnager\UMAnager_RE\src\UMAnager.WebApi\bin\Debug\net8.0\appsettings.local.json
