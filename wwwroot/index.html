@@ -1,1064 +1,581 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>UMAnager v2.0 — Japanese Horse Racing</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UMAnager v2.0 — Race Management</title>
     <style>
-        *, *::before, *::after { box-sizing: border-box; }
-        html, body {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            background: #0e1117;
-            color: #fafafa;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }
-
-        /* ──── Layout ──── */
-        #app-container {
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            color: #333;
             display: flex;
-            flex-direction: column;
             height: 100vh;
             overflow: hidden;
         }
-
-        header {
-            background: linear-gradient(135deg, #1a1c23 0%, #0e1117 100%);
-            border-bottom: 2px solid #1dd1a1;
-            padding: 1rem 1.5rem;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-            flex-shrink: 0;
-        }
-
-        .header-top {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 1rem;
-            flex-wrap: wrap;
-            margin-bottom: 0.75rem;
-        }
-
-        h1 {
-            font-size: 1.5rem;
-            color: #1dd1a1;
-            margin: 0;
-        }
-
-        .header-controls {
-            display: flex;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-        }
-
-        .status {
-            display: flex;
-            gap: 1.5rem;
-            font-size: 0.8rem;
-        }
-
-        .status-item {
-            display: flex;
-            align-items: center;
-            gap: 0.4rem;
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #22c55e;
-        }
-
-        .status-dot.error {
-            background: #ef4444;
-        }
-
-        .action-btn {
-            padding: 0.5rem 1rem;
-            background: #1a1c23;
-            border: 1px solid #333;
-            color: #fafafa;
-            border-radius: 0.375rem;
-            cursor: pointer;
-            font-size: 0.875rem;
-            transition: all 0.2s;
-            white-space: nowrap;
-        }
-
-        .action-btn:hover {
-            background: #333;
-        }
-
-        .action-btn.active {
-            background: #1dd1a1;
-            border-color: #1dd1a1;
-            color: #000;
-        }
-
-        /* ──── Tab Navigation ──── */
-        .tab-container {
-            display: flex;
-            gap: 0.5rem;
-            padding: 0 1.5rem;
-            border-bottom: 1px solid #333;
-            background: #0e1117;
-            flex-shrink: 0;
-        }
-
-        .tab-btn {
-            padding: 0.75rem 1rem;
-            background: none;
-            border: none;
-            color: #888;
-            cursor: pointer;
-            font-size: 0.875rem;
-            border-bottom: 3px solid transparent;
-            transition: all 0.2s;
-        }
-
-        .tab-btn:hover {
-            color: #bbb;
-        }
-
-        .tab-btn.active {
-            color: #1dd1a1;
-            border-bottom-color: #1dd1a1;
-        }
-
-        .tab-content {
-            display: none;
-            flex: 1;
-            overflow: hidden;
-        }
-
-        .tab-content.active {
-            display: flex;
-            flex-direction: column;
-        }
-
-        /* ──── Dashboard Tab ──── */
-        #dashboard-tab {
-            padding: 2rem 1.5rem;
-            overflow-y: auto;
-        }
-
-        .dashboard-stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
-        }
-
-        .stat-box {
-            background: #1a1c23;
-            border: 1px solid #333;
-            border-radius: 0.5rem;
-            padding: 1.5rem;
-        }
-
-        .stat-label {
-            font-size: 0.875rem;
-            color: #888;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 0.5rem;
-        }
-
-        .stat-value {
-            font-size: 2rem;
-            color: #1dd1a1;
-            font-weight: bold;
-        }
-
-        .sync-info {
-            background: #1a1c23;
-            border: 1px solid #333;
-            border-radius: 0.5rem;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-        }
-
-        .sync-info h3 {
-            margin: 0 0 1rem 0;
-            color: #1dd1a1;
-            font-size: 1rem;
-        }
-
-        .sync-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 0.5rem 0;
-            border-bottom: 1px solid #333;
-            font-size: 0.875rem;
-        }
-
-        .sync-row:last-child {
-            border-bottom: none;
-        }
-
-        .sync-label {
-            color: #888;
-        }
-
-        .sync-value {
-            color: #1dd1a1;
-            font-family: monospace;
-        }
-
-        /* ──── TV Mode Layout ──── */
-        #tv-layout {
-            display: flex;
-            flex-direction: row;
-            flex: 1;
-            overflow: hidden;
-            --gch-size: 50%;
-        }
-
-        #gch-panel {
-            flex: 0 0 var(--gch-size);
-            min-width: 0;
-            display: flex;
-            flex-direction: column;
-            border-right: 2px solid #222;
-            background: #0c0f14;
-            overflow: hidden;
-        }
-
-        #tv-layout.panels-flipped #gch-panel {
-            order: 3;
-            border-right: none;
-            border-left: 2px solid #222;
-        }
-
-        #racelist-panel {
-            flex: 1 1 auto;
-            min-width: 0;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        #tv-layout.panels-flipped #racelist-panel {
-            order: 1;
-        }
-
-        #split-handle {
-            flex: 0 0 10px;
-            background: #12151b;
-            border-left: 1px solid #262b36;
-            border-right: 1px solid #262b36;
-            cursor: col-resize;
-            position: relative;
-            z-index: 10;
-            touch-action: none;
-        }
-
-        #split-handle::after {
-            content: '';
-            position: absolute;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
-            width: 3px;
-            height: 52px;
-            border-radius: 999px;
-            background: #3a4356;
-        }
-
-        #tv-layout.panels-flipped #split-handle {
-            order: 2;
-        }
-
-        #tv-layout.is-dragging, #tv-layout.is-dragging * {
-            user-select: none;
-            cursor: col-resize !important;
-        }
-
-        @media (max-width: 700px) or (orientation: portrait) {
-            #tv-layout { flex-direction: column; }
-            #gch-panel { flex: 0 0 auto; border-right: none; border-bottom: 2px solid #222; min-height: 52px; }
-            #tv-layout.panels-flipped #gch-panel { border-left: none; border-bottom: none; border-top: 2px solid #222; }
-            #gch-panel.minimized { flex: 0 0 52px; }
-            #gch-panel.expanded { flex: 0 0 56vw; }
-            #racelist-panel { flex: 1 1 0; }
-            #split-handle {
-                flex: 0 0 10px;
-                width: 100%;
-                border-left: none;
-                border-right: none;
-                border-top: 1px solid #262b36;
-                border-bottom: 1px solid #262b36;
-                cursor: row-resize;
-            }
-            #split-handle::after {
-                width: 52px;
-                height: 3px;
-            }
-            #tv-layout.is-dragging, #tv-layout.is-dragging * {
-                cursor: row-resize !important;
-            }
-        }
-
-        /* ──── GCh Panel ──── */
-        #gch-header {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 12px;
-            background: #111418;
-            border-bottom: 1px solid #222;
-            flex-shrink: 0;
-        }
-
-        #gch-header h2 {
-            margin: 0;
-            font-size: 15px;
-            color: #f5a623;
-            white-space: nowrap;
-        }
-
-        .gch-open-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            background: #f5a623;
-            color: #000;
-            font-weight: bold;
-            font-size: 13px;
-            padding: 6px 14px;
-            border-radius: 6px;
-            text-decoration: none;
-            white-space: nowrap;
-            cursor: pointer;
-            border: none;
-        }
-
-        .gch-open-btn:hover { background: #ffbb45; }
-
-        #toggle-gch-size {
-            margin-left: auto;
-            background: #222;
-            color: #aaa;
-            border: 1px solid #333;
-            border-radius: 4px;
-            padding: 4px 8px;
-            font-size: 12px;
-            cursor: pointer;
-            white-space: nowrap;
-        }
-
-        #toggle-gch-size:hover { background: #333; }
-
-        #flip-panels-btn {
-            background: #222;
-            color: #9ed8ff;
-            border: 1px solid #334b5f;
-            border-radius: 4px;
-            padding: 4px 8px;
-            font-size: 12px;
-            cursor: pointer;
-            white-space: nowrap;
-        }
-
-        #flip-panels-btn:hover { background: #2c3e50; color: #d6efff; }
-
-        #gch-iframe-area {
-            flex: 1 1 0;
-            position: relative;
-            overflow: hidden;
-        }
-
-        #gch-iframe-area iframe {
-            position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            border: none;
-            background: #000;
-        }
-
-        #gch-player-wrap {
-            position: absolute;
-            inset: 0;
-            display: none;
-            background: #000;
-        }
-
-        #gch-play-overlay {
-            position: absolute;
-            inset: 0;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            z-index: 6;
-            background: linear-gradient(180deg, rgba(0,0,0,0.25), rgba(0,0,0,0.6));
-        }
-
-        #gch-play-btn {
-            background: #f5a623;
-            color: #000;
-            border: none;
-            border-radius: 999px;
-            padding: 12px 20px;
-            font-size: 14px;
-            font-weight: bold;
-            cursor: pointer;
-            box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
-        }
-
-        #gch-play-btn:hover { background: #ffbb45; }
-
-        #gch-fallback {
-            position: absolute;
-            inset: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 16px;
-            padding: 24px;
-            text-align: center;
-            background: #0c0f14;
-        }
-
-        #gch-fallback .big-link {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: #f5a623;
-            color: #000;
-            font-weight: bold;
-            font-size: 18px;
-            padding: 14px 28px;
-            border-radius: 10px;
-            text-decoration: none;
-        }
-
-        #gch-fallback .big-link:hover { background: #ffbb45; }
-
-        #gch-fallback .note {
-            font-size: 12px;
-            color: #666;
-            max-width: 320px;
-        }
-
-        #gch-status {
-            position: absolute;
-            right: 10px;
-            bottom: 10px;
-            font-size: 11px;
-            color: #bbb;
-            background: rgba(0, 0, 0, 0.55);
-            border: 1px solid #333;
-            padding: 4px 8px;
-            border-radius: 999px;
-            z-index: 5;
-        }
-
-        /* ──── Race List Panel ──── */
-        #racelist-header {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 12px;
-            background: #111418;
-            border-bottom: 1px solid #222;
-            flex-shrink: 0;
-        }
-
-        #racelist-header h2 {
-            margin: 0;
-            font-size: 15px;
-            color: #1dd1a1;
-        }
-
-        #racelist-date-label {
-            font-size: 12px;
-            color: #888;
-        }
-
-        #reload-btn {
-            margin-left: auto;
-            background: #1a2a25;
-            color: #1dd1a1;
-            border: 1px solid #1dd1a1;
-            border-radius: 4px;
-            padding: 4px 10px;
-            font-size: 12px;
-            cursor: pointer;
-        }
-
-        #reload-btn:hover { background: #1dd1a1; color: #000; }
-
-        #racelist-scroll {
-            flex: 1 1 0;
-            overflow-y: auto;
-            padding: 10px;
-        }
-
-        #date-tabs {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-            margin-bottom: 10px;
-        }
-
-        .date-tab {
-            background: #1a1c23;
-            border: 1px solid #333;
-            color: #aaa;
-            border-radius: 4px;
-            padding: 4px 10px;
-            font-size: 12px;
-            cursor: pointer;
-        }
-
-        .date-tab.active {
-            background: #1dd1a1;
-            color: #000;
-            border-color: #1dd1a1;
-            font-weight: bold;
-        }
-
-        .date-tab:hover:not(.active) { background: #222; }
-
-        .race-card {
-            background: #1a1c23;
-            border: 1px solid #2a2d3a;
-            border-radius: 6px;
-            padding: 10px 12px;
-            margin-bottom: 8px;
-        }
-
-        .race-title {
-            font-size: 13px;
-            font-weight: bold;
-            color: #bbb;
-            margin-bottom: 6px;
-            padding-bottom: 4px;
-            border-bottom: 1px dotted #333;
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .race-title:hover { color: #fff; }
-
-        .race-title.collapsed {
-            margin-bottom: 0;
-            border-bottom-style: solid;
-            border-color: #222;
-        }
-
-        .race-body { }
-
-        .race-body.hidden { display: none; }
-
-        .horse-line {
-            display: flex;
-            align-items: center;
-            gap: 7px;
-            font-size: 14px;
-            margin-bottom: 7px;
-        }
-
-        .horse-post { order: 1; }
-        .horse-mark { order: 2; }
-        .horse-name { order: 3; }
-        .horse-fav { order: 4; }
-
-        #tv-layout.panels-flipped .horse-post { order: 4; }
-        #tv-layout.panels-flipped .horse-mark { order: 3; }
-        #tv-layout.panels-flipped .horse-name { order: 2; text-align: right; }
-        #tv-layout.panels-flipped .horse-fav { order: 1; }
-
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 24px;
-            height: 24px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: bold;
-            flex-shrink: 0;
-            border: 1px solid transparent;
-        }
-
-        .badge.empty { background: transparent !important; border-color: transparent !important; }
-
-        .horse-name {
-            flex: 1;
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .fav-badge {
-            font-size: 11px;
-            color: #ccc;
-            border: 1px solid #555;
-            border-radius: 3px;
-            padding: 2px 5px;
-            white-space: nowrap;
-            flex-shrink: 0;
-        }
-
-        .no-marks-msg {
-            font-size: 12px;
-            color: #555;
-            font-style: italic;
-        }
-
-        #status-msg {
-            padding: 16px;
-            color: #666;
-            font-size: 13px;
-        }
-
-        #status-msg.error {
-            color: #ff6b6b;
-        }
+        .sidebar { width: 280px; background: #fff; border-right: 1px solid #ddd; overflow-y: auto; display: flex; flex-direction: column; }
+        .sidebar-header { padding: 16px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
+        .sidebar-header h2 { font-size: 18px; font-weight: 600; }
+        .sidebar-header button { background: none; border: none; font-size: 20px; cursor: pointer; }
+        .sidebar-content { flex: 1; overflow-y: auto; padding: 12px; }
+        .view-switcher { display: flex; gap: 8px; margin-bottom: 16px; }
+        .view-btn { flex: 1; padding: 8px; border: 1px solid #ddd; background: #f9f9f9; cursor: pointer; border-radius: 4px; font-size: 13px; }
+        .view-btn.active { background: #007bff; color: white; border-color: #007bff; }
+        .date-navigator { background: #f9f9f9; padding: 12px; border-radius: 4px; margin-bottom: 16px; display: flex; gap: 8px; align-items: center; }
+        .date-navigator button { background: white; border: 1px solid #ddd; padding: 4px 8px; cursor: pointer; border-radius: 3px; }
+        .date-info { flex: 1; font-size: 12px; }
+        .date-info .date-label { font-weight: 600; color: #333; }
+        .date-info .race-count { color: #999; font-size: 11px; }
+        .sidebar-section { margin-bottom: 16px; }
+        .sidebar-section-title { font-weight: 600; font-size: 13px; margin-bottom: 10px; padding: 0 4px; text-transform: uppercase; color: #666; }
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; font-size: 11px; margin-bottom: 12px; }
+        .calendar-day { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border: 1px solid #ddd; cursor: pointer; border-radius: 3px; background: white; transition: all 0.2s; }
+        .calendar-day:hover { border-color: #007bff; }
+        .calendar-day.has-races { background: #e3f2fd; border-color: #2196F3; }
+        .calendar-day.historical { background: #fff3e0; }
+        .calendar-day.selected { background: #007bff; color: white; border-color: #007bff; }
+        .list-input-group { display: flex; gap: 6px; margin-bottom: 8px; }
+        .list-input-group input { flex: 1; padding: 6px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px; }
+        .list-input-group button { padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 12px; }
+        .horse-list { list-style: none; font-size: 12px; }
+        .horse-list li { padding: 6px; background: #f9f9f9; margin-bottom: 4px; border-radius: 3px; display: flex; justify-content: space-between; align-items: center; }
+        .horse-list button { background: none; border: none; color: #999; cursor: pointer; padding: 0; font-size: 14px; }
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .top-bar { background: white; border-bottom: 1px solid #ddd; padding: 12px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+        .clocks { display: flex; gap: 12px; font-size: 13px; }
+        .clock-box { background: #f9f9f9; padding: 6px 12px; border-radius: 3px; border: 1px solid #ddd; }
+        .clock-label { font-size: 10px; color: #999; text-transform: uppercase; }
+        .clock-time { font-family: 'Courier New', monospace; font-weight: 600; font-size: 14px; color: #333; }
+        .countdown-box { background: #fff3cd; padding: 6px 12px; border-radius: 3px; border: 1px solid #ffc107; font-size: 12px; }
+        .countdown-time { font-family: 'Courier New', monospace; font-weight: 600; font-size: 14px; color: #ff6b6b; }
+        .search-container { flex: 1; max-width: 300px; position: relative; }
+        .search-container input { width: 100%; padding: 6px 10px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px; }
+        .search-suggestions { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ddd; border-top: none; max-height: 200px; overflow-y: auto; list-style: none; font-size: 12px; z-index: 100; }
+        .search-suggestions li { padding: 6px 10px; cursor: pointer; }
+        .search-suggestions li:hover { background: #f0f0f0; }
+        .toolbar { display: flex; gap: 8px; }
+        .btn { padding: 6px 12px; background: #f9f9f9; border: 1px solid #ddd; border-radius: 3px; cursor: pointer; font-size: 12px; }
+        .btn:hover { border-color: #007bff; background: #f0f7ff; }
+        .btn-primary { background: #007bff; color: white; border-color: #007bff; }
+        .btn-primary:hover { background: #0056b3; }
+        .races-container { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+        .race-card { background: white; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; }
+        .race-header { background: #f9f9f9; padding: 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+        .race-header:hover { background: #f0f0f0; }
+        .race-title { font-weight: 600; font-size: 13px; }
+        .race-meta { font-size: 11px; color: #999; margin-top: 2px; }
+        .race-toggle { background: none; border: none; font-size: 16px; cursor: pointer; padding: 0; }
+        .race-entries { display: none; border-top: 1px solid #ddd; overflow-x: auto; }
+        .race-entries.open { display: table; width: 100%; }
+        .entry-row { display: table-row; border-bottom: 1px solid #eee; }
+        .entry-row:last-child { border-bottom: none; }
+        .entry-cell { display: table-cell; padding: 8px; font-size: 11px; border-right: 1px solid #eee; }
+        .entry-cell:last-child { border-right: none; }
+        .no-races { text-align: center; padding: 32px; color: #999; font-size: 14px; }
+        .modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+        .modal.open { display: flex; }
+        .modal-content { background: white; border-radius: 4px; max-width: 600px; max-height: 80vh; overflow-y: auto; width: 90%; }
+        .modal-header { padding: 16px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
+        .modal-header h3 { font-size: 16px; }
+        .modal-close { background: none; border: none; font-size: 20px; cursor: pointer; padding: 0; }
+        .modal-body { padding: 16px; }
+        .settings-section { margin-bottom: 20px; }
+        .settings-section h4 { font-size: 13px; font-weight: 600; margin-bottom: 10px; text-transform: uppercase; color: #666; }
+        .settings-option { display: flex; align-items: center; gap: 8px; padding: 6px; font-size: 12px; margin-bottom: 6px; }
+        .settings-option input[type="checkbox"] { cursor: pointer; }
+        .risk-slider { width: 100%; margin: 12px 0; }
     </style>
 </head>
 <body>
-    <div id="app-container">
-        <header>
-            <div class="header-top">
-                <h1>📊 UMAnager v2.0</h1>
-                <div class="status">
-                    <div class="status-item">
-                        <span class="status-dot" id="db-status"></span>
-                        <span id="db-label">Database</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-dot" id="sync-status"></span>
-                        <span id="sync-label">Synced</span>
-                    </div>
-                </div>
-            </div>
-        </header>
 
-        <div class="tab-container">
-            <button class="tab-btn active" data-tab="dashboard">📊 Dashboard</button>
-            <button class="tab-btn" data-tab="tv">📺 TV Mode</button>
+<div class="sidebar">
+    <div class="sidebar-header">
+        <h2>🐎 UMAnager</h2>
+        <button onclick="openSettings()" title="Settings">⚙️</button>
+    </div>
+
+    <div class="sidebar-content">
+        <div class="view-switcher">
+            <button class="view-btn active">🏠 Main</button>
+            <button class="view-btn" disabled title="Phase 2">🗳️ Voting</button>
         </div>
 
-        <!-- Dashboard Tab -->
-        <div id="dashboard-tab" class="tab-content active">
-            <div class="dashboard-stats">
-                <div class="stat-box">
-                    <div class="stat-label">🐴 Horses</div>
-                    <div class="stat-value" id="horse-count">0</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">🏇 Races</div>
-                    <div class="stat-value" id="race-count">0</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">📋 Entries</div>
-                    <div class="stat-value" id="entry-count">0</div>
-                </div>
+        <div class="date-navigator">
+            <button onclick="previousDate()">◀</button>
+            <div class="date-info">
+                <div class="date-label" id="activeDate">Select a date</div>
+                <div class="race-count" id="raceCount">0 races</div>
             </div>
+            <button onclick="nextDate()">▶</button>
+        </div>
 
-            <div class="sync-info">
-                <h3>⚙️ Sync Status</h3>
-                <div class="sync-row">
-                    <span class="sync-label">Last UM Sync</span>
-                    <span class="sync-value" id="sync-um-time">—</span>
-                </div>
-                <div class="sync-row">
-                    <span class="sync-label">Last Races Sync</span>
-                    <span class="sync-value" id="sync-races-time">—</span>
-                </div>
-                <div class="sync-row">
-                    <span class="sync-label">Total Syncs</span>
-                    <span class="sync-value" id="sync-count">0</span>
-                </div>
+        <div class="sidebar-section" id="calendarSection">
+            <div class="sidebar-section-title">📅 Calendar</div>
+            <div class="calendar-grid" id="calendar"></div>
+        </div>
+
+        <div class="sidebar-section" id="favoritesSection">
+            <div class="sidebar-section-title">⭐ Favorites</div>
+            <div class="list-input-group">
+                <input type="text" id="favoriteHorseId" placeholder="Horse ID" />
+                <button onclick="addFavorite()">Add</button>
+            </div>
+            <ul class="horse-list" id="favoritesList"></ul>
+        </div>
+
+        <div class="sidebar-section" id="watchlistSection">
+            <div class="sidebar-section-title">👁️ Watchlist</div>
+            <div class="list-input-group">
+                <input type="text" id="watchlistHorseId" placeholder="Horse ID" />
+                <button onclick="addWatchlist()">Add</button>
+            </div>
+            <ul class="horse-list" id="watchlistList"></ul>
+        </div>
+
+        <div class="sidebar-section" id="riskSection">
+            <div class="sidebar-section-title">⚡ Risk (Phase 2)</div>
+            <input type="range" min="0" max="100" value="50" class="risk-slider" id="riskSlider" disabled />
+            <div style="text-align: center; font-size: 11px; color: #999;" id="riskLabel">Balanced (50)</div>
+        </div>
+    </div>
+</div>
+
+<div class="main-content">
+    <div class="top-bar">
+        <div class="clocks">
+            <div class="clock-box">
+                <div class="clock-label">JST</div>
+                <div class="clock-time" id="jstClock">--:--:--</div>
+            </div>
+            <div class="clock-box" id="countdownBox" style="display: none;">
+                <div class="clock-label">Next Race</div>
+                <div class="countdown-time" id="countdownTime">--:--:--</div>
+            </div>
+            <div class="clock-box">
+                <div class="clock-label">CST</div>
+                <div class="clock-time" id="cstClock">--:--:--</div>
             </div>
         </div>
 
-        <!-- TV Mode Tab -->
-        <div id="tv-tab" class="tab-content">
-            <div id="tv-layout">
-                <!-- GreenChannel Panel -->
-                <div id="gch-panel">
-                    <div id="gch-header">
-                        <h2>📺 GreenChannel</h2>
-                        <a class="gch-open-btn" href="https://sp.gch.jp/jra" target="_blank" rel="noopener">↗ Open</a>
-                        <button id="flip-panels-btn" onclick="togglePanelFlip()">⇄ Flip</button>
-                        <button id="toggle-gch-size" onclick="toggleGchSize()">▲ Collapse</button>
-                    </div>
-                    <div id="gch-iframe-area">
-                        <div id="gch-player-wrap">
-                            <video id="gch-live-video" class="streaksplayer-video" controls preload="auto" playsinline></video>
-                        </div>
-                        <div id="gch-play-overlay">
-                            <button id="gch-play-btn" type="button" onclick="tryStartGchPlayback(true)">▶ Tap To Start</button>
-                        </div>
-                        <div id="gch-fallback">
-                            <a class="big-link" href="https://sp.gch.jp/jra" target="_blank" rel="noopener">📺 Open GreenChannel</a>
-                            <p class="note">GreenChannel cannot be embedded here due to browser security restrictions.</p>
-                        </div>
-                        <div id="gch-status">Ready</div>
-                    </div>
-                </div>
+        <div class="search-container">
+            <input type="text" id="horseSearch" placeholder="🔍 Search horse..." />
+            <ul class="search-suggestions" id="searchSuggestions"></ul>
+        </div>
 
-                <div id="split-handle" role="separator" aria-label="Resize panels" aria-orientation="vertical"></div>
-
-                <!-- Race List Panel -->
-                <div id="racelist-panel">
-                    <div id="racelist-header">
-                        <h2>🏇 Races</h2>
-                        <span id="racelist-date-label">Loading…</span>
-                        <button id="reload-btn" onclick="loadRaces()">⟳ Refresh</button>
-                    </div>
-                    <div id="racelist-scroll">
-                        <div id="date-tabs"></div>
-                        <div id="race-list-body">
-                            <div id="status-msg">Loading race data…</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
+        <div class="toolbar">
+            <button class="btn btn-primary" onclick="window.open('/tv', '_blank')">📺 TV Mode</button>
+            <button class="btn" onclick="toggleAllRaces()">↕️ Toggle All</button>
         </div>
     </div>
 
-    <script>
-        'use strict';
+    <div class="races-container" id="racesContainer">
+        <div class="no-races">👈 Select a date from the calendar to view races</div>
+    </div>
+</div>
 
-        // ──── Bracket Colors ────
-        const BK_COLORS = {
-            1: { bg: '#f8f9fa', color: '#000', border: '#ccc' },
-            2: { bg: '#212529', color: '#fff', border: '#444' },
-            3: { bg: '#d26363', color: '#fff', border: '#d26363' },
-            4: { bg: '#5970b0', color: '#fff', border: '#5970b0' },
-            5: { bg: '#b8b053', color: '#000', border: '#b8b053' },
-            6: { bg: '#72af68', color: '#fff', border: '#72af68' },
-            7: { bg: '#efa65e', color: '#000', border: '#efa65e' },
-            8: { bg: '#dc809a', color: '#000', border: '#dc809a' }
-        };
+<div class="modal" id="settingsModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>⚙️ Settings</h3>
+            <button class="modal-close" onclick="closeSettings()">✕</button>
+        </div>
+        <div class="modal-body">
+            <div class="settings-section">
+                <h4>Sidebar Sections</h4>
+                <label class="settings-option">
+                    <input type="checkbox" id="setting-showCalendar" checked onchange="saveSettings()" />
+                    <span>📅 Calendar</span>
+                </label>
+                <label class="settings-option">
+                    <input type="checkbox" id="setting-showFavorites" checked onchange="saveSettings()" />
+                    <span>⭐ Favorites</span>
+                </label>
+                <label class="settings-option">
+                    <input type="checkbox" id="setting-showWatchlist" checked onchange="saveSettings()" />
+                    <span>👁️ Watchlist</span>
+                </label>
+                <label class="settings-option">
+                    <input type="checkbox" id="setting-showRisk" checked onchange="saveSettings()" />
+                    <span>⚡ Risk Slider</span>
+                </label>
+            </div>
 
-        const MARK_RANK = { '◎': 1, '〇': 2, '▲': 3, '△': 4 };
+            <div class="settings-section">
+                <h4>Display Options</h4>
+                <label class="settings-option">
+                    <input type="checkbox" id="setting-showConsole" onchange="saveSettings()" />
+                    <span>Show Debug Console</span>
+                </label>
+                <label class="settings-option">
+                    <input type="checkbox" id="setting-expandRaces" onchange="saveSettings()" />
+                    <span>Auto-expand Races on Load</span>
+                </label>
+            </div>
+        </div>
+    </div>
+</div>
 
-        // ──── State ────
-        let racesData = null;
-        let activeDate = null;
-        let splitPercent = 50;
-        let panelFlipped = false;
-        let gchExpanded = true;
-        let gchPlayer = null;
-        let racesByIdForTv = {};
-        let raceTimeData = [];
-        let forceScrollOnNextCollapse = true;
+<script>
+    let currentDate = null;
+    let allRaces = [];
 
-        const LAYOUT_SPLIT_KEY = 'umanager-tv-split-percent';
-        const LAYOUT_FLIP_KEY = 'umanager-tv-panel-flipped';
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+        initClocks();
+        loadSettings();
+        updateCalendar();
+        setupHorseSearch();
+        loadFavorites();
+        loadWatchlist();
+    });
 
-        // ──── Tab Switching ────
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const tabName = e.target.dataset.tab;
-                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-                document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-                e.target.classList.add('active');
-                document.getElementById(tabName + '-tab').classList.add('active');
+    // Clocks
+    function initClocks() {
+        setInterval(() => {
+            const now = new Date();
+            const jstDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+            const cstDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Chicago' }));
 
-                if (tabName === 'tv') {
-                    loadRaces();
-                    loadLayoutPrefs();
-                    installSplitHandle();
-                }
-            });
+            document.getElementById('jstClock').textContent = jstDate.toTimeString().slice(0, 8);
+            document.getElementById('cstClock').textContent = cstDate.toTimeString().slice(0, 8);
+
+            updateCountdown();
+        }, 1000);
+    }
+
+    async function updateCountdown() {
+        if (!currentDate) return;
+        const dateStr = currentDate.toISOString().split('T')[0];
+        try {
+            const res = await fetch(`/api/races/next?date=${dateStr}`);
+            if (!res.ok) return;
+            const race = await res.json();
+            if (!race.raceStartTime) return;
+
+            const [h, m] = race.raceStartTime.split(':').map(Number);
+            const jst = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+            const target = new Date(jst);
+            target.setHours(h, m, 0);
+
+            if (target < jst) return;
+
+            const diff = target - jst;
+            const hours = Math.floor(diff / 3600000);
+            const mins = Math.floor((diff % 3600000) / 60000);
+            const secs = Math.floor((diff % 60000) / 1000);
+
+            document.getElementById('countdownTime').textContent =
+                `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+            document.getElementById('countdownBox').style.display = 'block';
+        } catch (e) {
+            document.getElementById('countdownBox').style.display = 'none';
+        }
+    }
+
+    // Date navigation
+    async function selectDate(date) {
+        currentDate = new Date(date);
+        const dateStr = currentDate.toISOString().split('T')[0];
+        document.getElementById('activeDate').textContent = currentDate.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric'
         });
 
-        // ──── Dashboard Data Loading ────
-        async function loadDashboardData() {
-            try {
-                const res = await fetch('/api/status');
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                const data = await res.json();
-
-                document.getElementById('horse-count').textContent = data.horseCount || 0;
-                document.getElementById('race-count').textContent = data.raceCount || 0;
-                document.getElementById('entry-count').textContent = data.entryCount || 0;
-
-                if (data.syncState) {
-                    const syncState = data.syncState;
-                    document.getElementById('sync-um-time').textContent = syncState.lastTimestampUm || '—';
-                    document.getElementById('sync-races-time').textContent = syncState.lastTimestampRaces || '—';
-                    document.getElementById('sync-count').textContent = syncState.syncCount || 0;
-                }
-
-                // Update status indicators
-                const hasData = data.horseCount > 0 && data.raceCount > 0;
-                document.getElementById('db-status').classList.toggle('error', !hasData);
-                document.getElementById('db-label').textContent = hasData ? 'Ready' : 'Empty';
-            } catch (err) {
-                console.error('Failed to load dashboard data:', err);
-                document.getElementById('db-status').classList.add('error');
-                document.getElementById('db-label').textContent = 'Error';
-            }
+        try {
+            const res = await fetch(`/api/races?date=${dateStr}`);
+            const races = await res.json();
+            allRaces = races || [];
+            document.getElementById('raceCount').textContent = `${allRaces.length} races`;
+            renderRaces(allRaces);
+        } catch (e) {
+            renderRaces([]);
         }
 
-        // ──── TV Mode: Layout Management ────
-        function isVerticalLayout() {
-            return window.matchMedia('(max-width: 700px), (orientation: portrait)').matches;
-        }
+        updateCalendar();
+        updateCountdown();
+    }
 
-        function clampSplitPercent(val) {
-            const n = Number(val);
-            if (!Number.isFinite(n)) return 50;
-            return Math.max(20, Math.min(80, n));
-        }
+    function previousDate() {
+        if (!currentDate) currentDate = new Date();
+        currentDate.setDate(currentDate.getDate() - 1);
+        selectDate(currentDate);
+    }
 
-        function applySplitLayout() {
-            const tv = document.getElementById('tv-layout');
-            tv.style.setProperty('--gch-size', splitPercent + '%');
-        }
+    function nextDate() {
+        if (!currentDate) currentDate = new Date();
+        currentDate.setDate(currentDate.getDate() + 1);
+        selectDate(currentDate);
+    }
 
-        function persistLayoutPrefs() {
-            try {
-                localStorage.setItem(LAYOUT_SPLIT_KEY, String(splitPercent));
-                localStorage.setItem(LAYOUT_FLIP_KEY, panelFlipped ? '1' : '0');
-            } catch (err) {
-                // Ignore storage failures
-            }
-        }
+    // Calendar
+    async function updateCalendar() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = now.getMonth() + 1;
 
-        function applyPanelFlipUi() {
-            const tv = document.getElementById('tv-layout');
-            const btn = document.getElementById('flip-panels-btn');
-            tv.classList.toggle('panels-flipped', panelFlipped);
-            if (btn) {
-                btn.textContent = panelFlipped ? '⇄ Normal' : '⇄ Flip';
-            }
-        }
-
-        function togglePanelFlip() {
-            panelFlipped = !panelFlipped;
-            applyPanelFlipUi();
-            persistLayoutPrefs();
-        }
-
-        function toggleGchSize() {
-            const btn = document.getElementById('toggle-gch-size');
-            gchExpanded = !gchExpanded;
-            if (gchExpanded) {
-                splitPercent = isVerticalLayout() ? 56 : 50;
-                btn.textContent = '▲ Collapse';
-            } else {
-                splitPercent = isVerticalLayout() ? 8 : 24;
-                btn.textContent = '▼ Expand';
-            }
-            applySplitLayout();
-            persistLayoutPrefs();
-        }
-
-        function loadLayoutPrefs() {
-            try {
-                const rawSplit = localStorage.getItem(LAYOUT_SPLIT_KEY);
-                const rawFlip = localStorage.getItem(LAYOUT_FLIP_KEY);
-                splitPercent = clampSplitPercent(rawSplit == null ? 50 : parseFloat(rawSplit));
-                panelFlipped = rawFlip === '1';
-            } catch (err) {
-                splitPercent = 50;
-                panelFlipped = false;
-            }
-            applySplitLayout();
-            applyPanelFlipUi();
-        }
-
-        function installSplitHandle() {
-            const handle = document.getElementById('split-handle');
-            const layout = document.getElementById('tv-layout');
-            if (!handle || !layout) return;
-
-            function updateFromPointer(clientX, clientY) {
-                const rect = layout.getBoundingClientRect();
-                let next = splitPercent;
-
-                if (isVerticalLayout()) {
-                    const y = Math.max(0, Math.min(rect.height, clientY - rect.top));
-                    next = panelFlipped ? ((rect.height - y) / rect.height) * 100 : (y / rect.height) * 100;
-                } else {
-                    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
-                    next = panelFlipped ? ((rect.width - x) / rect.width) * 100 : (x / rect.width) * 100;
-                }
-
-                splitPercent = clampSplitPercent(next);
-                applySplitLayout();
-            }
-
-            function onPointerMove(e) {
-                updateFromPointer(e.clientX, e.clientY);
-            }
-
-            function onPointerUp(e) {
-                layout.classList.remove('is-dragging');
-                try { handle.releasePointerCapture(e.pointerId); } catch (err) {}
-                window.removeEventListener('pointermove', onPointerMove);
-                window.removeEventListener('pointerup', onPointerUp);
-                persistLayoutPrefs();
-            }
-
-            handle.addEventListener('pointerdown', function(e) {
-                e.preventDefault();
-                layout.classList.add('is-dragging');
-                try { handle.setPointerCapture(e.pointerId); } catch (err) {}
-                updateFromPointer(e.clientX, e.clientY);
-                window.addEventListener('pointermove', onPointerMove);
-                window.addEventListener('pointerup', onPointerUp);
-            });
-
-            window.addEventListener('resize', applySplitLayout);
-        }
-
-        // ──── TV Mode: Race Data Loading ────
-        function esc(str) {
-            return String(str ?? '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
-        }
-
-        async function loadRaces() {
-            document.getElementById('reload-btn').textContent = '…';
-            try {
-                const res = await fetch('/api/races');
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                const races = await res.json();
-
-                // Transform flat race list into date-grouped structure
-                const racesByDate = {};
-                for (const race of races) {
-                    const dateStr = race.raceDate || 'Unknown';
-                    if (!racesByDate[dateStr]) {
-                        racesByDate[dateStr] = [];
-                    }
-                    racesByDate[dateStr].push({
-                        info: {
-                            race_id: race.raceId,
-                            place: race.trackCode || '?',
-                            race_number: race.raceNumber || 0,
-                            time: race.raceDate || ''
-                        },
-                        entries: []
-                    });
-                }
-
-                racesData = { races_by_date: racesByDate };
-                renderAll();
-            } catch (err) {
-                showError('Failed to load races: ' + err.message);
-            } finally {
-                document.getElementById('reload-btn').textContent = '⟳ Refresh';
-            }
-        }
-
-        function showError(msg) {
-            const el = document.getElementById('status-msg');
-            el.className = 'error';
-            el.textContent = msg;
-        }
-
-        function pickInitialDate() {
-            const dates = Object.keys(racesData.races_by_date || {}).sort();
-            return dates.length ? dates[0] : null;
-        }
-
-        function renderAll() {
-            if (!racesData) return;
-
-            const allDates = Object.keys(racesData.races_by_date || {}).sort();
-
-            if (!allDates.length) {
-                document.getElementById('status-msg').textContent = 'No race data available. Phase 2+ required.';
-                return;
-            }
-
-            if (!activeDate || !allDates.includes(activeDate)) {
-                activeDate = pickInitialDate();
-            }
-
-            renderDateTabs(allDates);
-            renderRaceList();
-            document.getElementById('racelist-date-label').textContent = activeDate || 'Loading…';
-        }
-
-        function renderDateTabs(dates) {
-            const container = document.getElementById('date-tabs');
-            container.innerHTML = dates.map(d =>
-                `<button class="date-tab ${d === activeDate ? 'active' : ''}" onclick="switchDate('${esc(d)}')" type="button">${esc(d)}</button>`
-            ).join('');
-        }
-
-        function switchDate(date) {
-            activeDate = date;
-            forceScrollOnNextCollapse = true;
-            renderAll();
-        }
-
-        function renderRaceList() {
-            const races = (racesData.races_by_date || {})[activeDate] || [];
-            const body = document.getElementById('race-list-body');
-
-            if (!races.length) {
-                body.innerHTML = '<div id="status-msg">No races for this date.</div>';
-                return;
-            }
-
-            racesByIdForTv = {};
-            raceTimeData = [];
+        try {
+            const res = await fetch(`/api/calendar?year=${year}&month=${month}`);
+            const days = await res.json() || [];
+            const daysInMonth = new Date(year, month, 0).getDate();
 
             let html = '';
+            for (let i = 1; i <= daysInMonth; i++) {
+                const day = days.find(d => d.day === i);
+                const date = new Date(year, month - 1, i);
+                const isSelected = currentDate && date.toDateString() === currentDate.toDateString();
+                const classes = [
+                    day ? 'has-races' : '',
+                    day && !day.isUpcoming ? 'historical' : '',
+                    isSelected ? 'selected' : ''
+                ].filter(c => c).join(' ');
 
-            for (const race of races) {
-                const info = race.info || {};
-                const raceId = String(info.race_id || '').trim();
-                const place = String(info.place || '').toUpperCase();
-                const raceNo = info.race_number || '?';
-                const raceTime = info.time || '';
+                html += `<div class="calendar-day ${classes}" onclick="selectDate(new Date(${year}, ${month-1}, ${i}))">${i}</div>`;
+            }
+            document.getElementById('calendar').innerHTML = html;
+        } catch (e) {}
+    }
 
-                racesByIdForTv[raceId] = race;
-                const titleId = 'rt-' + raceId;
-                const bodyId = 'rb-' + raceId;
-
-                html += `<div class="race-card" id="wrapper-${esc(raceId)}">`;
-                html += `<div class="race-title" id="${esc(titleId)}" onclick="toggleRaceBody('${esc(raceId)}')">${esc(place)} R${esc(String(raceNo))} ${esc(raceTime)}</div>`;
-                html += `<div class="race-body" id="${esc(bodyId)}">`;
-                html += `<div class="no-marks-msg">No entries available (Phase 2 required)</div>`;
-                html += `</div></div>`;
+    // Horse search
+    function setupHorseSearch() {
+        const input = document.getElementById('horseSearch');
+        input.addEventListener('input', debounce(async (e) => {
+            if (e.target.value.length < 2) {
+                document.getElementById('searchSuggestions').innerHTML = '';
+                return;
             }
 
-            body.innerHTML = html;
+            try {
+                const res = await fetch(`/api/horses/search?q=${encodeURIComponent(e.target.value)}&limit=8`);
+                const horses = await res.json();
+
+                let html = '';
+                horses.forEach(h => {
+                    html += `<li onclick="selectHorse('${h.horseId}')">${h.japaneseeName || h.romajiName || h.horseId}</li>`;
+                });
+                document.getElementById('searchSuggestions').innerHTML = html;
+            } catch (e) {}
+        }, 300));
+    }
+
+    function selectHorse(horseId) {
+        document.getElementById('horseSearch').value = '';
+        document.getElementById('searchSuggestions').innerHTML = '';
+        alert('Horse profile view coming in Phase 2');
+    }
+
+    // Races rendering
+    function renderRaces(races) {
+        const container = document.getElementById('racesContainer');
+
+        if (!races || races.length === 0) {
+            container.innerHTML = '<div class="no-races">No races on this date</div>';
+            return;
         }
 
-        function toggleRaceBody(raceId) {
-            const title = document.getElementById('rt-' + raceId);
-            const body = document.getElementById('rb-' + raceId);
-            if (!title || !body) return;
-            const isCollapsed = body.classList.contains('hidden');
-            body.classList.toggle('hidden', !isCollapsed);
-            title.classList.toggle('collapsed', !isCollapsed);
-        }
-
-        // ──── GreenChannel Player (Stub) ────
-        function tryStartGchPlayback(userInitiated) {
-            // Stub for now; full GCh integration in Phase 5
-        }
-
-        // ──── Initialization ────
-        document.addEventListener('DOMContentLoaded', () => {
-            loadDashboardData();
-            // Auto-refresh dashboard every 30 seconds
-            setInterval(loadDashboardData, 30000);
+        let html = '';
+        races.forEach((race, idx) => {
+            html += `
+                <div class="race-card">
+                    <div class="race-header" onclick="toggleRace(${idx})">
+                        <div>
+                            <div class="race-title">${race.trackCode} R${race.raceNumber} — ${race.distance}m ${race.surface || 'turf'}</div>
+                            <div class="race-meta">${race.raceStartTime || '--:--'} • Grade ${race.grade || 'Open'}</div>
+                        </div>
+                        <button class="race-toggle">▼</button>
+                    </div>
+                    <div class="race-entries" id="race-${idx}"></div>
+                </div>
+            `;
         });
-    </script>
+        container.innerHTML = html;
+    }
+
+    function toggleRace(idx) {
+        const entries = document.getElementById(`race-${idx}`);
+        entries.classList.toggle('open');
+
+        if (entries.classList.contains('open') && !entries.innerHTML.includes('Post')) {
+            loadRaceEntries(idx);
+        }
+    }
+
+    async function loadRaceEntries(idx) {
+        const race = allRaces[idx];
+        if (!race) return;
+
+        try {
+            const res = await fetch(`/api/races/${race.raceId}`);
+            if (!res.ok) return;
+            const raceDetail = await res.json();
+
+            const container = document.getElementById(`race-${idx}`);
+            let html = '<div style="overflow-x: auto;"><table style="width:100%;font-size:11px;border-collapse:collapse;"><tr style="background:#f0f0f0;font-weight:600;"><td style="padding:4px 6px;border-bottom:1px solid #ddd;">Post</td><td style="padding:4px 6px;border-bottom:1px solid #ddd;">Horse</td><td style="padding:4px 6px;border-bottom:1px solid #ddd;">Jockey</td><td style="padding:4px 6px;border-bottom:1px solid #ddd;">Trainer</td><td style="padding:4px 6px;border-bottom:1px solid #ddd;">Odds</td><td style="padding:4px 6px;border-bottom:1px solid #ddd;">Sire</td></tr>';
+
+            if (raceDetail.entries && Array.isArray(raceDetail.entries)) {
+                raceDetail.entries.forEach(e => {
+                    const horseName = e.horse?.japaneseeName || e.horse?.romajiName || e.horseId;
+                    const sireName = e.horse?.pedigree?.sireName || e.horse?.pedigree?.sireId || '—';
+                    html += `<tr style="border-bottom:1px solid #eee;"><td style="padding:4px 6px;">${e.postPosition || '—'}</td><td style="padding:4px 6px;">${horseName}</td><td style="padding:4px 6px;">${e.jockeyCode || '—'}</td><td style="padding:4px 6px;">${e.trainerCode || '—'}</td><td style="padding:4px 6px;">${e.morningLineOdds ? e.morningLineOdds.toFixed(1) : '—'}</td><td style="padding:4px 6px;">${sireName}</td></tr>`;
+                });
+            }
+
+            html += '</table></div>';
+            container.innerHTML = html;
+        } catch (e) {
+            console.error('Race entries fetch failed:', e);
+        }
+    }
+
+    function toggleAllRaces() {
+        const entries = document.querySelectorAll('.race-entries');
+        const allOpen = Array.from(entries).every(e => e.classList.contains('open'));
+
+        entries.forEach((e, i) => {
+            if (allOpen) {
+                e.classList.remove('open');
+            } else {
+                e.classList.add('open');
+                if (!e.innerHTML.includes('Post')) {
+                    setTimeout(() => loadRaceEntries(i), 10);
+                }
+            }
+        });
+    }
+
+    // Favorites and Watchlist
+    async function addFavorite() {
+        const id = document.getElementById('favoriteHorseId').value.trim();
+        if (!id) return;
+
+        try {
+            const res = await fetch('/api/user/lists/favorites', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ horseId: id })
+            });
+
+            if (res.ok) {
+                document.getElementById('favoriteHorseId').value = '';
+                loadFavorites();
+            } else {
+                alert('Horse not found');
+            }
+        } catch (e) {
+            alert('Error: ' + e.message);
+        }
+    }
+
+    async function removeFavorite(horseId) {
+        try {
+            await fetch(`/api/user/lists/favorites/${horseId}`, { method: 'DELETE' });
+            loadFavorites();
+        } catch (e) {}
+    }
+
+    async function loadFavorites() {
+        try {
+            const res = await fetch('/api/user/lists/favorites');
+            const horses = await res.json();
+
+            let html = '';
+            horses.forEach(h => {
+                html += `<li>${h.japaneseeName || h.romajiName || h.horseId} <button onclick="removeFavorite('${h.horseId}')">×</button></li>`;
+            });
+            document.getElementById('favoritesList').innerHTML = html || '<li style="color:#999;">No favorites yet</li>';
+        } catch (e) {}
+    }
+
+    async function addWatchlist() {
+        const id = document.getElementById('watchlistHorseId').value.trim();
+        if (!id) return;
+
+        try {
+            const res = await fetch('/api/user/lists/watchlist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ horseId: id })
+            });
+
+            if (res.ok) {
+                document.getElementById('watchlistHorseId').value = '';
+                loadWatchlist();
+            } else {
+                alert('Horse not found');
+            }
+        } catch (e) {
+            alert('Error: ' + e.message);
+        }
+    }
+
+    async function removeWatchlist(horseId) {
+        try {
+            await fetch(`/api/user/lists/watchlist/${horseId}`, { method: 'DELETE' });
+            loadWatchlist();
+        } catch (e) {}
+    }
+
+    async function loadWatchlist() {
+        try {
+            const res = await fetch('/api/user/lists/watchlist');
+            const horses = await res.json();
+
+            let html = '';
+            horses.forEach(h => {
+                html += `<li>${h.japaneseeName || h.romajiName || h.horseId} <button onclick="removeWatchlist('${h.horseId}')">×</button></li>`;
+            });
+            document.getElementById('watchlistList').innerHTML = html || '<li style="color:#999;">No watchlist yet</li>';
+        } catch (e) {}
+    }
+
+    // Settings
+    function openSettings() {
+        document.getElementById('settingsModal').classList.add('open');
+    }
+
+    function closeSettings() {
+        document.getElementById('settingsModal').classList.remove('open');
+    }
+
+    async function saveSettings() {
+        const settings = {
+            showCalendar: document.getElementById('setting-showCalendar').checked,
+            showFavorites: document.getElementById('setting-showFavorites').checked,
+            showWatchlist: document.getElementById('setting-showWatchlist').checked,
+            showRisk: document.getElementById('setting-showRisk').checked,
+            showConsole: document.getElementById('setting-showConsole').checked,
+            expandRaces: document.getElementById('setting-expandRaces').checked
+        };
+
+        try {
+            await fetch('/api/user/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ settings })
+            });
+        } catch (e) {
+            console.error('Settings save failed:', e);
+        }
+    }
+
+    function loadSettings() {
+        // TODO: load from /api/user/settings and apply
+    }
+
+    function updateRisk(value) {
+        const labels = ['Safe', 'Balanced', 'Aggressive'];
+        const idx = value < 33 ? 0 : value < 67 ? 1 : 2;
+        document.getElementById('riskLabel').textContent = `${labels[idx]} (${value})`;
+    }
+
+    // Utility
+    function debounce(fn, delay) {
+        let timeout;
+        return function(...args) {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => fn.apply(this, args), delay);
+        };
+    }
+</script>
+
 </body>
 </html>
