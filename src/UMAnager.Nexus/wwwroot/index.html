@@ -390,6 +390,31 @@
                 </div>
 
                 <div class="settings-card settings-card-full">
+                    <h4 class="settings-section-title">🎛️ Orchestrator (Phase 6)</h4>
+                    <div class="settings-helper-text">Polling cadences and Discord webhook. Live odds cadence has a 5-minute hard floor enforced server-side. Saves on blur.</div>
+                    <div class="settings-formula-grid">
+                        <label title="How often to check for new race plans while waiting (HH:MM:SS).">Populate poll interval</label>
+                        <input type="text" id="setting-populate-poll-interval" placeholder="01:00:00" onblur="saveOrchestratorSetting('populate_poll_interval', this.value)" class="settings-number-input" style="max-width:120px;">
+
+                        <label title="Odds refresh cadence Thu/Fri before live window (HH:MM:SS).">Odds (pre-live)</label>
+                        <input type="text" id="setting-odds-poll-interval-prelive" placeholder="01:00:00" onblur="saveOrchestratorSetting('odds_poll_interval_prelive', this.value)" class="settings-number-input" style="max-width:120px;">
+
+                        <label title="Odds refresh cadence during live operations (HH:MM:SS). Hard floor 00:05:00.">Odds (live)</label>
+                        <input type="text" id="setting-odds-poll-interval-live" placeholder="00:05:00" onblur="saveOrchestratorSetting('odds_poll_interval_live', this.value)" class="settings-number-input" style="max-width:120px;">
+
+                        <label title="Minutes before post time when a race enters the live window.">Live window (min)</label>
+                        <input type="number" id="setting-live-window-minutes" min="1" max="480" step="5" onblur="saveOrchestratorSetting('live_window_minutes', this.value)" class="settings-number-input" style="max-width:120px;">
+
+                        <label title="Discord webhook URL for phase / race-plan / bet-win / error notifications. Leave blank to disable.">Discord webhook URL</label>
+                        <input type="text" id="setting-discord-webhook-url" placeholder="https://discord.com/api/webhooks/..." onblur="saveOrchestratorSetting('discord_webhook_url', this.value)" class="settings-number-input" style="max-width:100%;">
+                    </div>
+                    <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+                        <button onclick="testDiscordWebhook()" class="settings-reset-btn">📣 Test Discord Webhook</button>
+                        <button onclick="forceOrchestratorTick()" class="settings-reset-btn">⚡ Force Orchestrator Tick</button>
+                    </div>
+                </div>
+
+                <div class="settings-card settings-card-full">
                     <h4 class="settings-section-title">Race Table Columns</h4>
                     <div class="settings-helper-text settings-helper-text-tight">Toggle visibility and move columns up/down. This applies globally.</div>
                     <div id="setting-race-columns" class="setting-columns-wrap"></div>
@@ -401,6 +426,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260516-1"></script>
+<script src="/static/script.js?v=20260516-2"></script>
 </body>
 </html>

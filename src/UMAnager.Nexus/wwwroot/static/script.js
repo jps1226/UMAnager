@@ -5783,7 +5783,8 @@ function showSettingsModal() {
     document.getElementById('fw-freshnessBreakeven').value = fw.freshnessBreakeven;
     document.getElementById('fw-pedigreeMultiplier').value = fw.pedigreeMultiplier;
     renderRaceColumnSettings();
-    
+    loadOrchestratorSettings();
+
     document.getElementById('settings-modal').style.display = 'flex';
 }
 
@@ -6178,3 +6179,63 @@ function startLiveHub() {
 }
 
 startLiveHub();
+
+// --- PHASE 6: ORCHESTRATOR SETTINGS ---
+async function loadOrchestratorSettings() {
+    try {
+        const res = await fetch('/api/settings');
+        if (!res.ok) return;
+        const data = await res.json();
+        const s = data.settings || {};
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ''; };
+        set('setting-populate-poll-interval',     s.populate_poll_interval);
+        set('setting-odds-poll-interval-prelive', s.odds_poll_interval_prelive);
+        set('setting-odds-poll-interval-live',    s.odds_poll_interval_live);
+        set('setting-live-window-minutes',        s.live_window_minutes);
+        set('setting-discord-webhook-url',        s.discord_webhook_url);
+    } catch (e) {
+        console.warn('[Orchestrator] loadSettings failed', e);
+    }
+}
+
+async function saveOrchestratorSetting(key, value) {
+    try {
+        const res = await fetch(`/api/settings/${encodeURIComponent(key)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: String(value ?? '') })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(`Failed to save ${key}: ${err.error || res.statusText}`);
+        }
+    } catch (e) {
+        console.warn('[Orchestrator] saveSetting failed', e);
+    }
+}
+
+async function testDiscordWebhook() {
+    // Saves current URL field then asks the orchestrator to force-tick — any
+    // configured webhook receives a quick "phase change" probe if we're already
+    // in steady state, so use the dedicated probe endpoint instead.
+    const url = (document.getElementById('setting-discord-webhook-url') || {}).value || '';
+    await saveOrchestratorSetting('discord_webhook_url', url);
+    try {
+        const res = await fetch('/api/settings/discord/test', { method: 'POST' });
+        const data = await res.json();
+        if (res.ok) alert('Discord probe sent. Check the channel.');
+        else        alert(`Discord probe failed: ${data.error || res.statusText}`);
+    } catch (e) {
+        alert(`Discord probe failed: ${e.message}`);
+    }
+}
+
+async function forceOrchestratorTick() {
+    try {
+        const res = await fetch('/api/orchestrator/force-tick', { method: 'POST' });
+        if (res.ok) console.log('[Orchestrator] force-tick requested');
+        else        alert('Force-tick failed');
+    } catch (e) {
+        alert(`Force-tick failed: ${e.message}`);
+    }
+}
