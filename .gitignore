@@ -28,6 +28,9 @@ JVDTLab.IDL
 .claude/
 memory/
 
+# All markdown — kept local-only (specs, logs, Q&A reference)
+*.md
+
 # OS
 .DS_Store
 Thumbs.db
