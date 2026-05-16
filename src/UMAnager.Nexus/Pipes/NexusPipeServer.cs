@@ -1,0 +1,236 @@
+using System.IO.Pipes;
+using System.Text;
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using UMAnager.Nexus.Data;
+using UMAnager.Nexus.Data.Entities;
+using UMAnager.Nexus.Models;
+using UMAnager.Nexus.Services;
+using UMAnager.Nexus.Services.Parsing;
+
+namespace UMAnager.Nexus.Pipes;
+
+public sealed class NexusPipeServer : BackgroundService
+{
+    private readonly SidecarBridge _bridge;
+    private readonly IDbContextFactory<AppDbContext> _dbFactory;
+    private readonly AppStateService _appState;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<NexusPipeServer> _logger;
+
+    public NexusPipeServer(
+        SidecarBridge bridge,
+        IDbContextFactory<AppDbContext> dbFactory,
+        AppStateService appState,
+        IServiceScopeFactory scopeFactory,
+        ILogger<NexusPipeServer> logger)
+    {
+        _bridge       = bridge;
+        _dbFactory    = dbFactory;
+        _appState     = appState;
+        _scopeFactory = scopeFactory;
+        _logger       = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        // Yield immediately so the host finishes starting before we block on pipe creation.
+        // Without this, a synchronous throw in the NamedPipeServerStream constructor
+        // propagates back into Host.StartAsync and crashes the process.
+        await Task.Yield();
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            await using var pipe = new NamedPipeServerStream(
+                PipeEnvelope.PipeName,
+                PipeDirection.InOut,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.Asynchronous);
+
+            _logger.LogInformation("[Nexus] Waiting for Sidecar on pipe '{Pipe}'...", PipeEnvelope.PipeName);
+
+            try
+            {
+                await pipe.WaitForConnectionAsync(stoppingToken);
+                _logger.LogInformation("[Nexus] Sidecar connected. Sending INIT command...");
+
+                var initPayload = Encoding.UTF8.GetBytes("{\"command\":\"INIT\"}");
+                await new PipeEnvelope(PipeMessageType.Command, initPayload).WriteAsync(pipe, stoppingToken);
+
+                var response = await PipeEnvelope.ReadAsync(pipe, stoppingToken);
+                if (response.Type == PipeMessageType.Status)
+                {
+                    var json = Encoding.UTF8.GetString(response.Payload);
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    _bridge.JvLinkVersion = root.TryGetProperty("jvlink_version", out var v) ? v.GetString() ?? "Unknown" : "Unknown";
+                    _bridge.InitResult    = root.TryGetProperty("init_result",    out var r) ? r.GetInt32()  : -1;
+                    _logger.LogInformation("[Nexus] Sidecar INIT: Version={Version}, InitResult={Result}",
+                        _bridge.JvLinkVersion, _bridge.InitResult);
+                }
+
+                // Run command forwarder and record receiver concurrently on the open pipe.
+                // WhenAny: if either task ends (pipe disconnect or stream complete), we clean up.
+                using var pipeCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                var forwardTask = ForwardCommandsAsync(pipe, pipeCts.Token);
+                var receiveTask = ReceiveRecordsAsync(pipe, pipeCts.Token);
+                await Task.WhenAny(forwardTask, receiveTask);
+                await pipeCts.CancelAsync();
+                await Task.WhenAll(forwardTask.ContinueWith(_ => { }), receiveTask.ContinueWith(_ => { }));
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[Nexus] Pipe session error. Restarting listener.");
+                _bridge.InitResult      = -1;
+                _bridge.JvLinkVersion   = "Disconnected";
+                _bridge.IngestionStatus = "Idle";
+                await Task.Delay(3000, stoppingToken);
+            }
+        }
+    }
+
+    private async Task ForwardCommandsAsync(NamedPipeServerStream pipe, CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var json in _bridge.CommandQueue.Reader.ReadAllAsync(ct))
+            {
+                if (!pipe.IsConnected) break;
+                var envelope = new PipeEnvelope(PipeMessageType.Command, Encoding.UTF8.GetBytes(json));
+                await envelope.WriteAsync(pipe, ct);
+                _logger.LogInformation("[Nexus] Forwarded command to Sidecar: {Json}", json);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Nexus] Command forwarder stopped.");
+        }
+    }
+
+    private async Task ReceiveRecordsAsync(NamedPipeServerStream pipe, CancellationToken ct)
+    {
+        var batch = new List<RawStagingRecord>(500);
+        long totalFlushed = 0;
+
+        try
+        {
+            while (!ct.IsCancellationRequested && pipe.IsConnected)
+            {
+                PipeEnvelope msg;
+                try
+                {
+                    msg = await PipeEnvelope.ReadAsync(pipe, ct);
+                }
+                catch (EndOfStreamException)
+                {
+                    break;
+                }
+
+                if (msg.Type == PipeMessageType.RawRecord)
+                {
+                    var recType = Encoding.ASCII.GetString(msg.Payload[..2]);
+                    batch.Add(new RawStagingRecord
+                    {
+                        RecordType = recType,
+                        RawBytes   = msg.Payload,
+                        ReceivedAt = DateTime.UtcNow,
+                    });
+
+                    if (batch.Count >= 500)
+                        totalFlushed += await FlushBatchAsync(batch, totalFlushed, ct);
+                }
+                else if (msg.Type == PipeMessageType.Status)
+                {
+                    var json = Encoding.UTF8.GetString(msg.Payload);
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+
+                    var eventType = root.TryGetProperty("event_type", out var ev) ? ev.GetString() : null;
+                    if (eventType is "STREAM_DIFN_COMPLETE" or "STREAM_TOKU_COMPLETE" or "STREAM_ODDS_COMPLETE")
+                    {
+                        if (batch.Count > 0)
+                            totalFlushed += await FlushBatchAsync(batch, totalFlushed, ct);
+
+                        var recordCount  = root.TryGetProperty("record_count",  out var rc) ? rc.GetInt32() : -1;
+                        var skippedCount = root.TryGetProperty("skipped_count", out var sc) ? sc.GetInt32() : 0;
+
+                        _bridge.StagedRecordCount = (int)totalFlushed;
+                        _bridge.IngestionStatus   = recordCount < 0 ? "Error" : "Complete";
+
+                        // Persist the JV-Link cursor returned in last_file_timestamp so the next
+                        // Option=2 call resumes exactly where this one stopped.
+                        if (eventType == "STREAM_TOKU_COMPLETE"
+                            && recordCount >= 0
+                            && root.TryGetProperty("last_file_timestamp", out var lts))
+                        {
+                            var cursor = lts.GetString();
+                            if (!string.IsNullOrWhiteSpace(cursor))
+                            {
+                                await _appState.SetStringAsync(AppStateService.Keys.TokuFileCursor, cursor);
+                                _logger.LogInformation("[Nexus] TOKU file cursor advanced to {Cursor}", cursor);
+                            }
+                        }
+
+                        // After odds stream completes, immediately apply O1 records to race_entries.
+                        if (eventType == "STREAM_ODDS_COMPLETE" && recordCount > 0)
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                using var scope = _scopeFactory.CreateScope();
+                                var svc = scope.ServiceProvider.GetRequiredService<OddsApplyService>();
+                                await svc.ApplyAllPendingAsync(CancellationToken.None);
+                            });
+                        }
+
+                        _logger.LogInformation(
+                            "[Nexus] {EventType} complete. Staged={Staged}, SidecarSent={Sent}, SkippedFiles={Skipped}",
+                            eventType, totalFlushed, recordCount, skippedCount);
+
+                        // Reset per-stream accumulators but keep the pipe open — the Sidecar's main
+                        // loop is waiting for the next command on this same connection. Tearing the
+                        // pipe down here would kill the Sidecar (it doesn't reconnect).
+                        batch.Clear();
+                        totalFlushed = 0;
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Nexus] Record receiver stopped unexpectedly.");
+            _bridge.IngestionStatus = "Error";
+        }
+        finally
+        {
+            if (batch.Count > 0)
+            {
+                try { await FlushBatchAsync(batch, totalFlushed, CancellationToken.None); }
+                catch (Exception ex) { _logger.LogError(ex, "[Nexus] Final batch flush failed."); }
+            }
+        }
+    }
+
+    private async Task<int> FlushBatchAsync(List<RawStagingRecord> batch, long previousTotal, CancellationToken ct)
+    {
+        await using var ctx = await _dbFactory.CreateDbContextAsync(ct);
+        ctx.RawStagingRecords.AddRange(batch);
+        await ctx.SaveChangesAsync(ct);
+        var count = batch.Count;
+        var newTotal = previousTotal + count;
+        batch.Clear();
+
+        // Update real-time progress
+        _bridge.StagedRecordCount = (int)newTotal;
+
+        _logger.LogInformation("[Nexus] Flushed {Count} records to raw_staging (total: {Total}).",
+            count, newTotal);
+        return count;
+    }
+}

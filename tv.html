@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>📺 TV Mode · UMAnager</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; height: 100%; background: #0b0c10; color: #f0f0f0; font-family: sans-serif; }
+
+        /* ── Layout ── */
+        #tv-layout {
+            display: flex;
+            flex-direction: row;
+            height: 100vh;
+            overflow: hidden;
+            --gch-size: 50%;
+        }
+        #gch-panel {
+            flex: 0 0 var(--gch-size);
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            border-right: 2px solid #222;
+            background: #0c0f14;
+            overflow: hidden;
+        }
+        #tv-layout.panels-flipped #gch-panel {
+            order: 3;
+            border-right: none;
+            border-left: 2px solid #222;
+        }
+        #racelist-panel {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #tv-layout.panels-flipped #racelist-panel {
+            order: 1;
+        }
+        #split-handle {
+            flex: 0 0 10px;
+            background: #12151b;
+            border-left: 1px solid #262b36;
+            border-right: 1px solid #262b36;
+            cursor: col-resize;
+            position: relative;
+            z-index: 10;
+            touch-action: none;
+        }
+        #split-handle::after {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 3px;
+            height: 52px;
+            border-radius: 999px;
+            background: #3a4356;
+        }
+        #tv-layout.panels-flipped #split-handle {
+            order: 2;
+        }
+        #tv-layout.is-dragging, #tv-layout.is-dragging * {
+            user-select: none;
+            cursor: col-resize !important;
+        }
+
+        /* Portrait / small screens → stack vertically */
+        @media (max-width: 700px) or (orientation: portrait) {
+            #tv-layout { flex-direction: column; }
+            #gch-panel { flex: 0 0 auto; border-right: none; border-bottom: 2px solid #222; min-height: 52px; }
+            #tv-layout.panels-flipped #gch-panel { border-left: none; border-bottom: none; border-top: 2px solid #222; }
+            #gch-panel.minimized { flex: 0 0 52px; }
+            #gch-panel.expanded { flex: 0 0 56vw; }
+            #racelist-panel { flex: 1 1 0; }
+            #split-handle {
+                flex: 0 0 10px;
+                width: 100%;
+                border-left: none;
+                border-right: none;
+                border-top: 1px solid #262b36;
+                border-bottom: 1px solid #262b36;
+                cursor: row-resize;
+            }
+            #split-handle::after {
+                width: 52px;
+                height: 3px;
+            }
+            #tv-layout.is-dragging, #tv-layout.is-dragging * {
+                cursor: row-resize !important;
+            }
+        }
+
+        /* ── GCh panel ── */
+        #gch-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: #111418;
+            border-bottom: 1px solid #222;
+            flex-shrink: 0;
+        }
+        #gch-header h2 { margin: 0; font-size: 15px; color: #f5a623; white-space: nowrap; }
+        .gch-open-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #f5a623;
+            color: #000;
+            font-weight: bold;
+            font-size: 13px;
+            padding: 6px 14px;
+            border-radius: 6px;
+            text-decoration: none;
+            white-space: nowrap;
+            cursor: pointer;
+            border: none;
+        }
+        .gch-open-btn:hover { background: #ffbb45; }
+        #toggle-gch-size {
+            margin-left: auto;
+            background: #222;
+            color: #aaa;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        #toggle-gch-size:hover { background: #333; }
+        #flip-panels-btn {
+            background: #222;
+            color: #9ed8ff;
+            border: 1px solid #334b5f;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        #flip-panels-btn:hover { background: #2c3e50; color: #d6efff; }
+
+        /* iframe fill area */
+        #gch-iframe-area {
+            flex: 1 1 0;
+            position: relative;
+            overflow: hidden;
+        }
+        #gch-iframe-area iframe {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: #000;
+        }
+        #gch-player-wrap {
+            position: absolute;
+            inset: 0;
+            display: none;
+            background: #000;
+        }
+        #gch-play-overlay {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 6;
+            background: linear-gradient(180deg, rgba(0,0,0,0.25), rgba(0,0,0,0.6));
+        }
+        #gch-play-btn {
+            background: #f5a623;
+            color: #000;
+            border: none;
+            border-radius: 999px;
+            padding: 12px 20px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
+        }
+        #gch-play-btn:hover { background: #ffbb45; }
+        #gch-player-wrap .streaksplayer-video,
+        #gch-player-wrap video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+        }
+        #gch-fallback {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            padding: 24px;
+            text-align: center;
+            background: #0c0f14;
+        }
+        #gch-status {
+            position: absolute;
+            right: 10px;
+            bottom: 10px;
+            font-size: 11px;
+            color: #bbb;
+            background: rgba(0, 0, 0, 0.55);
+            border: 1px solid #333;
+            padding: 4px 8px;
+            border-radius: 999px;
+            z-index: 5;
+        }
+        #gch-fallback .big-link {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: #f5a623;
+            color: #000;
+            font-weight: bold;
+            font-size: 18px;
+            padding: 14px 28px;
+            border-radius: 10px;
+            text-decoration: none;
+        }
+        #gch-fallback .big-link:hover { background: #ffbb45; }
+        #gch-fallback .note {
+            font-size: 12px;
+            color: #666;
+            max-width: 320px;
+        }
+
+        /* ── Race list panel ── */
+        #racelist-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: #111418;
+            border-bottom: 1px solid #222;
+            flex-shrink: 0;
+        }
+        #racelist-header h2 { margin: 0; font-size: 15px; color: #1dd1a1; }
+        #racelist-date-label { font-size: 12px; color: #888; }
+        #reload-btn {
+            margin-left: auto;
+            background: #1a2a25;
+            color: #1dd1a1;
+            border: 1px solid #1dd1a1;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        #reload-btn:hover { background: #1dd1a1; color: #000; }
+
+        #racelist-scroll {
+            flex: 1 1 0;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        /* Date tabs */
+        #date-tabs {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .date-tab {
+            background: #1a1c23;
+            border: 1px solid #333;
+            color: #aaa;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .date-tab.active { background: #1dd1a1; color: #000; border-color: #1dd1a1; font-weight: bold; }
+        .date-tab:hover:not(.active) { background: #222; }
+
+        /* Race cards */
+        .race-card {
+            background: #1a1c23;
+            border: 1px solid #2a2d3a;
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+        }
+        .race-title {
+            font-size: 13px;
+            font-weight: bold;
+            color: #bbb;
+            margin-bottom: 6px;
+            padding-bottom: 4px;
+            border-bottom: 1px dotted #333;
+            cursor: pointer;
+            user-select: none;
+        }
+        .race-title:hover { color: #fff; }
+        .race-title.collapsed { margin-bottom: 0; border-bottom-style: solid; border-color: #222; }
+        .race-body { }
+        .race-body.hidden { display: none; }
+        .horse-line {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 14px;
+            margin-bottom: 7px;
+        }
+        .horse-post { order: 1; }
+        .horse-mark { order: 2; }
+        .horse-name { order: 3; }
+        .horse-fav { order: 4; }
+        #tv-layout.panels-flipped .horse-post { order: 4; }
+        #tv-layout.panels-flipped .horse-mark { order: 3; }
+        #tv-layout.panels-flipped .horse-name { order: 2; text-align: right; }
+        #tv-layout.panels-flipped .horse-fav { order: 1; }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            flex-shrink: 0;
+            border: 1px solid transparent;
+        }
+        .badge.empty { background: transparent !important; border-color: transparent !important; }
+        .horse-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fav-badge { font-size: 11px; color: #ccc; border: 1px solid #555; border-radius: 3px; padding: 2px 5px; white-space: nowrap; flex-shrink: 0; }
+        .no-marks-msg { font-size: 12px; color: #555; font-style: italic; }
+
+        #status-msg { padding: 16px; color: #666; font-size: 13px; }
+        #status-msg.error { color: #ff6b6b; }
+    </style>
+</head>
+<body>
+<div id="tv-layout">
+
+    <!-- ═══ GreenChannel panel ═══ -->
+    <div id="gch-panel">
+        <div id="gch-header">
+            <h2>📺 GreenChannel</h2>
+            <a class="gch-open-btn" href="https://sp.gch.jp/jra" target="_blank" rel="noopener">
+                ↗ Open
+            </a>
+            <button id="flip-panels-btn" onclick="togglePanelFlip()">⇄ Flip Panels</button>
+            <button id="toggle-gch-size" onclick="toggleGchSize()">▲ Collapse</button>
+        </div>
+        <div id="gch-iframe-area">
+            <div id="gch-player-wrap">
+                <video id="gch-live-video" class="streaksplayer-video" controls preload="auto" playsinline></video>
+            </div>
+            <div id="gch-play-overlay">
+                <button id="gch-play-btn" type="button" onclick="tryStartGchPlayback(true)">▶ Tap To Start Live Stream</button>
+            </div>
+            <div id="gch-fallback">
+                <a class="big-link" href="https://sp.gch.jp/jra" target="_blank" rel="noopener">
+                    📺 Open GreenChannel JRA
+                </a>
+                <p class="note">
+                    GreenChannel cannot be embedded here due to browser security restrictions (SAMEORIGIN).<br><br>
+                    <strong>Tip for phones:</strong> Open GCh above, then use your browser's or OS's
+                    split-screen feature to view it alongside this page.
+                    On Android Chrome you can use the "split screen" app switcher.
+                    On iOS Safari 17+ the video will appear in Picture-in-Picture mode
+                    automatically when you switch apps.
+                </p>
+            </div>
+            <div id="gch-status">Resolving stream…</div>
+        </div>
+    </div>
+
+    <div id="split-handle" role="separator" aria-label="Resize panels" aria-orientation="vertical"></div>
+
+    <!-- ═══ Race list panel ═══ -->
+    <div id="racelist-panel">
+        <div id="racelist-header">
+            <h2>🏇 Live View</h2>
+            <span id="racelist-date-label">Loading…</span>
+            <button id="reload-btn" onclick="loadRaces()">⟳ Refresh</button>
+        </div>
+        <div id="racelist-scroll">
+            <div id="date-tabs"></div>
+            <div id="race-list-body">
+                <div id="status-msg">Loading race data…</div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+'use strict';
+
+/* ── Palette: bracket colours (matches main app) ── */
+const BK_COLORS = {
+    1: { bg: '#f8f9fa', color: '#000', border: '#ccc' },
+    2: { bg: '#212529', color: '#fff', border: '#444' },
+    3: { bg: '#d26363', color: '#fff', border: '#d26363' },
+    4: { bg: '#5970b0', color: '#fff', border: '#5970b0' },
+    5: { bg: '#b8b053', color: '#000', border: '#b8b053' },
+    6: { bg: '#72af68', color: '#fff', border: '#72af68' },
+    7: { bg: '#efa65e', color: '#000', border: '#efa65e' },
+    8: { bg: '#dc809a', color: '#000', border: '#dc809a' }
+};
+const MARK_RANK = { '◎': 1, '〇': 2, '▲': 3, '△': 4 };
+
+let racesData = null;
+let marksData = null;
+let activeDate = null;
+let gchPlayer = null;
+let splitPercent = 50;
+let panelFlipped = false;
+let racesByIdForTv = {};
+let raceTimeData = [];
+let forceScrollOnNextCollapse = true;
+const LAYOUT_SPLIT_KEY = 'umanager-tv-split-percent';
+const LAYOUT_FLIP_KEY = 'umanager-tv-panel-flipped';
+
+async function fetchAppConfig() {
+    const res = await fetch('/api/config');
+    if (!res.ok) throw new Error('config HTTP ' + res.status);
+    return await res.json();
+}
+
+async function saveTvLayoutToConfig() {
+    try {
+        const appConfig = await fetchAppConfig();
+        if (!appConfig.ui || typeof appConfig.ui !== 'object') appConfig.ui = {};
+        appConfig.ui.tvModeSplitPercent = clampSplitPercent(splitPercent);
+        appConfig.ui.tvModePanelsFlipped = !!panelFlipped;
+        await fetch('/api/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(appConfig)
+        });
+    } catch (err) {
+        // Silent fallback to local storage only.
+    }
+}
+
+function isVerticalLayout() {
+    return window.matchMedia('(max-width: 700px), (orientation: portrait)').matches;
+}
+
+function clampSplitPercent(val) {
+    const n = Number(val);
+    if (!Number.isFinite(n)) return 50;
+    return Math.max(20, Math.min(80, n));
+}
+
+function applySplitLayout() {
+    const tv = document.getElementById('tv-layout');
+    tv.style.setProperty('--gch-size', splitPercent + '%');
+}
+
+function persistLayoutPrefs() {
+    try {
+        localStorage.setItem(LAYOUT_SPLIT_KEY, String(splitPercent));
+        localStorage.setItem(LAYOUT_FLIP_KEY, panelFlipped ? '1' : '0');
+    } catch (err) {
+        // Ignore storage failures.
+    }
+    saveTvLayoutToConfig();
+}
+
+function applyPanelFlipUi() {
+    const tv = document.getElementById('tv-layout');
+    const btn = document.getElementById('flip-panels-btn');
+    tv.classList.toggle('panels-flipped', panelFlipped);
+    if (btn) {
+        btn.textContent = panelFlipped ? '⇄ Normal Order' : '⇄ Flip Panels';
+        btn.title = panelFlipped
+            ? 'Video on right, marks on left.'
+            : 'Video on left, marks on right.';
+    }
+}
+
+function togglePanelFlip() {
+    panelFlipped = !panelFlipped;
+    applyPanelFlipUi();
+    persistLayoutPrefs();
+}
+
+async function loadLayoutPrefs() {
+    let loadedFromConfig = false;
+    try {
+        const cfg = await fetchAppConfig();
+        const cfgSplit = Number(cfg?.ui?.tvModeSplitPercent);
+        const cfgFlip = cfg?.ui?.tvModePanelsFlipped;
+        if (Number.isFinite(cfgSplit)) {
+            splitPercent = clampSplitPercent(cfgSplit);
+            loadedFromConfig = true;
+        }
+        if (typeof cfgFlip === 'boolean') {
+            panelFlipped = cfgFlip;
+            loadedFromConfig = true;
+        }
+    } catch (err) {
+        // Fallback to local storage.
+    }
+
+    try {
+        if (!loadedFromConfig) {
+            const rawSplit = localStorage.getItem(LAYOUT_SPLIT_KEY);
+            const rawFlip = localStorage.getItem(LAYOUT_FLIP_KEY);
+            splitPercent = clampSplitPercent(rawSplit == null ? 50 : parseFloat(rawSplit));
+            panelFlipped = rawFlip === '1';
+        }
+    } catch (err) {
+        splitPercent = 50;
+        panelFlipped = false;
+    }
+    applySplitLayout();
+    applyPanelFlipUi();
+}
+
+function installSplitHandle() {
+    const handle = document.getElementById('split-handle');
+    const layout = document.getElementById('tv-layout');
+    if (!handle || !layout) return;
+
+    function updateFromPointer(clientX, clientY) {
+        const rect = layout.getBoundingClientRect();
+        let next = splitPercent;
+
+        if (isVerticalLayout()) {
+            const y = Math.max(0, Math.min(rect.height, clientY - rect.top));
+            next = panelFlipped ? ((rect.height - y) / rect.height) * 100 : (y / rect.height) * 100;
+            handle.setAttribute('aria-orientation', 'horizontal');
+        } else {
+            const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+            next = panelFlipped ? ((rect.width - x) / rect.width) * 100 : (x / rect.width) * 100;
+            handle.setAttribute('aria-orientation', 'vertical');
+        }
+
+        splitPercent = clampSplitPercent(next);
+        applySplitLayout();
+    }
+
+    function onPointerMove(e) {
+        updateFromPointer(e.clientX, e.clientY);
+    }
+
+    function onPointerUp(e) {
+        layout.classList.remove('is-dragging');
+        try { handle.releasePointerCapture(e.pointerId); } catch (err) {}
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+        persistLayoutPrefs();
+    }
+
+    handle.addEventListener('pointerdown', function(e) {
+        e.preventDefault();
+        layout.classList.add('is-dragging');
+        try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+        updateFromPointer(e.clientX, e.clientY);
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
+    });
+
+    window.addEventListener('resize', applySplitLayout);
+}
+
+function loadExternalStylesheet(href) {
+    return new Promise((resolve, reject) => {
+        const existing = document.querySelector('link[data-href="' + href + '"]');
+        if (existing) {
+            if (existing.dataset.loaded === '1') return resolve();
+            existing.addEventListener('load', () => resolve(), { once: true });
+            existing.addEventListener('error', () => reject(new Error('Failed loading ' + href)), { once: true });
+            return;
+        }
+
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = href;
+        link.dataset.href = href;
+        link.onload = () => {
+            link.dataset.loaded = '1';
+            resolve();
+        };
+        link.onerror = () => reject(new Error('Failed loading ' + href));
+        document.head.appendChild(link);
+    });
+}
+
+function getInnerGchPlayer() {
+    if (!gchPlayer) return null;
+    if (gchPlayer.player) return gchPlayer.player;
+    return gchPlayer;
+}
+
+async function tryStartGchPlayback(userInitiated) {
+    const status = document.getElementById('gch-status');
+    const overlay = document.getElementById('gch-play-overlay');
+    const p = getInnerGchPlayer();
+    if (!p || typeof p.play !== 'function') return;
+
+    try {
+        // Best effort: muted autoplay first, then unmute on explicit user action.
+        if (!userInitiated && typeof p.muted === 'function') p.muted(true);
+        await p.play();
+        if (userInitiated && typeof p.muted === 'function') p.muted(false);
+        overlay.style.display = 'none';
+        status.textContent = 'Live stream playing';
+    } catch (err) {
+        overlay.style.display = 'flex';
+        status.textContent = 'Tap play to start';
+    }
+}
+
+function loadExternalScript(src) {
+    return new Promise((resolve, reject) => {
+        const existing = document.querySelector('script[data-src="' + src + '"]');
+        if (existing) {
+            if (existing.dataset.loaded === '1') return resolve();
+            existing.addEventListener('load', () => resolve(), { once: true });
+            existing.addEventListener('error', () => reject(new Error('Failed loading ' + src)), { once: true });
+            return;
+        }
+
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.dataset.src = src;
+        script.onload = () => {
+            script.dataset.loaded = '1';
+            resolve();
+        };
+        script.onerror = () => reject(new Error('Failed loading ' + src));
+        document.head.appendChild(script);
+    });
+}
+
+/* ── GCh embed bootstrap ── */
+async function bootGchEmbed() {
+    const playerWrap = document.getElementById('gch-player-wrap');
+    const videoEl = document.getElementById('gch-live-video');
+    const fallback = document.getElementById('gch-fallback');
+    const status = document.getElementById('gch-status');
+    const overlay = document.getElementById('gch-play-overlay');
+
+    try {
+        status.textContent = 'Fetching live stream metadata…';
+        const res = await fetch('/api/gch/live-playback-json');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const playback = data && data.playback ? data.playback : null;
+        if (!playback || typeof playback !== 'object') throw new Error('No playback payload');
+
+        status.textContent = 'Loading player…';
+        await loadExternalStylesheet('https://players.streaks.jp/sdk/latest/streaksplayer.min.css');
+        await loadExternalScript('https://players.streaks.jp/sdk/latest/streaksplayer.min.js');
+        if (typeof window.streaksplayer !== 'function') {
+            throw new Error('streaksplayer SDK unavailable');
+        }
+
+        const options = {
+            streamType: 'live',
+            showVolumeControl: true,
+            pictureInPicture: true,
+            scrubBehavior: 'play',
+        };
+
+        // Dispose old player instance if present before re-initializing.
+        try {
+            if (gchPlayer && typeof gchPlayer.dispose === 'function') gchPlayer.dispose();
+            if (gchPlayer && gchPlayer.player && typeof gchPlayer.player.dispose === 'function') gchPlayer.player.dispose();
+        } catch (disposeErr) {
+            // Ignore dispose errors and continue.
+        }
+
+        gchPlayer = window.streaksplayer(videoEl, options);
+
+        if (gchPlayer && typeof gchPlayer.loadMedia === 'function') {
+            gchPlayer.loadMedia(playback, options);
+        } else if (gchPlayer && gchPlayer.player && typeof gchPlayer.player.loadMedia === 'function') {
+            gchPlayer.player.loadMedia(playback, options);
+        } else {
+            throw new Error('Unable to call loadMedia on streaks player');
+        }
+
+        playerWrap.style.display = 'block';
+        fallback.style.display = 'none';
+        overlay.style.display = 'flex';
+        status.textContent = 'Live stream loaded';
+
+        const inner = getInnerGchPlayer();
+        if (inner && typeof inner.one === 'function') {
+            inner.one('loadeddata', function() {
+                status.textContent = 'Live stream ready';
+            });
+        }
+
+        // Attempt muted autoplay; if blocked, user can tap play.
+        tryStartGchPlayback(false);
+    } catch (err) {
+        playerWrap.style.display = 'none';
+        overlay.style.display = 'none';
+        fallback.style.display = 'flex';
+        status.textContent = 'Embed unavailable';
+    }
+}
+
+/* ── GCh panel toggle ── */
+let gchExpanded = true;
+function toggleGchSize() {
+    const btn = document.getElementById('toggle-gch-size');
+    gchExpanded = !gchExpanded;
+    if (gchExpanded) {
+        splitPercent = isVerticalLayout() ? 56 : 50;
+        btn.textContent = '▲ Collapse';
+    } else {
+        splitPercent = isVerticalLayout() ? 8 : 24;
+        btn.textContent = '▼ Expand';
+    }
+    applySplitLayout();
+    persistLayoutPrefs();
+}
+
+function esc(str) {
+    return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+/* ── Data loading ── */
+async function loadRaces() {
+    document.getElementById('reload-btn').textContent = '…';
+    forceScrollOnNextCollapse = true;
+    try {
+        const [r, m] = await Promise.all([
+            fetch('/api/races').then(res => res.json()),
+            fetch('/api/marks').then(res => res.json())
+        ]);
+        racesData = r;
+        marksData = m;
+        renderAll();
+    } catch (e) {
+        showError('Failed to load race data: ' + e.message);
+    } finally {
+        document.getElementById('reload-btn').textContent = '⟳ Refresh';
+    }
+}
+
+function showError(msg) {
+    const el = document.getElementById('status-msg');
+    el.className = 'error';
+    el.textContent = msg;
+}
+
+/* ── Choose active date ── */
+function pickInitialDate() {
+    const upcoming = Object.keys(racesData.upcoming_races_by_date || {}).sort();
+    if (upcoming.length) return upcoming[0];
+    const all = Object.keys(racesData.races_by_date || {}).sort();
+    return all.length ? all[all.length - 1] : null;
+}
+
+/* ── Main render ── */
+function renderAll() {
+    if (!racesData) return;
+
+    const allDates = Array.from(new Set([
+        ...Object.keys(racesData.upcoming_races_by_date || {}),
+        ...Object.keys(racesData.past_races_by_date || {})
+    ])).sort();
+
+    if (!allDates.length) {
+        document.getElementById('status-msg').textContent = 'No race data available.';
+        return;
+    }
+
+    if (!activeDate || !allDates.includes(activeDate)) {
+        activeDate = pickInitialDate() || allDates[0];
+    }
+
+    renderDateTabs(allDates);
+    renderRaceList();
+    document.getElementById('racelist-date-label').textContent = activeDate;
+}
+
+function renderDateTabs(dates) {
+    const container = document.getElementById('date-tabs');
+    container.innerHTML = dates.map(d =>
+        `<button class="date-tab ${d === activeDate ? 'active' : ''}" onclick="switchDate('${esc(d)}')" type="button">${esc(d)}</button>`
+    ).join('');
+}
+
+function switchDate(date) {
+    activeDate = date;
+    forceScrollOnNextCollapse = true;
+    renderAll();
+}
+
+function renderRaceList() {
+    const races = (racesData.races_by_date || {})[activeDate] || [];
+    const marks = (marksData && marksData.marks) || {};
+    const body  = document.getElementById('race-list-body');
+
+    if (!races.length) {
+        body.innerHTML = '<div id="status-msg">No races for this date.</div>';
+        return;
+    }
+
+    racesByIdForTv = {};
+    raceTimeData = [];
+    /* Build mark lookup: raceId → [{ symbol, rank, horse, pp, bk, fav }] */
+    const raceMarkMap = {};
+    for (const [key, symbol] of Object.entries(marks)) {
+        if (!symbol || symbol === 'X') continue;
+        const under = key.lastIndexOf('_');
+        if (under < 0) continue;
+        const raceId  = key.slice(0, under);
+        const horseId = key.slice(under + 1);
+        if (!raceMarkMap[raceId]) raceMarkMap[raceId] = [];
+        raceMarkMap[raceId].push({ symbol, horseId });
+    }
+
+    let html = '';
+    let any = false;
+
+    for (const race of races) {
+        const info    = race.info || {};
+        const entries = Array.isArray(race.entries) ? race.entries : [];
+        const raceId  = String(info.race_id || '').trim();
+        const rawMarks = raceMarkMap[raceId] || [];
+
+        if (!rawMarks.length) continue;
+        any = true;
+
+        /* Enrich marks with horse data */
+        const enriched = rawMarks.map(m => {
+            const row = entries.find(e => String(e.Horse_ID ?? '').split('.')[0] === m.horseId) || null;
+            return {
+                symbol : m.symbol,
+                rank   : MARK_RANK[m.symbol] || 99,
+                horse  : row ? String(row.Horse || 'Unknown') : 'Unknown',
+                pp     : row ? (parseInt(row.PP) || 99) : 99,
+                bk     : row ? (parseInt(row.BK) || 0) : 0,
+                fav    : row ? String(row.Fav || '').trim() : ''
+            };
+        }).sort((a, b) => a.rank - b.rank);
+
+        const place = String(info.place || '').toUpperCase();
+        const raceNo = info.race_number || '?';
+        const raceTime = info.time || '';
+        racesByIdForTv[raceId] = race;
+        raceTimeData.push({ raceId, sortTime: String(info.sort_time || '').trim(), info });
+        const titleId = 'rt-' + raceId;
+        const bodyId  = 'rb-' + raceId;
+
+        html += `<div class="race-card" id="wrapper-${esc(raceId)}">`;
+        html += `<div class="race-title" id="${esc(titleId)}" onclick="toggleRaceBody('${esc(raceId)}')">${esc(place)} R${esc(String(raceNo))} ${esc(raceTime)}</div>`;
+        html += `<div class="race-body" id="${esc(bodyId)}">`;
+
+        for (const m of enriched) {
+            const c = BK_COLORS[m.bk] || { bg: '#444', color: '#fff', border: '#555' };
+            const bkStyle = `background:${c.bg};color:${c.color};border-color:${c.border};`;
+            const ppBadge = m.pp !== 99
+                ? `<span class="badge horse-post" style="${bkStyle}">${esc(String(m.pp))}</span>`
+                : `<span class="badge horse-post empty"></span>`;
+            const symBadge = `<span class="badge horse-mark" style="${bkStyle};font-size:${m.symbol === '◎' ? '17px' : '14px'};">${esc(m.symbol)}</span>`;
+            const favText  = m.fav ? `Fav ${esc(m.fav)}` : 'Fav -';
+
+            html += `<div class="horse-line">${ppBadge}${symBadge}<span class="horse-name">${esc(m.horse)}</span><span class="fav-badge horse-fav">${favText}</span></div>`;
+        }
+
+        html += `</div></div>`;
+    }
+
+    if (!any) {
+        html = '<div id="status-msg">No marks set for this date. Set marks in the main app first.</div>';
+    }
+
+    body.innerHTML = html;
+    autoCollapseRacesTv();
+}
+
+function toggleRaceBody(raceId) {
+    const title = document.getElementById('rt-' + raceId);
+    const body  = document.getElementById('rb-' + raceId);
+    if (!title || !body) return;
+    const isCollapsed = body.classList.contains('hidden');
+    body.classList.toggle('hidden', !isCollapsed);
+    title.classList.toggle('collapsed', !isCollapsed);
+}
+
+function parseTvRaceTime(item) {
+    if (!item) return null;
+    var sortTime = String(item.sortTime || '').trim();
+    var info = item.info || {};
+    if (!sortTime) return null;
+
+    var digits = sortTime.replace(/\D/g, '');
+    if (digits.length < 8) return null;
+    var normalized =
+        digits.slice(0, 4) + '-' +
+        digits.slice(4, 6) + '-' +
+        digits.slice(6, 8) + 'T' +
+        (digits.slice(8, 10) || '00') + ':' +
+        (digits.slice(10, 12) || '00') + ':' +
+        (digits.slice(12, 14) || '00');
+
+    var cleanDate = String(info.cleanDate || info.clean_date || '').trim();
+    var displayTime = String(info.displayTime || info.display_time || info.time || '').trim();
+    var sortDate = normalized.slice(0, 10);
+    var looksCtLocal = /\b(?:AM|PM)\b/i.test(displayTime) || (!!cleanDate && cleanDate !== sortDate);
+
+    var dt = new Date(looksCtLocal ? normalized : normalized + '+09:00');
+    return isNaN(dt.getTime()) ? null : dt;
+}
+
+function autoCollapseRacesTv() {
+    if (!raceTimeData.length) return;
+    const now = new Date();
+    const parsed = raceTimeData
+        .map(item => ({
+            raceId: item.raceId,
+            dt: parseTvRaceTime(item)
+        }))
+        .filter(item => item.dt instanceof Date && !isNaN(item.dt.getTime()))
+        .sort((a, b) => a.dt - b.dt);
+
+    if (!parsed.length) return;
+
+    let nextIdx = -1;
+    for (let i = 0; i < parsed.length; i++) {
+        const t = parsed[i].dt;
+        if (t > now) { nextIdx = i; break; }
+    }
+
+    let focusIdx = 0;
+    if (nextIdx === -1) {
+        // All races are in the past: keep most recent visible.
+        focusIdx = parsed.length - 1;
+    } else if (nextIdx <= 0) {
+        // All races are future (or first race upcoming).
+        focusIdx = 0;
+    } else {
+        // Match popout behavior: keep in-progress race expanded.
+        focusIdx = nextIdx - 1;
+    }
+
+    let focusWrapper = null;
+
+    for (let i = 0; i < parsed.length; i++) {
+        const raceId = parsed[i].raceId;
+        const title = document.getElementById('rt-' + raceId);
+        const body = document.getElementById('rb-' + raceId);
+        const wrapper = document.getElementById('wrapper-' + raceId);
+        if (!title || !body) continue;
+
+        if (i < focusIdx) {
+            body.classList.add('hidden');
+            title.classList.add('collapsed');
+        } else if (i === focusIdx) {
+            body.classList.remove('hidden');
+            title.classList.remove('collapsed');
+            focusWrapper = wrapper;
+        }
+    }
+
+    if (focusWrapper && forceScrollOnNextCollapse) {
+        setTimeout(function() {
+            focusWrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 50);
+        forceScrollOnNextCollapse = false;
+    }
+}
+
+/* ── Auto-refresh every 60 s ── */
+setInterval(loadRaces, 60000);
+setInterval(autoCollapseRacesTv, 5000);
+
+/* ── Boot ── */
+loadLayoutPrefs();
+installSplitHandle();
+bootGchEmbed();
+forceScrollOnNextCollapse = true;
+loadRaces();
+</script>
+</body>
+</html>

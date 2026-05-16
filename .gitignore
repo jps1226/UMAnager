@@ -1,0 +1,33 @@
+# Build output
+bin/
+obj/
+
+# Secrets — NEVER commit these
+appsettings.json
+appsettings.*.json
+!appsettings.example.json
+*.env
+secrets.*
+
+# Runtime state
+.service-pids.json
+logs/
+*.log
+build_output.txt
+
+# JRA-VAN SDK artifacts (not redistributable — install JV-Link SDK separately)
+JVData_Struct.cs
+JVDTLab.IDL
+
+# .NET
+*.user
+.vs/
+*.suo
+
+# Claude Code local state and project notes
+.claude/
+memory/
+
+# OS
+.DS_Store
+Thumbs.db

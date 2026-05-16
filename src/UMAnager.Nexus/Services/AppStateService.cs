@@ -1,0 +1,73 @@
+using Microsoft.EntityFrameworkCore;
+using UMAnager.Nexus.Data;
+using UMAnager.Nexus.Data.Entities;
+
+namespace UMAnager.Nexus.Services;
+
+public sealed class AppStateService
+{
+    public static class Keys
+    {
+        // DateTime — wall-clock of last refresh trigger (used by the 4-hour throttle).
+        public const string LastRacePlanDownload = "last_race_plan_download";
+        public const string LastResultsDownload  = "last_results_download";
+
+        // String — JV-Link lastfiletimestamp cursor (yyyyMMddHHmmss). Required for Option=2 fetches.
+        public const string TokuFileCursor = "toku_file_cursor";
+    }
+
+    private readonly IDbContextFactory<AppDbContext> _contextFactory;
+
+    public AppStateService(IDbContextFactory<AppDbContext> contextFactory)
+        => _contextFactory = contextFactory;
+
+    public async Task<DateTime?> GetTimestampAsync(string key)
+    {
+        using var ctx = _contextFactory.CreateDbContext();
+        var row = await ctx.AppState.AsNoTracking()
+            .FirstOrDefaultAsync(a => a.Key == key);
+
+        if (row?.Value == null) return null;
+        return DateTime.TryParse(row.Value, out var dt) ? dt : null;
+    }
+
+    public async Task SetTimestampAsync(string key, DateTime value)
+    {
+        using var ctx = _contextFactory.CreateDbContext();
+        var row = await ctx.AppState.FirstOrDefaultAsync(a => a.Key == key);
+        if (row == null)
+        {
+            ctx.AppState.Add(new AppState { Key = key, Value = value.ToString("O"), UpdatedAt = DateTime.UtcNow });
+        }
+        else
+        {
+            row.Value = value.ToString("O");
+            row.UpdatedAt = DateTime.UtcNow;
+        }
+        await ctx.SaveChangesAsync();
+    }
+
+    public async Task<string?> GetStringAsync(string key)
+    {
+        using var ctx = _contextFactory.CreateDbContext();
+        var row = await ctx.AppState.AsNoTracking()
+            .FirstOrDefaultAsync(a => a.Key == key);
+        return row?.Value;
+    }
+
+    public async Task SetStringAsync(string key, string value)
+    {
+        using var ctx = _contextFactory.CreateDbContext();
+        var row = await ctx.AppState.FirstOrDefaultAsync(a => a.Key == key);
+        if (row == null)
+        {
+            ctx.AppState.Add(new AppState { Key = key, Value = value, UpdatedAt = DateTime.UtcNow });
+        }
+        else
+        {
+            row.Value = value;
+            row.UpdatedAt = DateTime.UtcNow;
+        }
+        await ctx.SaveChangesAsync();
+    }
+}

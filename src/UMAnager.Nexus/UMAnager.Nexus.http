@@ -1,0 +1,6 @@
+@UMAnager.Nexus_HostAddress = http://localhost:5193
+
+GET {{UMAnager.Nexus_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
