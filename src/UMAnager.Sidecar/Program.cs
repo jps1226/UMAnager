@@ -137,6 +137,30 @@ static int Run(CancellationToken ct)
                     pipeClient.SendOddsCompleteAsync(-1, 0, ct).GetAwaiter().GetResult();
                 }
             }
+            else if (cmd == "STREAM_RESULTS")
+            {
+                // race_date: 8-char YYYYMMDD (JST). 0B12 returns all venues for that date in one call.
+                var raceDate = doc.RootElement.TryGetProperty("race_date", out var rd) ? rd.GetString() ?? "" : "";
+                if (string.IsNullOrEmpty(raceDate) || raceDate.Length != 8)
+                {
+                    Console.WriteLine($"[Sidecar] STREAM_RESULTS received with bad race_date '{raceDate}'.");
+                    pipeClient.SendResultsCompleteAsync(-1, 1, raceDate, ct).GetAwaiter().GetResult();
+                    continue;
+                }
+
+                try
+                {
+                    var (stored, skipped) = RtResultsStreamHandler.StreamAsync(jvLink!, pipeClient, raceDate, ct)
+                        .GetAwaiter().GetResult();
+                    pipeClient.SendResultsCompleteAsync(stored, skipped, raceDate, ct).GetAwaiter().GetResult();
+                    Console.WriteLine($"[Sidecar] STREAM_RESULTS complete. Stored={stored}, Skipped={skipped}");
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[Sidecar] RESULTS stream failed: {ex.Message}");
+                    pipeClient.SendResultsCompleteAsync(-1, 0, raceDate, ct).GetAwaiter().GetResult();
+                }
+            }
             else if (cmd == "STREAM_TOKU")
             {
                 // from_time is the JV-Link cursor (yyyyMMddHHmmss). For option=2 it MUST be

@@ -269,9 +269,12 @@ public class DifnRecordParsingService
                     seParams.Add(entry.Bracket);
                     seParams.Add(entry.Weight);
                     seParams.Add(entry.JockeyName ?? "");
-                    seParams.Add(entry.Odds ?? 0m);
-                    seParams.Add(entry.FavRank ?? 0);
-                    seParams.Add(entry.FinishPos ?? 0);
+                    // Preserve NULLs for pre-race rows. Pre-race SE records have empty bytes at
+                    // offsets 360/364/335 (Odds/FavRank/FinishPos); the parser returns null. Coalescing
+                    // to 0 here makes the UI think a race has happened. (Bug fix 2026-05-16.)
+                    seParams.Add((object?)entry.Odds      ?? DBNull.Value);
+                    seParams.Add((object?)entry.FavRank   ?? DBNull.Value);
+                    seParams.Add((object?)entry.FinishPos ?? DBNull.Value);
                     seParams.Add(entry.DataStatus);
                     seParams.Add((object?)entry.LastModified ?? DBNull.Value);
                     seParamIndex += 11;

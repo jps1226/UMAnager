@@ -15,7 +15,7 @@ public sealed class OddsApplyService
         _logger    = logger;
     }
 
-    public async Task<(int RecordsProcessed, int EntriesUpdated)> ApplyAllPendingAsync(CancellationToken ct)
+    public async Task<OddsApplyResult> ApplyAllPendingAsync(CancellationToken ct)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
 
@@ -27,13 +27,14 @@ public sealed class OddsApplyService
         if (o1Records.Count == 0)
         {
             _logger.LogInformation("[OddsApply] No unprocessed O1 records found.");
-            return (0, 0);
+            return new OddsApplyResult(0, 0, Array.Empty<string>());
         }
 
         _logger.LogInformation("[OddsApply] Processing {Count} O1 records...", o1Records.Count);
 
         int entriesUpdated = 0;
         var processedIds   = new List<long>(o1Records.Count);
+        var touchedRaces   = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var staging in o1Records)
         {
@@ -46,6 +47,7 @@ public sealed class OddsApplyService
                     continue;
                 }
 
+                bool anyEntryTouched = false;
                 foreach (var slot in slots)
                 {
                     // Umaban (馬番) maps to PostPosition in race_entries.
@@ -57,8 +59,10 @@ public sealed class OddsApplyService
                     entry.Odds    = slot.WinOdds > 0 ? slot.WinOdds : entry.Odds;
                     entry.FavRank = slot.FavRank > 0 ? slot.FavRank : entry.FavRank;
                     entriesUpdated++;
+                    anyEntryTouched = true;
                 }
 
+                if (anyEntryTouched) touchedRaces.Add(raceId);
                 processedIds.Add(staging.Id);
             }
             catch (Exception ex)
@@ -77,9 +81,11 @@ public sealed class OddsApplyService
             .Where(r => processedIds.Contains(r.Id))
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.IsProcessed, true), ct);
 
-        _logger.LogInformation("[OddsApply] Done. Records={Records}, EntriesUpdated={Entries}",
-            processedIds.Count, entriesUpdated);
+        _logger.LogInformation("[OddsApply] Done. Records={Records}, EntriesUpdated={Entries}, Races={Races}",
+            processedIds.Count, entriesUpdated, touchedRaces.Count);
 
-        return (processedIds.Count, entriesUpdated);
+        return new OddsApplyResult(processedIds.Count, entriesUpdated, touchedRaces);
     }
 }
+
+public sealed record OddsApplyResult(int RecordsProcessed, int EntriesUpdated, IReadOnlyCollection<string> TouchedRaceIds);

@@ -14,6 +14,12 @@ public sealed class AppStateService
 
         // String — JV-Link lastfiletimestamp cursor (yyyyMMddHHmmss). Required for Option=2 fetches.
         public const string TokuFileCursor = "toku_file_cursor";
+
+        // String — current AppPhase (one of WAITING_FOR_RACES / RACES_POPULATED / LIVE_OPERATIONS).
+        public const string AppPhase = "app_phase";
+
+        // Bool ("true"/"false") — manual pause flag for the live orchestrator loop.
+        public const string LivePollPaused = "live_poll_paused";
     }
 
     private readonly IDbContextFactory<AppDbContext> _contextFactory;

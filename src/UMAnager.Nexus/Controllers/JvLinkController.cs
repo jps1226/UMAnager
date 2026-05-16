@@ -18,6 +18,8 @@ public sealed class JvLinkController : ControllerBase
     private readonly RaceCardRefreshService _refreshService;
     private readonly AppStateService _appState;
     private readonly OddsApplyService _oddsApply;
+    private readonly OddsFetchService _oddsFetch;
+    private readonly ResultsFetchService _resultsFetch;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
 
     public JvLinkController(
@@ -27,6 +29,8 @@ public sealed class JvLinkController : ControllerBase
         RaceCardRefreshService refreshService,
         AppStateService appState,
         OddsApplyService oddsApply,
+        OddsFetchService oddsFetch,
+        ResultsFetchService resultsFetch,
         IDbContextFactory<AppDbContext> dbFactory)
     {
         _bridge           = bridge;
@@ -35,6 +39,8 @@ public sealed class JvLinkController : ControllerBase
         _refreshService   = refreshService;
         _appState         = appState;
         _oddsApply        = oddsApply;
+        _oddsFetch        = oddsFetch;
+        _resultsFetch     = resultsFetch;
         _dbFactory        = dbFactory;
     }
 
@@ -159,9 +165,6 @@ public sealed class JvLinkController : ControllerBase
     [HttpPost("fetch-current-odds")]
     public async Task<IActionResult> FetchCurrentOdds([FromBody] FetchOddsRequest? req, CancellationToken ct)
     {
-        if (!_bridge.IsConnected)
-            return StatusCode(503, new { error = "Sidecar not connected." });
-
         var raceDate = req?.RaceDate ?? TimeZoneInfo
             .ConvertTimeFromUtc(DateTime.UtcNow,
                 TimeZoneInfo.FindSystemTimeZoneById("Tokyo Standard Time"))
@@ -170,35 +173,40 @@ public sealed class JvLinkController : ControllerBase
         if (raceDate.Length != 8 || !int.TryParse(raceDate, out _))
             return BadRequest(new { error = "race_date must be YYYYMMDD" });
 
-        var raceDateDt = DateTime.SpecifyKind(
-            DateTime.ParseExact(raceDate, "yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture),
-            DateTimeKind.Utc);
-
-        List<string> raceIds;
-        await using (var db = await _dbFactory.CreateDbContextAsync(ct))
+        var (result, count, _) = await _oddsFetch.EnqueueForDateAsync(raceDate, ct);
+        return result switch
         {
-            raceIds = await db.Races
-                .Where(r => r.RaceDate == raceDateDt)
-                .Select(r => r.RaceId)
-                .OrderBy(id => id)
-                .ToListAsync(ct);
-        }
-
-        if (raceIds.Count == 0)
-            return Ok(new { status = "No races scheduled for date.", race_date = raceDate, race_count = 0 });
-
-        var payload = JsonSerializer.Serialize(new
-        {
-            command = "STREAM_ODDS",
-            race_ids = raceIds,
-        });
-
-        await _bridge.CommandQueue.Writer.WriteAsync(payload, ct);
-
-        return Accepted(new { status = "Odds stream enqueued.", race_date = raceDate, race_count = raceIds.Count });
+            OddsFetchService.EnqueueResult.SidecarDisconnected
+                => StatusCode(503, new { error = "Sidecar not connected." }),
+            OddsFetchService.EnqueueResult.NoRaces
+                => Ok(new { status = "No races scheduled for date.", race_date = raceDate, race_count = 0 }),
+            _   => Accepted(new { status = "Odds stream enqueued.", race_date = raceDate, race_count = count }),
+        };
     }
 
     public sealed record FetchOddsRequest([property: JsonPropertyName("race_date")] string? RaceDate);
+
+    // Fetch post-race results (RA + SE + HR) via JVRTOpen("0B12", yyyyMMdd).
+    // 0B12 is per-day — one call per date returns every venue's results.
+    [HttpPost("fetch-results")]
+    public async Task<IActionResult> FetchResults([FromBody] FetchOddsRequest? req, CancellationToken ct)
+    {
+        var raceDate = req?.RaceDate ?? TimeZoneInfo
+            .ConvertTimeFromUtc(DateTime.UtcNow,
+                TimeZoneInfo.FindSystemTimeZoneById("Tokyo Standard Time"))
+            .ToString("yyyyMMdd");
+
+        if (raceDate.Length != 8 || !int.TryParse(raceDate, out _))
+            return BadRequest(new { error = "race_date must be YYYYMMDD" });
+
+        var (result, _) = await _resultsFetch.EnqueueForDateAsync(raceDate, ct);
+        return result switch
+        {
+            ResultsFetchService.EnqueueResult.SidecarDisconnected
+                => StatusCode(503, new { error = "Sidecar not connected." }),
+            _   => Accepted(new { status = "Results stream enqueued.", race_date = raceDate }),
+        };
+    }
 
     // Apply all unprocessed O1 records from raw_staging to race_entries immediately.
     // Useful to process the 3,624 historical O1 records already in staging.
@@ -207,8 +215,8 @@ public sealed class JvLinkController : ControllerBase
     {
         try
         {
-            var (processed, updated) = await _oddsApply.ApplyAllPendingAsync(ct);
-            return Ok(new { status = "Done", records_processed = processed, entries_updated = updated });
+            var result = await _oddsApply.ApplyAllPendingAsync(ct);
+            return Ok(new { status = "Done", records_processed = result.RecordsProcessed, entries_updated = result.EntriesUpdated });
         }
         catch (Exception ex)
         {

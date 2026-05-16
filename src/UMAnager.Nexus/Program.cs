@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
+using UMAnager.Nexus.Hubs;
 using UMAnager.Nexus.Pipes;
 using UMAnager.Nexus.Services;
 using UMAnager.Nexus.Services.Parsing;
@@ -18,11 +19,20 @@ builder.WebHost.UseStaticWebAssets();
 builder.Services.AddControllers()
     .AddJsonOptions(o => o.JsonSerializerOptions.PropertyNamingPolicy = null);
 
+builder.Services.AddSignalR();
+
 builder.Services.AddDbContextFactory<AppDbContext>(opts =>
     opts.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
 
 builder.Services.AddSingleton<SidecarBridge>();
 builder.Services.AddSingleton<AppStateService>();
+builder.Services.AddSingleton<SettingsService>();
+builder.Services.AddSingleton<PhaseService>();
+builder.Services.AddSingleton<OddsFetchService>();
+builder.Services.AddSingleton<ResultsFetchService>();
+builder.Services.AddSingleton<LiveBroadcastService>();
+builder.Services.AddSingleton<LiveOrchestrator>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveOrchestrator>());
 builder.Services.AddSingleton<RaceCardRefreshService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RaceCardRefreshService>());
 builder.Services.AddScoped<DifnRecordParsingService>();
@@ -32,9 +42,12 @@ builder.Services.AddHostedService<NexusPipeServer>();
 
 var app = builder.Build();
 
+await app.Services.GetRequiredService<SettingsService>().SeedDefaultsAsync();
+
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.MapControllers();
+app.MapHub<LiveHub>("/hubs/live");
 
 app.Run("http://0.0.0.0:5000");

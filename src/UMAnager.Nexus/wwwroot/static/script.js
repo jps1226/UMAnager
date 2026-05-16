@@ -26,6 +26,19 @@ let appConfig = {}; // NEW: Stores app configuration
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
 
 const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Sire", "Dam", "BMS", "Odds", "Fav", "Finish"];
+
+// JRA track codes → romaji names. Source: JRA-VAN spec.
+const TRACK_NAMES = {
+    "01": "Sapporo", "02": "Hakodate", "03": "Fukushima", "04": "Niigata",
+    "05": "Tokyo",   "06": "Nakayama", "07": "Chukyo",    "08": "Kyoto",
+    "09": "Hanshin", "10": "Kokura"
+};
+function trackName(code) {
+    if (code === null || code === undefined) return '';
+    const s = String(code).padStart(2, '0');
+    return TRACK_NAMES[s] || s.toUpperCase();
+}
+
 const SCORE_TRACKED_HORSE = 1.0;
 const SCORE_TRACKED_SIRE = 0.5;
 const SCORE_TRACKED_DAM = 0.5;
@@ -1010,9 +1023,9 @@ function buildTableBody(r_id, entries) {
             Sire: `<td>${sireStr}</td>`,
             Dam: `<td>${damStr}</td>`,
             BMS: `<td>${bmsStr}</td>`,
-            Odds: `<td${fallbackCellAttrs('Odds')}>${row.Odds || ""}</td>`,
-            Fav: `<td${fallbackCellAttrs('Fav')}>${row.Fav || ""}</td>`,
-            Finish: `<td class="finish-pos finish-pos-${row.Finish || ''}">${row.Finish || ""}</td>`
+            Odds: `<td data-cell="odds"${fallbackCellAttrs('Odds')}>${row.Odds || ""}</td>`,
+            Fav: `<td data-cell="fav"${fallbackCellAttrs('Fav')}>${row.Fav || ""}</td>`,
+            Finish: (() => { const f = Number(row.Finish); const shown = (Number.isFinite(f) && f > 0) ? f : ''; return `<td data-cell="finish" class="finish-pos finish-pos-${shown}">${shown}</td>`; })()
         };
 
         const orderedCells = getVisibleRaceColumns().map(col => cellHtmlByCol[col] || "").join("");
@@ -2051,7 +2064,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 
             html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
                 <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
-                    <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> 🕒 ${race.info.time} | ${race.info.place.toUpperCase()} R${race.info.race_number}: ${localName} ${winBadgesHtml}
+                    <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> 🕒 ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName} ${winBadgesHtml}
 
                     ${historyBtnHtml}
 
@@ -2144,7 +2157,7 @@ async function loadRaces() {
                         date: date,
                         r_id: r_id,
                         h_id: String(row.Horse_ID).split('.')[0],
-                        track: race.info.place.toUpperCase(),
+                        track: trackName(race.info.place),
                         r_num: race.info.race_number,
                         timeline: timeline
                     });
@@ -2154,7 +2167,7 @@ async function loadRaces() {
                 if (timeline === "upcoming" && race.info.time !== "TBA" && raceTime) {
                     upcomingRaces.push({
                         time: raceTime,
-                        name: `${race.info.place.toUpperCase()} R${race.info.race_number}`,
+                        name: `${trackName(race.info.place)} R${race.info.race_number}`,
                         r_id: r_id
                     });
                 }
@@ -3444,7 +3457,7 @@ function setRaceCollapsedState(r_id, shouldCollapse) {
 function evaluateRaceRecap(race) {
     const info = race?.info || {};
     const raceId = String(info.race_id || '').trim();
-    const raceLabel = `${(info.place || '').toUpperCase()} R${info.race_number || '?'}`.trim();
+    const raceLabel = `${trackName(info.place)} R${info.race_number || '?'}`.trim();
     const entries = Array.isArray(race?.entries) ? race.entries : [];
 
     const finishByRank = {};
@@ -4144,7 +4157,7 @@ function buildRacecourseCheatHtml(targetDate) {
     for (const [r_id, group] of Object.entries(raceMarkGroups)) {
         group.marks.sort((a, b) => a.rank - b.rank);
         const info = group.info;
-        const track = String(info.place || '').toUpperCase();
+        const track = trackName(info.place);
         const raceNum = parseInt(info.race_number, 10) || 0;
         // Build a minimal race object for win-badge evaluation
         const entriesArr = globalRaceEntries[r_id] || [];
@@ -5358,7 +5371,7 @@ async function showExportModal() {
                 sortTime,
                 cleanDate: String(info.clean_date || '').trim(),
                 displayTime: timeLabel,
-                name: `${String(info.place || '').toUpperCase()} R${info.race_number || '?'}`.trim()
+                name: `${trackName(info.place)} R${info.race_number || '?'}`.trim()
             };
         })
         .filter(Boolean)
@@ -5370,7 +5383,7 @@ async function showExportModal() {
     } else {
         sortedRaces.forEach(([r_id, group]) => {
             const info = group.info;
-            const track = String(info.place || '').toUpperCase();
+            const track = trackName(info.place);
             const raceNum = parseInt(info.race_number, 10) || 0;
             const time = String(info.time || 'TBA');
             const safeId = r_id.replace(/[^a-zA-Z0-9-]/g, '');
@@ -6112,3 +6125,56 @@ document.addEventListener('click', function(e) {
 });
 
 init();
+
+// --- LIVE PIPELINE (SignalR) ---
+// Connects to /hubs/live; the server broadcasts OddsUpdated and ResultsUpdated
+// every time the LiveOrchestrator's polling tick lands fresh JV-Link data.
+// We patch the affected <td>s in place — no /api/races refetch, no scroll jump.
+function patchRaceEntries(raceId, entries, fields) {
+    if (!raceId || !Array.isArray(entries)) return;
+    entries.forEach(e => {
+        const row = document.getElementById(`row-${raceId}-${e.horseId}`);
+        if (!row) return;
+        fields.forEach(f => {
+            const cell = row.querySelector(`td[data-cell="${f}"]`);
+            if (!cell) return;
+            if (f === 'finish') {
+                const n = Number(e.finish);
+                const shown = (Number.isFinite(n) && n > 0) ? n : '';
+                cell.textContent = shown;
+                cell.className = `finish-pos finish-pos-${shown}`;
+            } else if (f === 'odds') {
+                cell.textContent = e.odds || '';
+            } else if (f === 'fav') {
+                cell.textContent = e.fav || '';
+            }
+        });
+    });
+}
+
+function startLiveHub() {
+    if (typeof signalR === 'undefined') {
+        console.warn('[LiveHub] signalR client not loaded — skipping.');
+        return;
+    }
+    const conn = new signalR.HubConnectionBuilder()
+        .withUrl('/hubs/live')
+        .withAutomaticReconnect()
+        .build();
+
+    conn.on('OddsUpdated', payload => {
+        if (!payload) return;
+        patchRaceEntries(payload.raceId, payload.entries, ['odds', 'fav']);
+    });
+
+    conn.on('ResultsUpdated', payload => {
+        if (!payload) return;
+        patchRaceEntries(payload.raceId, payload.entries, ['finish']);
+    });
+
+    conn.start()
+        .then(() => console.log('[LiveHub] connected to /hubs/live'))
+        .catch(err => console.warn('[LiveHub] connect failed', err));
+}
+
+startLiveHub();

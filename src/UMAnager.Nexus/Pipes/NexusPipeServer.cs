@@ -152,7 +152,7 @@ public sealed class NexusPipeServer : BackgroundService
                     var root = doc.RootElement;
 
                     var eventType = root.TryGetProperty("event_type", out var ev) ? ev.GetString() : null;
-                    if (eventType is "STREAM_DIFN_COMPLETE" or "STREAM_TOKU_COMPLETE" or "STREAM_ODDS_COMPLETE")
+                    if (eventType is "STREAM_DIFN_COMPLETE" or "STREAM_TOKU_COMPLETE" or "STREAM_ODDS_COMPLETE" or "STREAM_RESULTS_COMPLETE")
                     {
                         if (batch.Count > 0)
                             totalFlushed += await FlushBatchAsync(batch, totalFlushed, ct);
@@ -177,14 +177,56 @@ public sealed class NexusPipeServer : BackgroundService
                             }
                         }
 
-                        // After odds stream completes, immediately apply O1 records to race_entries.
+                        // After odds stream completes, immediately apply O1 records to race_entries
+                        // and broadcast the touched races to any connected SignalR clients.
                         if (eventType == "STREAM_ODDS_COMPLETE" && recordCount > 0)
                         {
                             _ = Task.Run(async () =>
                             {
                                 using var scope = _scopeFactory.CreateScope();
                                 var svc = scope.ServiceProvider.GetRequiredService<OddsApplyService>();
-                                await svc.ApplyAllPendingAsync(CancellationToken.None);
+                                var result = await svc.ApplyAllPendingAsync(CancellationToken.None);
+                                if (result.TouchedRaceIds.Count > 0)
+                                {
+                                    var broadcaster = scope.ServiceProvider.GetRequiredService<LiveBroadcastService>();
+                                    await broadcaster.BroadcastOddsAsync(result.TouchedRaceIds, CancellationToken.None);
+                                }
+                            });
+                        }
+
+                        // After results stream completes, parse newly-staged RA + SE so finish positions
+                        // land in race_entries. ParseAllRecordsAsync is idempotent (uses !IsProcessed)
+                        // and no-ops the UM step (0B12 emits no UM records). Snapshot the affected
+                        // race IDs from unprocessed RA records before parsing so we can broadcast.
+                        if (eventType == "STREAM_RESULTS_COMPLETE" && recordCount > 0)
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                using var scope = _scopeFactory.CreateScope();
+                                // RA record raceId is bytes 11..26 (0-indexed), length 16.
+                                List<string> raceIds;
+                                await using (var snapshotDb = await _dbFactory.CreateDbContextAsync(CancellationToken.None))
+                                {
+                                    var raRaw = await snapshotDb.RawStagingRecords
+                                        .Where(r => r.RecordType == "RA" && !r.IsProcessed)
+                                        .Select(r => r.RawBytes)
+                                        .ToListAsync(CancellationToken.None);
+                                    raceIds = raRaw
+                                        .Where(b => b.Length >= 27)
+                                        .Select(b => Encoding.ASCII.GetString(b, 11, 16).Trim())
+                                        .Where(s => !string.IsNullOrWhiteSpace(s))
+                                        .Distinct()
+                                        .ToList();
+                                }
+
+                                var svc = scope.ServiceProvider.GetRequiredService<Services.Parsing.DifnRecordParsingService>();
+                                await svc.ParseAllRecordsAsync(CancellationToken.None);
+
+                                if (raceIds.Count > 0)
+                                {
+                                    var broadcaster = scope.ServiceProvider.GetRequiredService<LiveBroadcastService>();
+                                    await broadcaster.BroadcastResultsAsync(raceIds, CancellationToken.None);
+                                }
                             });
                         }
 

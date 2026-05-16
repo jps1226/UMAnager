@@ -10,6 +10,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Race> Races => Set<Race>();
     public DbSet<RaceEntry> RaceEntries => Set<RaceEntry>();
     public DbSet<AppState> AppState => Set<AppState>();
+    public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<BreedingHorse> BreedingHorses => Set<BreedingHorse>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

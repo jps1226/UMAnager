@@ -80,5 +80,17 @@ internal sealed class SidecarPipeClient
         await new PipeEnvelope(PipeMessageType.Status, payload).WriteAsync(_pipe, ct);
     }
 
+    public async Task SendResultsCompleteAsync(int recordCount, int skippedCount, string raceDate, CancellationToken ct)
+    {
+        var payload = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            event_type    = "STREAM_RESULTS_COMPLETE",
+            record_count  = recordCount,
+            skipped_count = skippedCount,
+            race_date     = raceDate,
+        }));
+        await new PipeEnvelope(PipeMessageType.Status, payload).WriteAsync(_pipe, ct);
+    }
+
     public void Dispose() => _pipe.Dispose();
 }
