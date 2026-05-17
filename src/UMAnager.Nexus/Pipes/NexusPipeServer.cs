@@ -238,6 +238,12 @@ public sealed class NexusPipeServer : BackgroundService
                                     var betWin = scope.ServiceProvider.GetRequiredService<Services.BetWinNotifier>();
                                     await betWin.EvaluateAndNotifyAsync(raceIds, CancellationToken.None);
 
+                                    // Phase 16: once a JST race-day's results are fully in, fire a
+                                    // single Discord recap with hit counts + estimated ¥ won.
+                                    // Idempotent via app_state.day_recap_sent_dates.
+                                    var dayRecap = scope.ServiceProvider.GetRequiredService<Services.DayRecapNotifier>();
+                                    await dayRecap.EvaluateAndNotifyAsync(raceIds, CancellationToken.None);
+
                                     // JRA publishes finishers 1-3 (the official umaban) immediately,
                                     // then the rest of the field a few seconds-to-minutes later. If
                                     // any race in this batch has top-3 but is missing some of 4-5,

@@ -10,6 +10,7 @@ public interface IDiscordNotifier
     Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default);
     Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, CancellationToken ct = default);
+    Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default);
     Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default);
     Task NotifyTestAsync(CancellationToken ct = default);
 }
@@ -62,6 +63,25 @@ public sealed class DiscordNotifier : IDiscordNotifier
         1 => "1st", 2 => "2nd", 3 => "3rd",
         _ => $"{n}th"
     };
+
+    public Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default)
+    {
+        var summary = $":checkered_flag: **Day Recap {recap.DateKey}** — {recap.RacesMarked}/{recap.RacesTotal} races marked";
+        var hits    = $"◎ Win: **{recap.HonmeiHits}** · Q Box: **{recap.QBoxHits}** · T Box: **{recap.TBoxHits}**";
+        var total   = $":moneybag: Estimated total winnings: **¥{recap.TotalWonYen:N0}**";
+
+        string body;
+        if (recap.WinningLines.Count > 0)
+        {
+            var lines = string.Join("\n", recap.WinningLines.Select(l => $"• {l}"));
+            body = $"{summary}\n{hits}\n{total}\n{lines}";
+        }
+        else
+        {
+            body = $"{summary}\n{hits}\n_(no hits today)_";
+        }
+        return SendAsync(body, ct);
+    }
 
     public Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default)
     {
