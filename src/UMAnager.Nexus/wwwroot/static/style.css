@@ -1730,6 +1730,43 @@ input[type=range]::-webkit-slider-runnable-track {
     .scrollable-races [data-col="Last3"],
     .scrollable-races [data-col="Record"] { display: none !important; }
 
+    /* Prediction cell has inline min-width:170px from buildTableBody. Override so
+       the 5 mark buttons stay on a single row, and shrink the buttons themselves. */
+    .scrollable-races [data-col="Shirushi"] {
+        min-width: 0 !important;
+        padding: 2px 2px !important;
+        white-space: nowrap;
+    }
+    .scrollable-races [data-col="Shirushi"] .mark-btn {
+        padding: 3px 0;
+        margin: 0 1px;
+        font-size: 13px;
+        min-width: 22px;
+        line-height: 1.2;
+    }
+
+    /* Horse cell: allow name to wrap; cap width so the table fits without scroll. */
+    .scrollable-races [data-col="Horse"] {
+        max-width: 38vw;
+        white-space: normal;
+        word-break: break-word;
+    }
+
+    /* Odds / Fav / Finish: keep narrow. */
+    .scrollable-races [data-col="Odds"],
+    .scrollable-races [data-col="Fav"],
+    .scrollable-races [data-col="PP"],
+    .scrollable-races [data-col="BK"],
+    .scrollable-races [data-col="Finish"] {
+        text-align: center;
+        min-width: 32px;
+        padding: 4px 2px !important;
+    }
+
+    /* Race-card toolbar (Win badge + Clear Bets + Lock Bets + Smart Sort + Safer):
+       wrap onto multiple lines instead of overflowing. */
+    .scrollable-races h3 { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+
     /* Race header: smaller, no margin. */
     .scrollable-races h3 { font-size: 14px; padding: 6px 4px; }
 
