@@ -102,6 +102,24 @@ static int Run(CancellationToken ct)
                     pipeClient.SendStreamCompleteAsync(-1, 0, ct).GetAwaiter().GetResult();
                 }
             }
+            else if (cmd == "STREAM_BLDN")
+            {
+                // Bloodline DataSpec — carries HN (breeding-horse master) records that contain
+                // romaji names for HansyokuNum-keyed ancestors. Reuses the DIFN streaming
+                // machinery; only the JVOpen DataSpec changes.
+                try
+                {
+                    var (stored, skippedFiles) = DifnStreamHandler.StreamAsync(jvLink!, pipeClient, ct, "BLDN")
+                        .GetAwaiter().GetResult();
+                    pipeClient.SendStreamCompleteAsync(stored, skippedFiles, ct).GetAwaiter().GetResult();
+                    Console.WriteLine($"[Sidecar] STREAM_BLDN complete. Stored={stored}, SkippedFiles={skippedFiles}");
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[Sidecar] BLDN stream failed: {ex.Message}");
+                    pipeClient.SendStreamCompleteAsync(-1, 0, ct).GetAwaiter().GetResult();
+                }
+            }
             else if (cmd == "STREAM_ODDS")
             {
                 // race_ids: array of 16-char (or 12-char) JV-Link race IDs to fetch via JVRTOpen("0B31", id).

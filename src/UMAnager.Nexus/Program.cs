@@ -57,6 +57,7 @@ builder.Services.AddSingleton<RaceCardRefreshService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RaceCardRefreshService>());
 builder.Services.AddScoped<DifnRecordParsingService>();
 builder.Services.AddScoped<BreedingHorseBackfillService>();
+builder.Services.AddScoped<HnNameBackfillService>();
 builder.Services.AddScoped<OddsApplyService>();
 builder.Services.AddHostedService<NexusPipeServer>();
 

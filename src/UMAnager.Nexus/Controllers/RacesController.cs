@@ -119,7 +119,7 @@ public sealed class RacesController : ControllerBase
                 .ToList();
             var breedingLookup = await db.BreedingHorses.AsNoTracking()
                 .Where(b => ancestorIds.Contains(b.HansyokuNum))
-                .ToDictionaryAsync(b => b.HansyokuNum, b => b.NameJa);
+                .ToDictionaryAsync(b => b.HansyokuNum, b => new { b.NameJa, b.NameEn });
             // Some sires/dams are themselves runners — also resolve from horseLookup.
             var entriesByRace = allEntries.GroupBy(e => e.RaceId).ToDictionary(g => g.Key, g => g.ToList());
 
@@ -162,7 +162,9 @@ public sealed class RacesController : ControllerBase
                 if (string.IsNullOrEmpty(id)) return "";
                 if (horseLookup.TryGetValue(id, out var h))
                     return !string.IsNullOrEmpty(h.NameEn) ? h.NameEn : h.NameJa;
-                return breedingLookup.TryGetValue(id, out var name) ? name : "";
+                if (breedingLookup.TryGetValue(id, out var b))
+                    return !string.IsNullOrEmpty(b.NameEn) ? b.NameEn : b.NameJa;
+                return "";
             }
 
             var upcomingByDate = new Dictionary<string, List<object>>();

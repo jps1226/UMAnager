@@ -15,6 +15,7 @@ public sealed class JvLinkController : ControllerBase
     private readonly SidecarBridge _bridge;
     private readonly DifnRecordParsingService _parsingService;
     private readonly BreedingHorseBackfillService _breedingBackfill;
+    private readonly HnNameBackfillService _hnNameBackfill;
     private readonly RaceCardRefreshService _refreshService;
     private readonly AppStateService _appState;
     private readonly OddsApplyService _oddsApply;
@@ -26,6 +27,7 @@ public sealed class JvLinkController : ControllerBase
         SidecarBridge bridge,
         DifnRecordParsingService parsingService,
         BreedingHorseBackfillService breedingBackfill,
+        HnNameBackfillService hnNameBackfill,
         RaceCardRefreshService refreshService,
         AppStateService appState,
         OddsApplyService oddsApply,
@@ -36,6 +38,7 @@ public sealed class JvLinkController : ControllerBase
         _bridge           = bridge;
         _parsingService   = parsingService;
         _breedingBackfill = breedingBackfill;
+        _hnNameBackfill   = hnNameBackfill;
         _refreshService   = refreshService;
         _appState         = appState;
         _oddsApply        = oddsApply;
@@ -153,6 +156,37 @@ public sealed class JvLinkController : ControllerBase
         {
             var (scanned, upserted) = await _breedingBackfill.BackfillAsync(ct);
             return Ok(new { status = "Backfill complete", scanned, upserted });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    // Phase 15: bloodline ingest. Asks the Sidecar to JVOpen("BLDN", 4) and stream HN
+    // (breeding-horse master) records. These carry the romaji name we need to populate
+    // breeding_horses.NameEn — the only path netkeiba/JBIS can't provide.
+    [HttpPost("load-bloodline")]
+    public async Task<IActionResult> LoadBloodline()
+    {
+        if (_bridge.IngestionStatus == "Streaming")
+            return Conflict(new { error = "Ingestion already in progress." });
+
+        _bridge.StagedRecordCount = 0;
+        _bridge.IngestionStatus = "Streaming";
+        await _bridge.CommandQueue.Writer.WriteAsync("{\"command\":\"STREAM_BLDN\"}");
+        return Accepted(new { status = "BLDN stream command enqueued." });
+    }
+
+    // Phase 15: parse HN records from raw_staging and UPDATE breeding_horses.NameEn.
+    // Run this after load-bloodline finishes streaming.
+    [HttpPost("backfill-hn-names")]
+    public async Task<IActionResult> BackfillHnNames(CancellationToken ct)
+    {
+        try
+        {
+            var (scanned, updated) = await _hnNameBackfill.BackfillAsync(ct);
+            return Ok(new { status = "HN name backfill complete", scanned, updated });
         }
         catch (Exception ex)
         {

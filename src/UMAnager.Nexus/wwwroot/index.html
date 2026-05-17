@@ -95,6 +95,10 @@
                             <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkParseRecords()" title="Parse any unprocessed records in raw_staging into the database">⚙️ Parse Records</button>
                             <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkFetchCurrentOdds()" title="Fetch live odds via JVRTOpen (run after betting opens)">💴 Fetch Live Odds</button>
                         </div>
+                        <div class="jvlink-btn-grid">
+                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadBloodline()" title="One-time: pull HN (breeding-horse master) records via BLDN spec. Populates raw_staging.">🩸 Load Bloodline (BLDN)</button>
+                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkBackfillHnNames()" title="Parse HN records from raw_staging and fill breeding_horses.NameEn (romaji names for pedigree ancestors)">🌐 Backfill EN Names</button>
+                        </div>
                         <div id="jvlink-test-status" class="jvlink-test-status">Ready.</div>
                         <pre id="jvlink-test-output" class="jvlink-test-output">{}</pre>
                     </div>
@@ -420,6 +424,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260517-12"></script>
+<script src="/static/script.js?v=20260517-13"></script>
 </body>
 </html>

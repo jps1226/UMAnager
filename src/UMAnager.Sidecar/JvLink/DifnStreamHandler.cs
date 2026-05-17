@@ -14,7 +14,8 @@ internal static class DifnStreamHandler
     private static readonly HashSet<string> SkipTypes = [];
 
     public static async Task<(int Stored, int Skipped)> StreamAsync(
-        IJVLink jvLink, SidecarPipeClient pipe, CancellationToken ct)
+        IJVLink jvLink, SidecarPipeClient pipe, CancellationToken ct,
+        string dataSpec = "DIFN")
     {
         int readcount = 0, downloadcount = 0;
 
@@ -50,16 +51,17 @@ internal static class DifnStreamHandler
         }
 
         // DIFN = post-Aug 2023 Differential/Accumulation DataSpec (supports 10-byte breeding IDs).
+        // BLDN = Bloodline (HN/SK/BT records) — same machinery, different DataSpec.
         // fromdate "19910101000000" = full setup from the start of JRA digital records.
         // option = 4 = JV_OP_SETUPLAST.
-        Console.WriteLine($"[Sidecar] Calling JVOpen(DIFN, 19910101000000, 4)...");
-        int rc = jvLink.JVOpen("DIFN", "19910101000000", 4,
+        Console.WriteLine($"[Sidecar] Calling JVOpen({dataSpec}, 19910101000000, 4)...");
+        int rc = jvLink.JVOpen(dataSpec, "19910101000000", 4,
                                 ref readcount, ref downloadcount, out var lastts);
         Console.WriteLine($"[Sidecar] JVOpen returned: rc={rc}");
         if (rc < 0)
-            throw new InvalidOperationException($"JVOpen(DIFN) failed: rc={rc}");
+            throw new InvalidOperationException($"JVOpen({dataSpec}) failed: rc={rc}");
 
-        Console.WriteLine($"[Sidecar] JVOpen DIFN: rc={rc}, records≈{readcount}, files={downloadcount}, ts={lastts}");
+        Console.WriteLine($"[Sidecar] JVOpen {dataSpec}: rc={rc}, records≈{readcount}, files={downloadcount}, ts={lastts}");
 
         // If files are being downloaded (downloadcount > 0), poll JVStatus() until download completes.
         // Per Oracle: downloadcount=0 means files are cached locally, so no polling needed.

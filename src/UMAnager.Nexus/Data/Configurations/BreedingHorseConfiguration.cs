@@ -20,6 +20,9 @@ public class BreedingHorseConfiguration : IEntityTypeConfiguration<BreedingHorse
             .HasMaxLength(256)
             .IsRequired();
 
+        builder.Property(b => b.NameEn)
+            .HasMaxLength(256);
+
         builder.Property(b => b.LastUpdated)
             .HasDefaultValueSql("now()")
             .ValueGeneratedOnAdd();

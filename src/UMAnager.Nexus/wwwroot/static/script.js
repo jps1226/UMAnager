@@ -3120,6 +3120,20 @@ async function runJvlinkFetchCurrentOdds() {
     });
 }
 
+async function runJvlinkLoadBloodline() {
+    await runJvlinkPanelCall('Load Bloodline (BLDN)', async () => {
+        const res = await fetch('/api/jvlink/load-bloodline', { method: 'POST' });
+        return await res.json();
+    });
+}
+
+async function runJvlinkBackfillHnNames() {
+    await runJvlinkPanelCall('Backfill HN EN Names', async () => {
+        const res = await fetch('/api/jvlink/backfill-hn-names', { method: 'POST' });
+        return await res.json();
+    });
+}
+
 async function runJvlinkSidecarLog() {
     toggleJvlinkPanelButtons(true);
     appendConsoleLine(`[${consoleTimestamp()}] ▶ Sidecar Log…`);
