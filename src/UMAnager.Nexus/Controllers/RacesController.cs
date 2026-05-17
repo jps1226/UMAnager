@@ -17,6 +17,35 @@ public sealed class RacesController : ControllerBase
             ["09"] = "Hanshin",  ["10"] = "Kokura",
         };
 
+    // Phase 7: recency weights (most-recent first), f(pos) = 1/pos for top-5 else 0.
+    private static readonly double[] FormWeights = { 0.5, 0.3, 0.2 };
+
+    private static (string last3Str, double formScore) ComputeLast3(
+        List<(DateTime Date, int Finish)>? hist, DateTime raceDate)
+    {
+        if (hist == null || hist.Count == 0) return ("—-—-—", 0.0);
+        var picks = new List<int>(3);
+        foreach (var h in hist)
+        {
+            if (h.Date >= raceDate) continue;
+            picks.Add(h.Finish);
+            if (picks.Count == 3) break;
+        }
+        if (picks.Count == 0) return ("—-—-—", 0.0);
+        var parts = new string[3];
+        double score = 0.0;
+        for (int i = 0; i < 3; i++)
+        {
+            if (i < picks.Count)
+            {
+                parts[i] = picks[i].ToString();
+                if (picks[i] >= 1 && picks[i] <= 5) score += FormWeights[i] * (1.0 / picks[i]);
+            }
+            else parts[i] = "—";
+        }
+        return (string.Join("-", parts), score);
+    }
+
     private static string TrackName(string? code)
     {
         if (string.IsNullOrWhiteSpace(code)) return "";
@@ -92,6 +121,24 @@ public sealed class RacesController : ControllerBase
                 .ToListAsync();
             var recordByHorse = careerStats.ToDictionary(s => s.HorseId, s => $"{s.Wins}/{s.Starts}");
 
+            // Phase 7: last-3 finishes per horse (most recent first), strictly BEFORE the current
+            // race's date so that past-race rows still show the prior three rather than including
+            // the race being viewed. Pull every completed entry for our horses + its race_date,
+            // group by horse, sort desc once, then slice per-entry.
+            var horseFinishHistory = await (
+                from e in db.RaceEntries.AsNoTracking()
+                join r in db.Races.AsNoTracking() on e.RaceId equals r.RaceId
+                where entryHorseIds.Contains(e.HorseId!) && e.FinishPos != null && e.FinishPos > 0
+                select new { e.HorseId, r.RaceDate, Finish = e.FinishPos!.Value }
+            ).ToListAsync();
+            var finishesByHorse = horseFinishHistory
+                .GroupBy(x => x.HorseId!)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderByDescending(x => x.RaceDate).Select(x => (x.RaceDate, x.Finish)).ToList()
+                );
+
+
             string ResolveAncestorName(string? id)
             {
                 if (string.IsNullOrEmpty(id)) return "";
@@ -102,7 +149,9 @@ public sealed class RacesController : ControllerBase
 
             var upcomingByDate = new Dictionary<string, List<object>>();
             var pastByDate = new Dictionary<string, List<object>>();
-            var now = DateTime.UtcNow;
+            // SortTime is stored as JST wall-clock (Kind=Unspecified). Compare in JST so races
+            // flip from "upcoming" to "past" at actual post time, not 9 hours later.
+            var now = DateTime.UtcNow.AddHours(9);
 
             foreach (var race in races)
             {
@@ -132,6 +181,8 @@ public sealed class RacesController : ControllerBase
                     .Select(e =>
                     {
                         horseLookup.TryGetValue(e.HorseId ?? "", out var horse);
+                        finishesByHorse.TryGetValue(e.HorseId ?? "", out var hist);
+                        var (last3Str, formScore) = ComputeLast3(hist, race.RaceDate);
 
                         return (object)new
                         {
@@ -140,6 +191,8 @@ public sealed class RacesController : ControllerBase
                             PP = e.PostPosition ?? 0,
                             BK = e.Bracket ?? 0,
                             Record = recordByHorse.TryGetValue(e.HorseId ?? "", out var rec) ? rec : "",
+                            Last3 = last3Str,
+                            Form_Score = formScore,
                             Sire = ResolveAncestorName(horse?.SireId),
                             Sire_ID = horse?.SireId ?? "",
                             Dam = ResolveAncestorName(horse?.DamId),
@@ -216,6 +269,7 @@ public sealed class RacesController : ControllerBase
                 new { key = "PP", visible = true },
                 new { key = "Horse", visible = true },
                 new { key = "Record", visible = true },
+                new { key = "Last3", visible = true },
                 new { key = "Sire", visible = true },
                 new { key = "Dam", visible = true },
                 new { key = "BMS", visible = true },
@@ -229,7 +283,10 @@ public sealed class RacesController : ControllerBase
                 formMultiplier = 100,
                 freshnessBonus = 3,
                 freshnessBreakeven = 10,
-                pedigreeMultiplier = 30
+                pedigreeMultiplier = 30,
+                // Phase 7: recency-weighted form score scale (form_score is in [0, 1] range,
+                // typical good = 0.4–0.7; default scale brings it into rough parity with formMultiplier).
+                formWeight = 80
             }
         },
         sidebarTabs = new

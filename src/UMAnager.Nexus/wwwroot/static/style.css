@@ -1145,6 +1145,19 @@ td.finish-pos-1 { color: #ffd700; }
 td.finish-pos-2 { color: #c0c0c0; }
 td.finish-pos-3 { color: #cd7f32; }
 
+/* --- LAST-3 FORM STRIP (Phase 7) --- */
+td.last3-strip { text-align: center; white-space: nowrap; min-width: 60px; padding: 4px 6px; }
+td.last3-strip .last3-cell {
+    display: inline-block; min-width: 16px; padding: 1px 4px; margin: 0 1px;
+    border-radius: 3px; font-weight: bold; font-size: 12px; line-height: 16px;
+    background: rgba(255,255,255,0.04);
+}
+td.last3-strip .last3-win   { color: #1a1a1a; background: #ffd700; }
+td.last3-strip .last3-place { color: #1a1a1a; background: #c0c0c0; }
+td.last3-strip .last3-show  { color: #fff;    background: #cd7f32; }
+td.last3-strip .last3-out   { color: #888; }
+td.last3-strip .last3-none  { color: #555; background: transparent; }
+
 .btn-history-refresh {
     background: transparent;
     border: 1px solid #1dd1a1;

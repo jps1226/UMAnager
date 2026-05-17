@@ -25,7 +25,7 @@ let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 let appConfig = {}; // NEW: Stores app configuration
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
 
-const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Sire", "Dam", "BMS", "Odds", "Fav", "Finish"];
+const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Last3", "Sire", "Dam", "BMS", "Odds", "Fav", "Finish"];
 
 // JRA track codes → romaji names. Source: JRA-VAN spec.
 const TRACK_NAMES = {
@@ -57,6 +57,7 @@ const RACE_COLUMN_META = {
     PP: { label: "PP", sortable: true, sortKey: "PP", initialAsc: true },
     Horse: { label: "Horse", sortable: true, sortKey: "Horse", initialAsc: true },
     Record: { label: "W/S", sortable: true, sortKey: "Record", initialAsc: true },
+    Last3: { label: "Form", sortable: true, sortKey: "Last3", initialAsc: false },
     Sire: { label: "Sire", sortable: true, sortKey: "Sire", initialAsc: true },
     Dam: { label: "Dam", sortable: true, sortKey: "Dam", initialAsc: true },
     BMS: { label: "BMS", sortable: true, sortKey: "BMS", initialAsc: true },
@@ -895,6 +896,9 @@ function applySortLogic(r_id, col, asc) {
             comparison = comparePrimitiveValues(normalizeRaceText(a.Horse), normalizeRaceText(b.Horse), asc);
         } else if (col === 'Record') {
             comparison = compareRecordValues(a, b, asc);
+        } else if (col === 'Last3') {
+            // Sort by recency-weighted form_score (server-computed); higher = better.
+            comparison = comparePrimitiveValues(parseFloat(a.Form_Score) || 0, parseFloat(b.Form_Score) || 0, asc);
         } else if (col === 'Sire') {
             comparison = comparePrimitiveValues(normalizeRaceText(a.Sire), normalizeRaceText(b.Sire), asc);
         } else if (col === 'Dam') {
@@ -1032,6 +1036,21 @@ function buildTableBody(r_id, entries) {
             PP: `<td${fallbackCellAttrs('PP')}>${row.PP || ""}</td>`,
             Horse: `<td style="font-weight: bold;">${horseStr}</td>`,
             Record: `<td>${row.Record || ""}</td>`,
+            Last3: (() => {
+                const raw = String(row.Last3 || "—-—-—");
+                const parts = raw.split('-');
+                const cells = parts.map(p => {
+                    const n = parseInt(p, 10);
+                    let cls = 'last3-cell';
+                    if (n === 1) cls += ' last3-win';
+                    else if (n === 2 || n === 3) cls += ' last3-place';
+                    else if (Number.isFinite(n) && n >= 4 && n <= 5) cls += ' last3-show';
+                    else if (Number.isFinite(n)) cls += ' last3-out';
+                    else cls += ' last3-none';
+                    return `<span class="${cls}">${p}</span>`;
+                }).join('');
+                return `<td class="last3-strip" title="Form score: ${(parseFloat(row.Form_Score) || 0).toFixed(3)}">${cells}</td>`;
+            })(),
             Sire: `<td>${sireStr}</td>`,
             Dam: `<td>${damStr}</td>`,
             BMS: `<td>${bmsStr}</td>`,
@@ -1248,6 +1267,7 @@ function getFormulaWeights() {
         freshnessBonus:       parseFW(fw.freshnessBonus,         3),
         freshnessBreakeven:   parseFW(fw.freshnessBreakeven,    10),
         pedigreeMultiplier:   parseFW(fw.pedigreeMultiplier,    30),
+        formWeight:           parseFW(fw.formWeight,            80),
     };
 }
 
@@ -1276,9 +1296,14 @@ function calculatePowerScore(row, riskVal) {
                 baseFormScore += (wins / starts) * fw.formMultiplier;
             }
             // Freshness bonus: rewards lightly raced horses, penalizes over-raced veterans
-            baseFormScore += (fw.freshnessBreakeven - starts) * fw.freshnessBonus; 
+            baseFormScore += (fw.freshnessBreakeven - starts) * fw.freshnessBonus;
         }
     }
+
+    // Phase 7: recency-weighted form score (server-computed, weights [0.5, 0.3, 0.2] · 1/pos top-5).
+    // Range roughly [0, 1]; scale into the same magnitude as the win-rate term.
+    const formScoreVal = parseFloat(row.Form_Score) || 0;
+    baseFormScore += formScoreVal * fw.formWeight;
 
     // 3. Base Pedigree Score (from Tracked Bloodlines)
     const basePedScore = (parseFloat(row.Score) || 0) * fw.pedigreeMultiplier;
@@ -5963,6 +5988,7 @@ function showSettingsModal() {
     document.getElementById('fw-freshnessBonus').value     = fw.freshnessBonus;
     document.getElementById('fw-freshnessBreakeven').value = fw.freshnessBreakeven;
     document.getElementById('fw-pedigreeMultiplier').value = fw.pedigreeMultiplier;
+    document.getElementById('fw-formWeight').value         = fw.formWeight;
     renderRaceColumnSettings();
     loadOrchestratorSettings();
 
@@ -5979,6 +6005,7 @@ function resetFormulaWeights() {
     document.getElementById('fw-freshnessBonus').value     = 3;
     document.getElementById('fw-freshnessBreakeven').value = 10;
     document.getElementById('fw-pedigreeMultiplier').value = 30;
+    document.getElementById('fw-formWeight').value         = 80;
     updateSidebarSettings();
 }
 
@@ -6018,6 +6045,7 @@ async function updateSidebarSettings() {
             freshnessBonus:     parseFWInput('fw-freshnessBonus',       3),
             freshnessBreakeven: parseFWInput('fw-freshnessBreakeven',  10),
             pedigreeMultiplier: parseFWInput('fw-pedigreeMultiplier',  30),
+            formWeight:         parseFWInput('fw-formWeight',          80),
         }
     };
     appConfig.backend = {
