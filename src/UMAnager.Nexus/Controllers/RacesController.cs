@@ -190,7 +190,11 @@ public sealed class RacesController : ControllerBase
                     // is kept for backward-compat with parseRaceSortTime.
                     sort_time_iso = race.SortTime?.ToString("yyyy-MM-ddTHH:mm:ss") + "+09:00",
                     clean_date = cleanDate,
-                    history_refreshed = race.HistoryRefreshed
+                    history_refreshed = race.HistoryRefreshed,
+                    // Phase 11 backward: HR payouts — emitted as a raw JSON string for the
+                    // frontend to parse only when it needs to enrich past-race recap chips
+                    // (◎ Win / Q Box / T Box) with the actual ¥ amount that paid out.
+                    results_json = race.ResultsJson
                 };
 
                 var raceEntries = entriesByRace.TryGetValue(race.RaceId, out var re) ? re : new List<Data.Entities.RaceEntry>();

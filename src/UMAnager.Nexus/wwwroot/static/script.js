@@ -3597,13 +3597,18 @@ function evaluateRaceRecap(race) {
     const entries = Array.isArray(race?.entries) ? race.entries : [];
 
     const finishByRank = {};
+    const ppByRank = {};
     entries.forEach(row => {
         const rank = parseFinishRank(row?.Finish);
         if (!rank || rank < 1 || rank > 3) return;
 
         const horseId = String(row?.Horse_ID ?? '').split('.')[0].trim();
         if (!horseId) return;
-        if (!finishByRank[rank]) finishByRank[rank] = horseId;
+        if (!finishByRank[rank]) {
+            finishByRank[rank] = horseId;
+            const pp = parseInt(row?.PP, 10);
+            if (Number.isFinite(pp) && pp > 0) ppByRank[rank] = pp;
+        }
     });
 
     const hasCompleteTop3 = !!(finishByRank[1] && finishByRank[2] && finishByRank[3]);
@@ -3614,7 +3619,8 @@ function evaluateRaceRecap(race) {
             hasCompleteTop3: false,
             honmeiHit: false,
             quinellaHit: false,
-            trioHit: false
+            trioHit: false,
+            ppByRank: {}
         };
     }
 
@@ -3630,7 +3636,40 @@ function evaluateRaceRecap(race) {
         hasCompleteTop3: true,
         honmeiHit: !!marks["◎"] && marks["◎"] === top1,
         quinellaHit: pickedSet.has(top1) && pickedSet.has(top2),
-        trioHit: pickedSet.has(top1) && pickedSet.has(top2) && pickedSet.has(top3)
+        trioHit: pickedSet.has(top1) && pickedSet.has(top2) && pickedSet.has(top3),
+        ppByRank
+    };
+}
+
+// Phase 11 backward: look up actual payouts for a past race from
+// race.info.results_json (populated by HR parser). Returns ¥ amounts per
+// hit type; 0 means data unavailable or combo not found.
+function lookupRacePayouts(race, ppByRank) {
+    const raw = race?.info?.results_json;
+    if (!raw || !ppByRank) return { win: 0, quinella: 0, trio: 0 };
+
+    let payouts;
+    try { payouts = typeof raw === 'string' ? JSON.parse(raw) : raw; }
+    catch (_) { return { win: 0, quinella: 0, trio: 0 }; }
+
+    const findPayout = (arr, comboKey) => {
+        if (!Array.isArray(arr)) return 0;
+        const key = JSON.stringify(comboKey);
+        for (const slot of arr) {
+            const slotCombo = Array.isArray(slot?.combo) ? [...slot.combo].sort((a,b) => a-b) : null;
+            if (!slotCombo) continue;
+            if (JSON.stringify(slotCombo) === key) {
+                return parseInt(slot?.payout, 10) || 0;
+            }
+        }
+        return 0;
+    };
+
+    const pp1 = ppByRank[1], pp2 = ppByRank[2], pp3 = ppByRank[3];
+    return {
+        win:      (pp1 ? findPayout(payouts.win, [pp1]) : 0),
+        quinella: (pp1 && pp2 ? findPayout(payouts.quinella, [pp1, pp2].sort((a,b) => a-b)) : 0),
+        trio:     (pp1 && pp2 && pp3 ? findPayout(payouts.trio, [pp1, pp2, pp3].sort((a,b) => a-b)) : 0)
     };
 }
 
@@ -3825,10 +3864,22 @@ function buildRaceWinBadgesHtml(race) {
     const recap = evaluateRaceRecap(race);
     if (!recap.hasCompleteTop3) return "";
 
+    // Look up actual ¥ payouts from HR data. Per-¥100 ticket; scaled to
+    // configured stake at render time so the label reflects what the
+    // operator would have actually won.
+    const payouts = lookupRacePayouts(race, recap.ppByRank);
+    const stake = parseFloat(globalOreProSettings?.bet_estimate_stake_yen) || 100;
+    const stakeMul = stake / 100;
+    const fmtYen = (n) => n > 0 ? `¥${Math.round(n * stakeMul).toLocaleString()}` : '';
+
+    const winYen = fmtYen(payouts.win);
+    const qYen   = fmtYen(payouts.quinella);
+    const tYen   = fmtYen(payouts.trio);
+
     const badges = [];
-    if (recap.honmeiHit) badges.push('<span class="race-hit-pill race-hit-honmei" title="◎ Honmei hit">◎ Win</span>');
-    if (recap.quinellaHit) badges.push('<span class="race-hit-pill race-hit-quinella" title="Quinella Box hit">Q Box</span>');
-    if (recap.trioHit) badges.push('<span class="race-hit-pill race-hit-trio" title="Trio Box hit">T Box</span>');
+    if (recap.honmeiHit)   badges.push(`<span class="race-hit-pill race-hit-honmei" title="◎ Honmei hit${winYen ? ` — paid ${winYen}` : ''}">◎ Win${winYen ? ` ${winYen}` : ''}</span>`);
+    if (recap.quinellaHit) badges.push(`<span class="race-hit-pill race-hit-quinella" title="Quinella Box hit${qYen ? ` — paid ${qYen}` : ''}">Q Box${qYen ? ` ${qYen}` : ''}</span>`);
+    if (recap.trioHit)     badges.push(`<span class="race-hit-pill race-hit-trio" title="Trio Box hit${tYen ? ` — paid ${tYen}` : ''}">T Box${tYen ? ` ${tYen}` : ''}</span>`);
 
     if (!badges.length) return "";
     return `<span class="race-hit-wrap">${badges.join('')}</span>`;
