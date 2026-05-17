@@ -1077,6 +1077,18 @@ th {
     background: rgba(77, 112, 197, 0.2);
 }
 
+/* Per-race net pill — appended after the win/Q/T chips when any leg hit. */
+.race-hit-net-pos {
+    color: #b8f5d2;
+    border: 1px solid #2ea76b;
+    background: rgba(46, 167, 107, 0.22);
+}
+.race-hit-net-neg {
+    color: #f5c0c0;
+    border: 1px solid #b65454;
+    background: rgba(182, 84, 84, 0.18);
+}
+
 /* --- COUNTDOWN TIMER --- */
 .countdown-wrapper {
     background: rgba(255, 75, 75, 0.1);

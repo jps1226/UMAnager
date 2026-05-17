@@ -2553,6 +2553,31 @@ function toggleRaceLock(event, r_id) {
     updateAutoBetHighlighting();
 }
 
+/**
+ * Lock every race that shares a JST clean_date with the given race. Used after
+ * an OrePro apply so the operator can't accidentally edit marks for races that
+ * have already been bet. Idempotent — already-locked races stay locked.
+ */
+function lockAllRacesForRaceDay(raceId) {
+    const info = globalRaceInfo[raceId];
+    const date = info?.clean_date;
+    if (!date) return 0;
+
+    let locked = 0;
+    Object.keys(globalRaceInfo).forEach(rid => {
+        if ((globalRaceInfo[rid]?.clean_date || '') !== date) return;
+        if (!raceLocks[rid]) {
+            raceLocks[rid] = true;
+            locked++;
+        }
+        const tbody = document.getElementById(`tbody-${rid}`);
+        if (tbody) tbody.innerHTML = buildTableBody(rid, globalRaceEntries[rid]);
+        updateRaceActionButtons(rid);
+    });
+    updateAutoBetHighlighting();
+    return locked;
+}
+
 async function toggleMark(r_id, h_id, symbol) {
     if (isRaceLocked(r_id)) return;
 
@@ -3884,6 +3909,21 @@ function buildRaceWinBadgesHtml(race) {
     if (recap.trioHit)     badges.push(`<span class="race-hit-pill race-hit-trio" title="Trio Box hit${tYen ? ` — paid ${tYen}` : ''}">T Box${tYen ? ` ${tYen}` : ''}</span>`);
 
     if (!badges.length) return "";
+
+    // Net pill: per-race won minus per-race spend across all three legs.
+    // Spend model matches the day-recap: 1 Win ticket + C(marks,2) Q combos + C(marks,3) T combos.
+    const wonYen   = (payouts.win * winStake / 100) + (payouts.quinella * qStake / 100) + (payouts.trio * tStake / 100);
+    const marksCount = Object.keys(collectRaceMainMarks(recap.raceId) || {}).length;
+    const qCombos = marksCount >= 2 ? marksCount * (marksCount - 1) / 2 : 0;
+    const tCombos = marksCount >= 3 ? marksCount * (marksCount - 1) * (marksCount - 2) / 6 : 0;
+    const spentYen = winStake + (qCombos * qStake) + (tCombos * tStake);
+    const netYen = Math.round(wonYen - spentYen);
+    const netSign = netYen >= 0 ? '+' : '-';
+    const netAbs = Math.abs(netYen).toLocaleString();
+    const netClass = netYen >= 0 ? 'race-hit-net-pos' : 'race-hit-net-neg';
+    const netTitle = `Net for this race: ¥${netSign}${netAbs} (won ¥${Math.round(wonYen).toLocaleString()} − spent ¥${spentYen.toLocaleString()})`;
+    badges.push(`<span class="race-hit-pill race-hit-net ${netClass}" title="${netTitle}">Net ${netSign}¥${netAbs}</span>`);
+
     return `<span class="race-hit-wrap">${badges.join('')}</span>`;
 }
 
@@ -5031,6 +5071,12 @@ async function applyVotesToOrePro() {
     await loadOreProApplyState();
     try { renderLiveViewPanel(); } catch (_) {}
 
+    // Lock every race on this day so accidental mark edits can't drift from
+    // what's already in OrePro. Operator can still unlock per-race manually.
+    if (dayPayload.races?.length) {
+        lockAllRacesForRaceDay(dayPayload.races[0].race_id);
+    }
+
     const finalMsg = `Apply Votes finished: ${okCount}/${total} race(s) submitted to OrePro.`;
     setOreProSessionStatus(finalMsg, okCount === total ? 'ok' : (okCount > 0 ? 'warn' : 'error'));
     const progressEl = document.getElementById('orepro-bulk-progress');
@@ -5095,6 +5141,12 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
         // title will show "📝 Applied" or "📤 Submitted".
         await loadOreProApplyState();
         try { renderLiveViewPanel(); } catch (_) {}
+
+        // Single-race apply also locks every race on the same JST day so the
+        // operator can't accidentally edit marks for races already in OrePro.
+        if (requestCompleted || rowStatus === 'ok') {
+            lockAllRacesForRaceDay(raceId);
+        }
 
         const out = document.getElementById('orepro-sync-results');
         if (out && result) {
