@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Mvc;
 using UMAnager.Nexus.Services;
 
@@ -26,7 +27,11 @@ public sealed class ConfigController : ControllerBase
             prefetchRaceCheck       = false,
             debugConsole            = false,
             autoLockPastVotes       = false,
-            showConsole             = true,
+            // Phase 12: dev console hidden by default; gated by Dev Mode.
+            showConsole             = false,
+            // Phase 12: master toggle for the Advanced Tools panel, scrape console,
+            // and debug-mode setting rows. Off by default for the cleaner operator UI.
+            devMode                 = false,
             highlightAutoBets       = false,
             highlightFallbackBridge = false,
             tvModeSplitPercent      = 50,
@@ -38,6 +43,7 @@ public sealed class ConfigController : ControllerBase
                 new { key = "PP",      visible = true },
                 new { key = "Horse",   visible = true },
                 new { key = "Record",  visible = true },
+                new { key = "Last3",   visible = true },
                 new { key = "Sire",    visible = true },
                 new { key = "Dam",     visible = true },
                 new { key = "BMS",     visible = true },
@@ -52,6 +58,7 @@ public sealed class ConfigController : ControllerBase
                 freshnessBonus      = 3,
                 freshnessBreakeven  = 10,
                 pedigreeMultiplier  = 30,
+                formWeight          = 80,
             },
         },
         sidebarTabs = new
@@ -75,7 +82,35 @@ public sealed class ConfigController : ControllerBase
         {
             return Ok(_defaultConfig);
         }
-        return Content(raw, "application/json");
+        // Overlay the persisted blob on top of defaults so newly-added default keys
+        // (e.g. Phase 12's devMode, Phase 7's formWeight + Last3 column) appear immediately
+        // without requiring the user to save settings again.
+        try
+        {
+            var defaultsNode = JsonSerializer.SerializeToNode(_defaultConfig)!.AsObject();
+            var savedNode    = JsonNode.Parse(raw)!.AsObject();
+            MergeJsonObjects(defaultsNode, savedNode);
+            return Content(defaultsNode.ToJsonString(), "application/json");
+        }
+        catch (JsonException)
+        {
+            return Content(raw, "application/json");
+        }
+    }
+
+    private static void MergeJsonObjects(JsonObject target, JsonObject source)
+    {
+        foreach (var kv in source)
+        {
+            if (kv.Value is JsonObject srcObj && target[kv.Key] is JsonObject tgtObj)
+            {
+                MergeJsonObjects(tgtObj, srcObj);
+            }
+            else
+            {
+                target[kv.Key] = kv.Value?.DeepClone();
+            }
+        }
     }
 
     [HttpPost]

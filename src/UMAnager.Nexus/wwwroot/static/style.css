@@ -1145,6 +1145,11 @@ td.finish-pos-1 { color: #ffd700; }
 td.finish-pos-2 { color: #c0c0c0; }
 td.finish-pos-3 { color: #cd7f32; }
 
+/* --- DEV MODE GATING (Phase 12) ---
+   Body gets `.dev-mode` class when the Developer Mode toggle is on.
+   Anything marked `.dev-only` is hidden unless dev mode is active. */
+body:not(.dev-mode) .dev-only { display: none !important; }
+
 /* --- LAST-3 FORM STRIP (Phase 7) --- */
 td.last3-strip { text-align: center; white-space: nowrap; min-width: 60px; padding: 4px 6px; }
 td.last3-strip .last3-cell {

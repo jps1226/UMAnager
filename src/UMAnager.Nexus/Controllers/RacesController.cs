@@ -247,65 +247,7 @@ public sealed class RacesController : ControllerBase
         }
     }
 
-    [HttpGet("../config")]
-    public IActionResult GetConfig() => Ok(new
-    {
-        ui = new
-        {
-            riskSlider = 50,
-            betSafetyIndicator = false,
-            voteSortingTop = true,
-            autoFetchPastResults = true,
-            prefetchRaceCheck = false,
-            debugConsole = false,
-            autoLockPastVotes = false,
-            showConsole = true,
-            highlightAutoBets = false,
-            highlightFallbackBridge = false,
-            tvModeSplitPercent = 50,
-            tvModePanelsFlipped = false,
-            raceTableColumns = new object[]
-            {
-                new { key = "Shirushi", visible = true },
-                new { key = "BK", visible = true },
-                new { key = "PP", visible = true },
-                new { key = "Horse", visible = true },
-                new { key = "Record", visible = true },
-                new { key = "Last3", visible = true },
-                new { key = "Sire", visible = true },
-                new { key = "Dam", visible = true },
-                new { key = "BMS", visible = true },
-                new { key = "Odds", visible = true },
-                new { key = "Fav", visible = true },
-                new { key = "Finish", visible = true }
-            },
-            formulaWeights = new
-            {
-                oddsCap = 100,
-                formMultiplier = 100,
-                freshnessBonus = 3,
-                freshnessBreakeven = 10,
-                pedigreeMultiplier = 30,
-                // Phase 7: recency-weighted form score scale (form_score is in [0, 1] range,
-                // typical good = 0.4–0.7; default scale brings it into rough parity with formMultiplier).
-                formWeight = 80
-            }
-        },
-        sidebarTabs = new
-        {
-            raceDatabase = true,
-            pedigreeLists = true,
-            autoPickStrategy = true,
-            weekendWatchlist = true
-        },
-        backend = new
-        {
-            dataEngine = "jv"
-        }
-    });
-
-    [HttpPost("../config")]
-    public IActionResult PostConfig([FromBody] object config) => Ok(new { status = "ok" });
+    // /api/config GET/POST is owned by ConfigController — don't duplicate here.
 
     [HttpGet("../marks")]
     public IActionResult GetMarks() => Ok(new

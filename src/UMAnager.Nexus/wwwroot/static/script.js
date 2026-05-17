@@ -112,6 +112,21 @@ function isDebugConsoleEnabled() {
     return appConfig.ui?.debugConsole ?? false;
 }
 
+function isDevModeEnabled() {
+    return appConfig.ui?.devMode ?? false;
+}
+
+function applyDevModeBodyClass() {
+    const on = isDevModeEnabled();
+    document.body.classList.toggle('dev-mode', on);
+    // When dev mode flips off, also force the scrape console hidden in case a recent
+    // append set its inline style to 'block'.
+    if (!on) {
+        const c = document.getElementById('scrape-console');
+        if (c) c.style.display = 'none';
+    }
+}
+
 function isAutoLockPastVotesEnabled() {
     return appConfig.ui?.autoLockPastVotes ?? false;
 }
@@ -441,6 +456,7 @@ async function init() {
     // NEW: Load config file
     const configRes = await fetch('/api/config');
     appConfig = await configRes.json();
+    applyDevModeBodyClass();
 
     // Load OrePro per-race apply state so the Apply button can reflect history.
     await loadOreProApplyState();
@@ -2559,7 +2575,7 @@ async function saveMarksToServer() {
 function appendConsoleLine(message) {
     const consoleBox = document.getElementById('scrape-console');
     if (!consoleBox) return;
-    if (appConfig?.ui?.showConsole ?? true) consoleBox.style.display = 'block';
+    if ((appConfig?.ui?.showConsole ?? false) && isDevModeEnabled()) consoleBox.style.display = 'block';
     const prefix = consoleBox.textContent && consoleBox.textContent.trim() ? '\n' : '';
     consoleBox.textContent += `${prefix}${message}`;
     consoleBox.scrollTop = consoleBox.scrollHeight;
@@ -3344,7 +3360,7 @@ async function enrichHorseInfoAfterScrape() {
 
     const consoleBox = document.getElementById('scrape-console');
     if (consoleBox) {
-        if (appConfig?.ui?.showConsole ?? true) consoleBox.style.display = 'block';
+        if ((appConfig?.ui?.showConsole ?? false) && isDevModeEnabled()) consoleBox.style.display = 'block';
         consoleBox.textContent = 'Preparing horse info enrichment...';
     }
 
@@ -3392,7 +3408,7 @@ async function triggerScrape(mode) {
     
     // Reveal and prepare the console
     const consoleBox = document.getElementById('scrape-console');
-    if (appConfig?.ui?.showConsole ?? true) consoleBox.style.display = 'block';
+    if ((appConfig?.ui?.showConsole ?? false) && isDevModeEnabled()) consoleBox.style.display = 'block';
     consoleBox.textContent = "Waking up scraper...";
     
     // Start pinging the Python server for console text every 500 milliseconds
@@ -5972,6 +5988,7 @@ function showSettingsModal() {
     document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
     document.getElementById('setting-autoFetchPastResults').checked = isAutoFetchPastResultsEnabled();
     document.getElementById('setting-prefetchRaceCheck').checked = isPrefetchRaceCheckEnabled();
+    document.getElementById('setting-devMode').checked = isDevModeEnabled();
     document.getElementById('setting-debugConsole').checked = isDebugConsoleEnabled();
     document.getElementById('setting-autoLockPastVotes').checked = isAutoLockPastVotesEnabled();
     document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
@@ -6032,6 +6049,7 @@ async function updateSidebarSettings() {
         voteSortingTop: document.getElementById('setting-voteSortingTop').checked,
         autoFetchPastResults: document.getElementById('setting-autoFetchPastResults').checked,
         prefetchRaceCheck: document.getElementById('setting-prefetchRaceCheck').checked,
+        devMode: document.getElementById('setting-devMode').checked,
         debugConsole: document.getElementById('setting-debugConsole').checked,
         autoLockPastVotes: document.getElementById('setting-autoLockPastVotes').checked,
         showConsole: document.getElementById('setting-showConsole').checked,
@@ -6067,6 +6085,7 @@ async function updateSidebarSettings() {
     );
     
     // Apply settings immediately to sidebar
+    applyDevModeBodyClass();
     applySidebarSettings();
     updateAllRiskBadges();
     updateAutoBetHighlighting();
@@ -6174,7 +6193,7 @@ function applySidebarSettings() {
 
     const consoleEl = document.getElementById('scrape-console');
     if (consoleEl) {
-        consoleEl.style.display = (appConfig.ui?.showConsole ?? true) ? 'block' : 'none';
+        consoleEl.style.display = ((appConfig.ui?.showConsole ?? false) && isDevModeEnabled()) ? 'block' : 'none';
     }
     if (!isPrefetchRaceCheckEnabled()) {
         globalPrefetchUpdates = null;

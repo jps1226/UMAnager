@@ -52,19 +52,13 @@
         <div class="sidebar-group-content">
             
             <button class="btn-full btn-primary-prominent" onclick="triggerScrape('new')" id="btn-new-race">🔍 Fetch Upcoming Races</button>
-            <button class="btn-full btn-compact" onclick="refreshUpcomingRacesLite()" id="btn-upcoming-refresh" data-action="check">🛰️ Check Pending Updates</button>
             <button class="btn-full btn-compact" onclick="enrichHorseInfoAfterScrape()" id="btn-enrich-horse-info" data-action="enrich">🧬 Fill Horse Names / Parents</button>
-            
-            <details class="advanced-tools-panel">
+
+            <details class="advanced-tools-panel dev-only">
                 <summary class="advanced-tools-summary">⚙️ Advanced Tools</summary>
                 <div class="advanced-tools-body">
-                    <button class="btn-full btn-micro" onclick="triggerScrape('all')" id="btn-all-race">📅 Load All Races (Test)</button>
-                    <button class="btn-full btn-micro" onclick="triggerPost('/api/cache/clear')">🗑️ Clear Cached Races</button>
-                    <button class="btn-full btn-danger btn-micro" onclick="triggerPost('/api/dict/wipe')">🚨 Reset Translation Memory</button>
                     <button class="btn-full btn-micro" onclick="createDataBackup()">💾 Backup Data Folder</button>
                     <button class="btn-full btn-micro" onclick="restoreLatestBackup()">♻️ Restore Latest Backup</button>
-                    <button class="btn-full btn-micro" onclick="exportLegacyBundle()">📦 Export Legacy Recovery Bundle</button>
-                    <button class="btn-full btn-danger btn-micro" onclick="importLegacyBundle()">📥 Import Legacy Files To DB</button>
 
                     <div class="tool-block">
                         <label class="tool-block-label">Import Results For Day</label>
@@ -84,49 +78,15 @@
                     </div>
 
                     <div class="tool-block jvlink-tool-block">
-                        <label class="tool-block-label">JRA-VAN / JV-Link Test Panel</label>
-                        <input type="text" id="jvlink-test-dataspec" class="tool-input-compact" value="TOKU" placeholder="DataSpec">
-                        <input type="text" id="jvlink-test-from-date" class="tool-input-compact" value="20250323000000" placeholder="FromDate (YYYYMMDD or YYYYMMDDHHMMSS)">
-                        <div class="jvlink-inline-grid">
-                            <input type="number" id="jvlink-test-max-records" class="tool-input-compact" value="20" min="1" max="500" placeholder="Max records">
-                            <select id="jvlink-test-data-option" class="tool-input-compact">
-                                <option value="1" selected>DataOption 1</option>
-                                <option value="2">DataOption 2</option>
-                                <option value="3">DataOption 3</option>
-                            </select>
-                        </div>
-                        <input type="text" id="jvlink-test-sid" class="tool-input-compact" placeholder="SID override (optional)">
-                        <label class="jvlink-checkbox-row">
-                            <input type="checkbox" id="jvlink-test-skip-key" checked>
-                            <span>Skip JVSetServiceKey</span>
-                        </label>
-                        <label class="jvlink-checkbox-row">
-                            <input type="checkbox" id="jvlink-test-compact" checked>
-                            <span>Compact output</span>
-                        </label>
-                        <div class="jvlink-btn-grid">
-                            <button class="btn-full btn-micro" onclick="runJvlinkRefreshUpcoming()">🔄 Refresh Cache</button>
-                            <button class="btn-full btn-micro" onclick="runJvlinkStatusTest()">🔎 Status</button>
-                            <button class="btn-full btn-micro" onclick="runJvlinkStorageLayoutTest()">📁 Storage</button>
-                            <button class="btn-full btn-micro" onclick="runJvlinkOpenSettingsTest()">⚙️ Open Settings</button>
-                            <button class="btn-full btn-micro" onclick="runJvlinkProbeOpenTest()">🧪 Probe Open</button>
-                            <button class="btn-full btn-micro" onclick="runJvlinkStreamSampleTest()">🌊 Stream Sample</button>
-                            <button class="btn-full btn-micro" onclick="runJvlinkStreamSampleAutoTest()">⏱️ Auto Wait Stream</button>
-                            <button class="btn-full btn-micro" onclick="runJvlinkCapabilityScanTest()">🧭 Capability Scan</button>
-                            <button class="btn-full btn-micro" onclick="runJvlinkStreamSummaryTest()">📊 Stream Summary</button>
-                        </div>
+                        <label class="tool-block-label">JV-Link Operations</label>
                         <div class="jvlink-btn-grid">
                             <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadWeekendRaces()" title="Fetch upcoming weekend race cards">📅 Load Weekend Races</button>
-                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadMasterDataInitial()" title="Bootstrap full horse master (initial setup)">🎓 Master Data (Initial)</button>
-                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadMasterDataIncremental()" title="Update horse master from checkpoint">🔄 Master Data (Update)</button>
+                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadMasterDataIncremental()" title="Update horse master from checkpoint">🔄 Master Data Update</button>
                         </div>
                         <div class="jvlink-btn-grid">
                             <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkRefreshRaceCards()" title="Re-download TOKU stream and update race cards (run after betting opens for odds)">🏇 Refresh Race Cards</button>
                             <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkParseRecords()" title="Parse any unprocessed records in raw_staging into the database">⚙️ Parse Records</button>
                             <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkFetchCurrentOdds()" title="Fetch live odds via JVRTOpen (run after betting opens)">💴 Fetch Live Odds</button>
-                        </div>
-                        <div class="jvlink-btn-grid">
-                            <button class="btn-full btn-micro" onclick="runJvlinkSidecarLog()" title="Tail the last 40 lines of the Sidecar log into the console below">📋 Sidecar Log</button>
                         </div>
                         <div id="jvlink-test-status" class="jvlink-test-status">Ready.</div>
                         <pre id="jvlink-test-output" class="jvlink-test-output">{}</pre>
@@ -210,7 +170,7 @@
                     <div class="clock-time" id="cst">--:--:--</div>
                 </div>
             </div>
-            <div id="scrape-console" class="console-box console-top-bar"></div>
+            <div id="scrape-console" class="console-box console-top-bar dev-only"></div>
         </div>
 
         <div class="main-toolbar">
@@ -341,10 +301,14 @@
                             <span>🔒 Auto-Lock Past Race Votes</span>
                         </label>
                         <label class="settings-option-row">
+                            <input type="checkbox" id="setting-devMode" onchange="updateSidebarSettings()">
+                            <span>🛠️ Developer Mode <span style="opacity:0.6;font-size:11px;">(shows Advanced Tools, scrape console, debug toggles)</span></span>
+                        </label>
+                        <label class="settings-option-row dev-only">
                             <input type="checkbox" id="setting-showConsole" onchange="updateSidebarSettings()">
                             <span>🖥️ Show Console Log</span>
                         </label>
-                        <label class="settings-option-row">
+                        <label class="settings-option-row dev-only">
                             <input type="checkbox" id="setting-debugConsole" onchange="updateSidebarSettings()">
                             <span>🧪 Debug Console Mode</span>
                         </label>
