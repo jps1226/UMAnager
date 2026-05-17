@@ -30,18 +30,20 @@ public class DifnRecordParsingService
             _logger.LogInformation("Starting DIFN record parsing: UM → RA → SE");
 
             // Parse in strict order: UM first (no dependencies), then RA, then SE,
-            // then HR (race payouts — references races by RaceId, so must come after RA).
+            // then HR (race payouts — references races by RaceId, so must come after RA),
+            // then O2 + O5 odds (also reference races by RaceId; merge into OddsJson).
             await ParseRecordsByTypeAsync("UM", ParseUmRecord, stats, ct);
             await ParseRecordsByTypeAsync("RA", ParseRaRecord, stats, ct);
             await ParseRecordsByTypeAsync("SE", ParseSeRecord, stats, ct);
             await ParseHrRecordsAsync(stats, ct);
+            await ParseOddsRecordsAsync(stats, ct);
 
             sw.Stop();
             stats.DurationMs = (int)sw.ElapsedMilliseconds;
 
             _logger.LogInformation(
-                "DIFN parsing complete: UM={ParsedUm} RA={ParsedRa} SE={ParsedSe} HR={ParsedHr} Failed={Failed} Duration={Duration}ms",
-                stats.ParsedUm, stats.ParsedRa, stats.ParsedSe, stats.ParsedHr, stats.FailedCount, stats.DurationMs);
+                "DIFN parsing complete: UM={ParsedUm} RA={ParsedRa} SE={ParsedSe} HR={ParsedHr} O2={O2} O5={O5} Failed={Failed} Duration={Duration}ms",
+                stats.ParsedUm, stats.ParsedRa, stats.ParsedSe, stats.ParsedHr, stats.ParsedO2, stats.ParsedO5, stats.FailedCount, stats.DurationMs);
 
             return stats;
         }
@@ -443,6 +445,114 @@ public class DifnRecordParsingService
         _logger.LogInformation("[HR] Completed {TotalBatches} batches", batchNum);
     }
 
+    /// <summary>
+    /// Parse O2 (Quinella) + O5 (Trio) odds records and merge into races.OddsJson.
+    /// Both record types produce slot arrays that go into the same JSON blob under
+    /// "quinella" and "trio" keys respectively. Latest record wins per race.
+    /// </summary>
+    private async Task ParseOddsRecordsAsync(ParsingStats stats, CancellationToken ct)
+    {
+        await ParseOddsTypeAsync("O2", "quinella", OddsRecordParser.ParseO2,
+            v => stats.ParsedO2 = v, stats, ct);
+        await ParseOddsTypeAsync("O5", "trio", OddsRecordParser.ParseO5,
+            v => stats.ParsedO5 = v, stats, ct);
+    }
+
+    private async Task ParseOddsTypeAsync(
+        string recordType,
+        string jsonKey,
+        Func<byte[], OddsRecordParser.OddsParseResult?> parseFunc,
+        Action<int> assignCounter,
+        ParsingStats stats,
+        CancellationToken ct)
+    {
+        const int BatchSize = 200;  // smaller — O5 records are 12KB each
+        using var context = _contextFactory.CreateDbContext();
+        long lastProcessedId = 0;
+        int batchNum = 0;
+        int totalParsed = 0;
+
+        while (true)
+        {
+            var batch = await context.RawStagingRecords
+                .Where(r => r.RecordType == recordType && !r.IsProcessed && r.Id > lastProcessedId)
+                .OrderBy(r => r.Id)
+                .Take(BatchSize)
+                .ToListAsync(ct);
+            if (batch.Count == 0) break;
+            batchNum++;
+
+            // Per race: latest record wins (provisional → final).
+            var bySlot = new Dictionary<string, List<OddsRecordParser.OddsSlot>>();
+            var idsToMark = new List<long>();
+            foreach (var raw in batch)
+            {
+                try
+                {
+                    var parsed = parseFunc(raw.RawBytes);
+                    if (parsed != null)
+                    {
+                        bySlot[parsed.RaceId] = parsed.Slots; // overwrite — last wins
+                        totalParsed++;
+                    }
+                    idsToMark.Add(raw.Id);
+                }
+                catch (Exception ex)
+                {
+                    stats.FailedCount++;
+                    LogParsingError(recordType, raw.RawBytes, ex);
+                }
+            }
+
+            if (bySlot.Count > 0)
+            {
+                // Merge: jsonb_set(coalesce(OddsJson, '{}'::jsonb), '{key}', new_array).
+                // Per-race UPDATE in one batched statement using FROM (VALUES ...).
+                var values = new List<string>(bySlot.Count);
+                var pgParams = new List<object>(bySlot.Count * 2);
+                int idx = 0;
+                foreach (var kv in bySlot)
+                {
+                    var slotJson = System.Text.Json.JsonSerializer.Serialize(
+                        kv.Value.Select(s => new { combo = s.Combo, odds = s.Odds, rank = s.Rank }));
+                    values.Add($"(@p{idx}, @p{idx + 1}::jsonb)");
+                    pgParams.Add(new NpgsqlParameter($"p{idx}", NpgsqlDbType.Text)
+                        { Value = kv.Key });
+                    pgParams.Add(new NpgsqlParameter($"p{idx + 1}", NpgsqlDbType.Text)
+                        { Value = slotJson });
+                    idx += 2;
+                }
+                // Merge into OddsJson via the JSONB || operator. Both the empty default
+                // and the new object are built with jsonb_build_object() — avoids any
+                // literal {braces} in the SQL that EF's String.Format would choke on.
+                var jsonKeyParam = $"@k_{batchNum}";
+                pgParams.Add(new NpgsqlParameter(jsonKeyParam.TrimStart('@'), NpgsqlDbType.Text) { Value = jsonKey });
+                var sql = "UPDATE races AS r " +
+                          "SET \"OddsJson\" = COALESCE(r.\"OddsJson\", jsonb_build_object()) || jsonb_build_object(" + jsonKeyParam + ", v.slots), " +
+                          "\"LastUpdated\" = NOW() " +
+                          "FROM (VALUES " + string.Join(", ", values) + ") AS v(race_id, slots) " +
+                          "WHERE r.\"RaceId\" = v.race_id";
+                await context.Database.ExecuteSqlRawAsync(sql, pgParams.ToArray(), ct);
+
+                _logger.LogInformation("[{Type}] Batch {Batch}: Updated {Count} races ({Key}, Total: {Total})",
+                    recordType, batchNum, bySlot.Count, jsonKey, totalParsed);
+            }
+
+            if (idsToMark.Count > 0)
+            {
+                using var markContext = _contextFactory.CreateDbContext();
+                var toMark = await markContext.RawStagingRecords.Where(r => idsToMark.Contains(r.Id)).ToListAsync(ct);
+                foreach (var rec in toMark) rec.IsProcessed = true;
+                await markContext.SaveChangesAsync(ct);
+            }
+
+            lastProcessedId = batch.Last().Id;
+        }
+
+        assignCounter(totalParsed);
+        _logger.LogInformation("[{Type}] Completed {Batches} batches, {Total} parsed", recordType, batchNum, totalParsed);
+    }
+
     private void LogParsingError(string recordType, byte[] rawRecord, Exception ex)
     {
         // Only log hex for first few records to avoid massive log files
@@ -460,6 +570,8 @@ public class ParsingStats
     public int ParsedRa { get; set; }
     public int ParsedSe { get; set; }
     public int ParsedHr { get; set; }
+    public int ParsedO2 { get; set; }
+    public int ParsedO5 { get; set; }
     public int FailedCount { get; set; }
     public int DurationMs { get; set; }
     public string? ErrorMessage { get; set; }

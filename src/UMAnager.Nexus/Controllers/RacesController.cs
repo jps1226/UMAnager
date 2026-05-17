@@ -319,6 +319,108 @@ public sealed class RacesController : ControllerBase
     public sealed record BetEstimateItem(string race_id, int honmei_post, int[] box_posts);
     public sealed record BetEstimateRequest(BetEstimateItem[] races);
 
+    // Aggregate of one bet-type box (Q or T) within a race estimate.
+    private sealed record BoxResolution(int ResolvedTickets, int MissingTickets,
+        int? MinPayout, int? MaxPayout, int? MinNet, int? MaxNet);
+    private sealed record AllHitResolution(int? MinNet, int? MaxNet);
+
+    /// <summary>
+    /// For each combination in the user's box, look up the matching odds slot in
+    /// OddsJson and compute payout = stake × odds. Returns min/max across the box
+    /// (the "if any combination hits, what's our expected payout range" view).
+    /// All Hit = win.payout + qMin + tMin / qMax + tMax minus purchase total.
+    /// </summary>
+    private static (BoxResolution Q, BoxResolution T, AllHitResolution AllHit) ResolveBoxPayouts(
+        string? oddsJson,
+        int[] boxPosts,
+        int stake,
+        int qTickets,
+        int tTickets,
+        int purchaseTotal,
+        double? winOddsForAllHit)
+    {
+        // Generate all C(n,2) and C(n,3) combinations of box positions, sorted ascending.
+        var sortedBox = boxPosts.OrderBy(p => p).ToArray();
+        var qCombos = new List<int[]>();
+        for (int i = 0; i < sortedBox.Length; i++)
+            for (int j = i + 1; j < sortedBox.Length; j++)
+                qCombos.Add(new[] { sortedBox[i], sortedBox[j] });
+        var tCombos = new List<int[]>();
+        for (int i = 0; i < sortedBox.Length; i++)
+            for (int j = i + 1; j < sortedBox.Length; j++)
+                for (int k = j + 1; k < sortedBox.Length; k++)
+                    tCombos.Add(new[] { sortedBox[i], sortedBox[j], sortedBox[k] });
+
+        // No odds data → everything missing.
+        if (string.IsNullOrEmpty(oddsJson))
+        {
+            return (
+                new BoxResolution(0, qTickets, null, null, null, null),
+                new BoxResolution(0, tTickets, null, null, null, null),
+                new AllHitResolution(null, null));
+        }
+
+        // Parse OddsJson once → dict keyed by sorted-combo string.
+        var quinellaLookup = new Dictionary<string, decimal>();
+        var trioLookup = new Dictionary<string, decimal>();
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(oddsJson);
+            ExtractOddsArray(doc.RootElement, "quinella", quinellaLookup);
+            ExtractOddsArray(doc.RootElement, "trio", trioLookup);
+        }
+        catch (System.Text.Json.JsonException) { /* empty lookups */ }
+
+        var qPayouts = qCombos
+            .Select(c => quinellaLookup.TryGetValue(ComboKey(c), out var o) ? (int?)Math.Round(stake * (double)o) : null)
+            .ToList();
+        var tPayouts = tCombos
+            .Select(c => trioLookup.TryGetValue(ComboKey(c), out var o) ? (int?)Math.Round(stake * (double)o) : null)
+            .ToList();
+
+        var qResolved = qPayouts.Count(p => p.HasValue);
+        var tResolved = tPayouts.Count(p => p.HasValue);
+        var qResolvedValues = qPayouts.Where(p => p.HasValue).Select(p => p!.Value).ToList();
+        var tResolvedValues = tPayouts.Where(p => p.HasValue).Select(p => p!.Value).ToList();
+
+        int? qMin = qResolvedValues.Count > 0 ? qResolvedValues.Min() : null;
+        int? qMax = qResolvedValues.Count > 0 ? qResolvedValues.Max() : null;
+        int? tMin = tResolvedValues.Count > 0 ? tResolvedValues.Min() : null;
+        int? tMax = tResolvedValues.Count > 0 ? tResolvedValues.Max() : null;
+
+        var qBox = new BoxResolution(qResolved, qTickets - qResolved,
+            qMin, qMax,
+            qMin.HasValue ? qMin - purchaseTotal : null,
+            qMax.HasValue ? qMax - purchaseTotal : null);
+        var tBox = new BoxResolution(tResolved, tTickets - tResolved,
+            tMin, tMax,
+            tMin.HasValue ? tMin - purchaseTotal : null,
+            tMax.HasValue ? tMax - purchaseTotal : null);
+
+        int? winPayout = winOddsForAllHit.HasValue ? (int?)Math.Round(stake * winOddsForAllHit.Value) : null;
+        int? allHitMin = (winPayout.HasValue && qMin.HasValue && tMin.HasValue)
+            ? winPayout + qMin + tMin - purchaseTotal : null;
+        int? allHitMax = (winPayout.HasValue && qMax.HasValue && tMax.HasValue)
+            ? winPayout + qMax + tMax - purchaseTotal : null;
+
+        return (qBox, tBox, new AllHitResolution(allHitMin, allHitMax));
+    }
+
+    private static void ExtractOddsArray(System.Text.Json.JsonElement root, string key, Dictionary<string, decimal> dest)
+    {
+        if (!root.TryGetProperty(key, out var arr) || arr.ValueKind != System.Text.Json.JsonValueKind.Array) return;
+        foreach (var slot in arr.EnumerateArray())
+        {
+            if (!slot.TryGetProperty("combo", out var comboEl) || comboEl.ValueKind != System.Text.Json.JsonValueKind.Array) continue;
+            if (!slot.TryGetProperty("odds", out var oddsEl)) continue;
+            var combo = comboEl.EnumerateArray().Select(e => e.GetInt32()).OrderBy(n => n).ToArray();
+            var odds = oddsEl.GetDecimal();
+            dest[ComboKey(combo)] = odds;
+        }
+    }
+
+    private static string ComboKey(int[] combo) => string.Join("-", combo);
+
     [HttpPost("bet-estimate")]
     public async Task<IActionResult> BetEstimate([FromBody] BetEstimateRequest body)
     {
@@ -337,6 +439,12 @@ public sealed class RacesController : ControllerBase
             .ToListAsync();
         var byRace = entries.GroupBy(e => e.RaceId!)
             .ToDictionary(g => g.Key, g => g.ToDictionary(e => e.PostPosition ?? 0, e => e.Odds));
+
+        // Phase 11 forward: pull OddsJson (O2 + O5) for forward Q/T estimates.
+        var oddsByRace = await db.Races.AsNoTracking()
+            .Where(r => raceIds.Contains(r.RaceId) && r.OddsJson != null)
+            .Select(r => new { r.RaceId, r.OddsJson })
+            .ToDictionaryAsync(r => r.RaceId, r => r.OddsJson!);
 
         var estimates = new Dictionary<string, object>(body.races.Length);
         foreach (var item in body.races)
@@ -372,37 +480,56 @@ public sealed class RacesController : ControllerBase
                 winObj = new { odds = (double?)null, payout = (int?)null, net = (int?)null };
             }
 
-            var warnings = new List<string> { "Quinella and Trio odds are not yet ingested — only the Win leg is computed." };
+            // Phase 11 forward: resolve Q Box / T Box payouts from race.OddsJson if present.
+            var (quinellaBox, trioBox, allHit) = ResolveBoxPayouts(
+                oddsByRace.TryGetValue(item.race_id, out var oj) ? oj : null,
+                item.box_posts ?? Array.Empty<int>(),
+                stake,
+                qTickets,
+                tTickets,
+                purchaseTotal,
+                winOdds);
+
+            var warnings = new List<string>();
+            var status = "ok";
+            if (quinellaBox.MissingTickets > 0 || trioBox.MissingTickets > 0)
+            {
+                status = "partial";
+                if (!oddsByRace.ContainsKey(item.race_id))
+                    warnings.Add("No O2/O5 odds ingested for this race yet — Q/T estimates unavailable.");
+                else if (quinellaBox.MissingTickets > 0)
+                    warnings.Add($"Q Box: {quinellaBox.MissingTickets}/{qTickets} combos missing odds.");
+            }
 
             estimates[item.race_id] = new
             {
-                status   = "partial",
+                status,
                 raceId   = item.race_id,
                 purchase = new { total = purchaseTotal, tickets = totalTickets, stake },
                 win      = winObj,
                 quinellaBox = new
                 {
                     tickets         = qTickets,
-                    resolvedTickets = 0,
-                    missingTickets  = qTickets,
-                    minPayout       = (int?)null,
-                    maxPayout       = (int?)null,
-                    minNet          = (int?)null,
-                    maxNet          = (int?)null,
+                    resolvedTickets = quinellaBox.ResolvedTickets,
+                    missingTickets  = quinellaBox.MissingTickets,
+                    minPayout       = quinellaBox.MinPayout,
+                    maxPayout       = quinellaBox.MaxPayout,
+                    minNet          = quinellaBox.MinNet,
+                    maxNet          = quinellaBox.MaxNet,
                 },
                 trioBox = new
                 {
                     tickets         = tTickets,
-                    resolvedTickets = 0,
-                    missingTickets  = tTickets,
-                    minPayout       = (int?)null,
-                    maxPayout       = (int?)null,
-                    minNet          = (int?)null,
-                    maxNet          = (int?)null,
+                    resolvedTickets = trioBox.ResolvedTickets,
+                    missingTickets  = trioBox.MissingTickets,
+                    minPayout       = trioBox.MinPayout,
+                    maxPayout       = trioBox.MaxPayout,
+                    minNet          = trioBox.MinNet,
+                    maxNet          = trioBox.MaxNet,
                 },
-                allHit  = new { minNet = (int?)null, maxNet = (int?)null },
+                allHit  = new { minNet = allHit.MinNet, maxNet = allHit.MaxNet },
                 warnings,
-                message = "Q Box / T Box / All Hit pending O2/O3 odds ingest.",
+                message = status == "ok" ? "" : "Some Q/T combinations have no odds yet.",
             };
         }
         return Ok(new { estimates });

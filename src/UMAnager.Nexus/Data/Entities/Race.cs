@@ -11,6 +11,7 @@ public class Race
     public string? Surface { get; set; }      // 'turf' or 'dirt' (from 1=turf, 2=dirt)
     public DateTime? SortTime { get; set; }   // Combined date + scheduled race time
     public string? ResultsJson { get; set; }  // Payoffs and finish positions (JSONB)
+    public string? OddsJson { get; set; }     // Phase 11 forward: O2/O5 quinella+trio odds (JSONB)
     public short DataStatus { get; set; }       // JRA-VAN データ区分 (offset 3, len 1)
     public DateOnly? LastModified { get; set; } // データ作成年月日 (offset 4, len 8, YYYYMMDD)
     public bool HistoryRefreshed { get; set; } = false;

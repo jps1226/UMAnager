@@ -37,6 +37,9 @@ public class RaceConfiguration : IEntityTypeConfiguration<Race>
         builder.Property(r => r.ResultsJson)
             .HasColumnType("jsonb");
 
+        builder.Property(r => r.OddsJson)
+            .HasColumnType("jsonb");
+
         builder.Property(r => r.DataStatus)
             .HasColumnType("smallint")
             .HasDefaultValue((short)0);
