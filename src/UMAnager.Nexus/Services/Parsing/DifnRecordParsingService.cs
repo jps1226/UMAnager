@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Npgsql;
+using NpgsqlTypes;
 using UMAnager.Nexus.Data;
 using UMAnager.Nexus.Data.Entities;
 
@@ -212,16 +214,16 @@ public class DifnRecordParsingService
                 foreach (var race in races)
                 {
                     raceValues.Add($"(@p{raceParamIndex}, @p{raceParamIndex+1}, @p{raceParamIndex+2}, @p{raceParamIndex+3}, @p{raceParamIndex+4}, @p{raceParamIndex+5}, @p{raceParamIndex+6}, @p{raceParamIndex+7}, @p{raceParamIndex+8}, @p{raceParamIndex+9}, NOW())");
-                    raceParams.Add(race.RaceId ?? "");
-                    raceParams.Add(race.RaceDate);
-                    raceParams.Add(race.TrackCode ?? "");
-                    raceParams.Add(race.RaceNumber);
-                    raceParams.Add(race.NameJa ?? "");
-                    raceParams.Add(race.Distance);
-                    raceParams.Add(race.Surface ?? "");
-                    raceParams.Add(race.DataStatus);
-                    raceParams.Add((object?)race.LastModified ?? DBNull.Value);
-                    raceParams.Add((object?)race.SortTime ?? DBNull.Value);
+                    raceParams.Add(NullableParam($"p{raceParamIndex + 0}", NpgsqlDbType.Text,        race.RaceId ?? ""));
+                    raceParams.Add(NullableParam($"p{raceParamIndex + 1}", NpgsqlDbType.TimestampTz, DateTime.SpecifyKind(race.RaceDate, DateTimeKind.Utc)));
+                    raceParams.Add(NullableParam($"p{raceParamIndex + 2}", NpgsqlDbType.Text,        race.TrackCode));
+                    raceParams.Add(NullableParam($"p{raceParamIndex + 3}", NpgsqlDbType.Integer,     race.RaceNumber));
+                    raceParams.Add(NullableParam($"p{raceParamIndex + 4}", NpgsqlDbType.Text,        race.NameJa));
+                    raceParams.Add(NullableParam($"p{raceParamIndex + 5}", NpgsqlDbType.Integer,     race.Distance));
+                    raceParams.Add(NullableParam($"p{raceParamIndex + 6}", NpgsqlDbType.Text,        race.Surface));
+                    raceParams.Add(NullableParam($"p{raceParamIndex + 7}", NpgsqlDbType.Smallint,    race.DataStatus));
+                    raceParams.Add(NullableParam($"p{raceParamIndex + 8}", NpgsqlDbType.Date,        race.LastModified));
+                    raceParams.Add(NullableParam($"p{raceParamIndex + 9}", NpgsqlDbType.TimestampTz, race.SortTime));
                     raceParamIndex += 10;
                 }
 
@@ -263,20 +265,20 @@ public class DifnRecordParsingService
                 foreach (var entry in entries)
                 {
                     seValues.Add($"(@p{seParamIndex}, @p{seParamIndex+1}, @p{seParamIndex+2}, @p{seParamIndex+3}, @p{seParamIndex+4}, @p{seParamIndex+5}, @p{seParamIndex+6}, @p{seParamIndex+7}, @p{seParamIndex+8}, @p{seParamIndex+9}, @p{seParamIndex+10}, NOW())");
-                    seParams.Add(entry.RaceId ?? "");
-                    seParams.Add(entry.HorseId ?? "");
-                    seParams.Add(entry.PostPosition);
-                    seParams.Add(entry.Bracket);
-                    seParams.Add(entry.Weight);
-                    seParams.Add(entry.JockeyName ?? "");
+                    seParams.Add(NullableParam($"p{seParamIndex + 0}",  NpgsqlDbType.Text,     entry.RaceId ?? ""));
+                    seParams.Add(NullableParam($"p{seParamIndex + 1}",  NpgsqlDbType.Text,     entry.HorseId ?? ""));
+                    seParams.Add(NullableParam($"p{seParamIndex + 2}",  NpgsqlDbType.Integer,  entry.PostPosition));
+                    seParams.Add(NullableParam($"p{seParamIndex + 3}",  NpgsqlDbType.Integer,  entry.Bracket));
+                    seParams.Add(NullableParam($"p{seParamIndex + 4}",  NpgsqlDbType.Integer,  entry.Weight));
+                    seParams.Add(NullableParam($"p{seParamIndex + 5}",  NpgsqlDbType.Text,     entry.JockeyName));
                     // Preserve NULLs for pre-race rows. Pre-race SE records have empty bytes at
                     // offsets 360/364/335 (Odds/FavRank/FinishPos); the parser returns null. Coalescing
                     // to 0 here makes the UI think a race has happened. (Bug fix 2026-05-16.)
-                    seParams.Add((object?)entry.Odds      ?? DBNull.Value);
-                    seParams.Add((object?)entry.FavRank   ?? DBNull.Value);
-                    seParams.Add((object?)entry.FinishPos ?? DBNull.Value);
-                    seParams.Add(entry.DataStatus);
-                    seParams.Add((object?)entry.LastModified ?? DBNull.Value);
+                    seParams.Add(NullableParam($"p{seParamIndex + 6}",  NpgsqlDbType.Numeric,  entry.Odds));
+                    seParams.Add(NullableParam($"p{seParamIndex + 7}",  NpgsqlDbType.Integer,  entry.FavRank));
+                    seParams.Add(NullableParam($"p{seParamIndex + 8}",  NpgsqlDbType.Integer,  entry.FinishPos));
+                    seParams.Add(NullableParam($"p{seParamIndex + 9}",  NpgsqlDbType.Smallint, entry.DataStatus));
+                    seParams.Add(NullableParam($"p{seParamIndex + 10}", NpgsqlDbType.Date,     entry.LastModified));
                     seParamIndex += 11;
                 }
 
@@ -305,6 +307,12 @@ public class DifnRecordParsingService
                 break;
         }
     }
+
+    // EF Core's ExecuteSqlRawAsync routes plain object[] params through its type-mapping layer,
+    // which has no mapping for System.DBNull — passing DBNull.Value crashes the batch. Typed
+    // NpgsqlParameters bypass that mapping and accept DBNull.Value directly.
+    private static NpgsqlParameter NullableParam(string name, NpgsqlDbType type, object? value)
+        => new(name, type) { Value = value ?? DBNull.Value };
 
     private Horse? ParseUmRecord(byte[] rawBytes)
     {

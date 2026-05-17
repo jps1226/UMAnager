@@ -123,6 +123,13 @@ function isFallbackBridgeHighlightEnabled() {
     return appConfig.ui?.highlightFallbackBridge ?? false;
 }
 
+function raceStatusEmoji(race) {
+    if (raceHasHistoryData(race)) return '🏁';
+    const sortTime = parseRaceSortTime(race?.info?.sort_time_iso || race?.info?.sort_time, race?.info);
+    if (sortTime && sortTime.getTime() < Date.now()) return '⌛';
+    return '🕒';
+}
+
 function raceHasHistoryData(race) {
     if (!race) return false;
     if (race.info?.history_refreshed) return true;
@@ -1998,7 +2005,9 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
                 race.info.time !== "TBA" &&
                 race.info.sort_time
             ) {
-                const raceTime = parseRaceSortTime(race.info.sort_time, race.info);
+                // Prefer the unambiguous +09:00 form; bare sort_time + AM/PM display time
+                // confuses parseRaceSortTime's CT-heuristic and shifts races ~14h.
+                const raceTime = parseRaceSortTime(race.info.sort_time_iso || race.info.sort_time, race.info);
                 if (raceTime && raceTime < collapseBeforeTime && r_id !== keepOpenRaceId) {
                     shouldCollapse = true;
                 }
@@ -2069,7 +2078,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 
             html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
                 <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
-                    <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> 🕒 ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName} ${winBadgesHtml}
+                    <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> <span id="header-meta-${r_id}">${raceStatusEmoji(race)} ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName} ${winBadgesHtml}</span>
 
                     ${historyBtnHtml}
 
@@ -2168,7 +2177,9 @@ async function loadRaces() {
                     });
                 });
 
-                const raceTime = parseRaceSortTime(race.info.sort_time, race.info);
+                // Prefer the unambiguous +09:00 form; bare sort_time + AM/PM display time
+                // confuses parseRaceSortTime's CT-heuristic and shifts races ~14h.
+                const raceTime = parseRaceSortTime(race.info.sort_time_iso || race.info.sort_time, race.info);
                 if (timeline === "upcoming" && race.info.time !== "TBA" && raceTime) {
                     upcomingRaces.push({
                         time: raceTime,
@@ -6301,26 +6312,69 @@ init();
 // Connects to /hubs/live; the server broadcasts OddsUpdated and ResultsUpdated
 // every time the LiveOrchestrator's polling tick lands fresh JV-Link data.
 // We patch the affected <td>s in place — no /api/races refetch, no scroll jump.
+function findRaceById(raceId) {
+    if (!raceId) return null;
+    const target = String(raceId);
+    for (const list of Object.values(globalRacesByDate || {})) {
+        if (!Array.isArray(list)) continue;
+        for (const r of list) {
+            if (String(r?.info?.race_id || '') === target) return r;
+        }
+    }
+    return null;
+}
+
+// Re-renders the dynamic portion of a race's <h3>: status emoji (🕒/⌛/🏁)
+// and the win-badge pills (◎ Win, Q Box, T Box). Header time/track stay static;
+// only the bits that depend on finish data refresh.
+function refreshRaceHeaderMeta(raceId) {
+    const meta = document.getElementById(`header-meta-${raceId}`);
+    if (!meta) return;
+    const race = findRaceById(raceId);
+    if (!race) return;
+    const info = race.info || {};
+    const localName = localizeRaceName(info.race_name);
+    const winBadgesHtml = buildRaceWinBadgesHtml(race);
+    meta.innerHTML = `${raceStatusEmoji(race)} ${info.time} | ${trackName(info.place)} R${info.race_number}: ${localName} ${winBadgesHtml}`;
+}
+
 function patchRaceEntries(raceId, entries, fields) {
     if (!raceId || !Array.isArray(entries)) return;
+    const race = findRaceById(raceId);
+    const inMemEntries = Array.isArray(race?.entries) ? race.entries : null;
+
     entries.forEach(e => {
         const row = document.getElementById(`row-${raceId}-${e.horseId}`);
-        if (!row) return;
-        fields.forEach(f => {
-            const cell = row.querySelector(`td[data-cell="${f}"]`);
-            if (!cell) return;
-            if (f === 'finish') {
-                const n = Number(e.finish);
-                const shown = (Number.isFinite(n) && n > 0) ? n : '';
-                cell.textContent = shown;
-                cell.className = `finish-pos finish-pos-${shown}`;
-            } else if (f === 'odds') {
-                cell.textContent = e.odds || '';
-            } else if (f === 'fav') {
-                cell.textContent = e.fav || '';
+        if (row) {
+            fields.forEach(f => {
+                const cell = row.querySelector(`td[data-cell="${f}"]`);
+                if (!cell) return;
+                if (f === 'finish') {
+                    const n = Number(e.finish);
+                    const shown = (Number.isFinite(n) && n > 0) ? n : '';
+                    cell.textContent = shown;
+                    cell.className = `finish-pos finish-pos-${shown}`;
+                } else if (f === 'odds') {
+                    cell.textContent = e.odds || '';
+                } else if (f === 'fav') {
+                    cell.textContent = e.fav || '';
+                }
+            });
+        }
+
+        // Mirror into the in-memory race object so header re-render (and any
+        // future evaluateRaceRecap call) sees the fresh finish/odds/fav values.
+        if (inMemEntries) {
+            const memRow = inMemEntries.find(x => String(x.Horse_ID ?? '').split('.')[0] === String(e.horseId));
+            if (memRow) {
+                if (fields.includes('finish')) memRow.Finish = (Number(e.finish) > 0) ? String(e.finish) : '';
+                if (fields.includes('odds'))   memRow.Odds   = e.odds ?? '';
+                if (fields.includes('fav'))    memRow.Fav    = e.fav ?? '';
             }
-        });
+        }
     });
+
+    refreshRaceHeaderMeta(raceId);
 }
 
 function startLiveHub() {

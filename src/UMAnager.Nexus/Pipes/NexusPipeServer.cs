@@ -18,6 +18,11 @@ public sealed class NexusPipeServer : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<NexusPipeServer> _logger;
 
+    // Races where a partial-top-5 follow-up tick has already been scheduled this process.
+    // Cleared on restart (acceptable — JRA's 4-5 placings usually publish within ~90s of 1-3).
+    private static readonly HashSet<string> s_partialFollowupScheduled = new();
+    private static readonly object s_partialFollowupLock = new();
+
     public NexusPipeServer(
         SidecarBridge bridge,
         IDbContextFactory<AppDbContext> dbFactory,
@@ -226,6 +231,19 @@ public sealed class NexusPipeServer : BackgroundService
                                 {
                                     var broadcaster = scope.ServiceProvider.GetRequiredService<LiveBroadcastService>();
                                     await broadcaster.BroadcastResultsAsync(raceIds, CancellationToken.None);
+
+                                    // Evaluate marks against the freshly-parsed finishes and ping
+                                    // Discord on any newly-won bets. Idempotent — already-notified
+                                    // races are tracked in app_state.
+                                    var betWin = scope.ServiceProvider.GetRequiredService<Services.BetWinNotifier>();
+                                    await betWin.EvaluateAndNotifyAsync(raceIds, CancellationToken.None);
+
+                                    // JRA publishes finishers 1-3 (the official umaban) immediately,
+                                    // then the rest of the field a few seconds-to-minutes later. If
+                                    // any race in this batch has top-3 but is missing some of 4-5,
+                                    // schedule a single force-tick ~90s out to grab the full order
+                                    // before the next regular 5-min tick.
+                                    await ScheduleFollowupForPartialResultsAsync(scope, raceIds);
                                 }
                             });
                         }
@@ -257,6 +275,62 @@ public sealed class NexusPipeServer : BackgroundService
                 catch (Exception ex) { _logger.LogError(ex, "[Nexus] Final batch flush failed."); }
             }
         }
+    }
+
+    private async Task ScheduleFollowupForPartialResultsAsync(IServiceScope scope, List<string> raceIds)
+    {
+        // A race is "partial" when finishers 1-3 exist but the entry count exceeds the
+        // count of populated FinishPos values — i.e. the rest of the field isn't filled
+        // in yet. We don't insist on exactly 5; small fields (≤4 starters) still benefit
+        // from one follow-up to fill positions 2+ if 1 is published alone.
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var stats = await db.RaceEntries.AsNoTracking()
+            .Where(e => raceIds.Contains(e.RaceId))
+            .GroupBy(e => e.RaceId)
+            .Select(g => new
+            {
+                RaceId   = g.Key,
+                Total    = g.Count(),
+                Finished = g.Count(e => e.FinishPos != null && e.FinishPos > 0),
+                HasTop3  = g.Count(e => e.FinishPos >= 1 && e.FinishPos <= 3) >= 3,
+            })
+            .ToListAsync();
+
+        var partials = new List<string>();
+        lock (s_partialFollowupLock)
+        {
+            foreach (var s in stats)
+            {
+                if (!s.HasTop3) continue;
+                if (s.Finished >= s.Total) continue; // already complete
+                if (!s_partialFollowupScheduled.Add(s.RaceId)) continue; // already scheduled
+                partials.Add(s.RaceId);
+            }
+        }
+
+        if (partials.Count == 0) return;
+
+        _logger.LogInformation("[Nexus] Partial results detected for {Count} race(s); scheduling follow-up tick in 90s. Races: {Ids}",
+            partials.Count, string.Join(",", partials));
+
+        // Fire-and-forget delayed force-tick. Uses the root provider (not the per-event
+        // scope, which disposes when the parse Task.Run lambda exits) so the orchestrator
+        // singleton stays resolvable when the delay fires.
+        var sp = _scopeFactory.CreateScope().ServiceProvider;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(90));
+                var orchestrator = sp.GetRequiredService<LiveOrchestrator>();
+                orchestrator.RequestForceTick();
+                _logger.LogInformation("[Nexus] Partial-results follow-up tick requested.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[Nexus] Partial-results follow-up failed.");
+            }
+        });
     }
 
     private async Task<int> FlushBatchAsync(List<RawStagingRecord> batch, long previousTotal, CancellationToken ct)

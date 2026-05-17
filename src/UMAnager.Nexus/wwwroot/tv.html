@@ -10,11 +10,145 @@
         *, *::before, *::after { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; height: 100%; background: #0b0c10; color: #f0f0f0; font-family: sans-serif; }
 
+        /* ── Results ticker (top bar) ── */
+        #results-ticker {
+            display: none;
+            align-items: center;
+            gap: 14px;
+            padding: 6px 12px;
+            background: linear-gradient(90deg, #1a2436 0%, #1a1c23 60%);
+            border-bottom: 1px solid #2a3548;
+            font-size: 13px;
+            white-space: nowrap;
+            overflow-x: auto;
+            scrollbar-width: thin;
+            flex-shrink: 0;
+        }
+        #results-ticker.visible { display: flex; }
+        @keyframes rt-flash {
+            0%   { background: linear-gradient(90deg, #2d4d6e 0%, #243a52 60%); box-shadow: inset 0 0 0 1px #4a7bb8; }
+            100% { background: linear-gradient(90deg, #1a2436 0%, #1a1c23 60%); box-shadow: none; }
+        }
+        @keyframes rt-flash-win {
+            0%   { background: linear-gradient(90deg, #2e6e3d 0%, #1f5235 60%); box-shadow: inset 0 0 0 1px #6dd197; }
+            100% { background: linear-gradient(90deg, #1a2436 0%, #1a1c23 60%); box-shadow: none; }
+        }
+        #results-ticker.is-flashing      { animation: rt-flash 2s ease-out; }
+        #results-ticker.is-flashing-win  { animation: rt-flash-win 2.5s ease-out; }
+        #rt-sound-toggle {
+            background: #1a1c23;
+            color: #888;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        #rt-next-tick {
+            margin-left: auto;
+            color: #555;
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            flex-shrink: 0;
+            padding-right: 2px;
+            user-select: none;
+        }
+        #rt-next-tick.is-soon { color: #888; }
+        #rt-sound-toggle:hover { color: #fff; }
+        #results-ticker .rt-label {
+            color: #f5a623;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+        #results-ticker .rt-race {
+            color: #ccc;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+        #results-ticker .rt-finisher {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 8px;
+            border-radius: 4px;
+            background: #12151b;
+            border: 1px solid #262b36;
+            flex-shrink: 0;
+        }
+        #results-ticker .rt-finisher.is-marked {
+            background: #3a2d12;
+            border-color: #f5a623;
+            box-shadow: 0 0 0 1px rgba(245, 166, 35, 0.4);
+        }
+        #results-ticker .rt-pos {
+            color: #888;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        #results-ticker .rt-finisher.is-marked .rt-pos { color: #f5a623; }
+        #results-ticker .rt-pp {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+            border: 1px solid transparent;
+        }
+        #results-ticker .rt-name {
+            color: #eee;
+            max-width: 160px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        #results-ticker .rt-mark {
+            color: #f5a623;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        #results-ticker .rt-hit-pill {
+            display: inline-block;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: bold;
+            padding: 2px 8px;
+            line-height: 1.3;
+            flex-shrink: 0;
+        }
+        #results-ticker .rt-hit-honmei {
+            color: #ffe6a8;
+            border: 1px solid #b48f3d;
+            background: rgba(180, 143, 61, 0.16);
+        }
+        #results-ticker .rt-hit-quinella {
+            color: #b4f7e8;
+            border: 1px solid #299f84;
+            background: rgba(41, 159, 132, 0.18);
+        }
+        #results-ticker .rt-hit-trio {
+            color: #c8d8ff;
+            border: 1px solid #4d70c5;
+            background: rgba(77, 112, 197, 0.2);
+        }
+
+        /* ── App shell ── */
+        #app-shell {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
         /* ── Layout ── */
         #tv-layout {
             display: flex;
             flex-direction: row;
-            height: 100vh;
+            flex: 1 1 auto;
+            min-height: 0;
             overflow: hidden;
             --gch-size: 50%;
         }
@@ -347,6 +481,8 @@
     </style>
 </head>
 <body>
+<div id="app-shell">
+<div id="results-ticker"></div>
 <div id="tv-layout">
 
     <!-- ═══ GreenChannel panel ═══ -->
@@ -401,6 +537,7 @@
     </div>
 
 </div>
+</div>
 
 <script>
 'use strict';
@@ -427,6 +564,15 @@ let panelFlipped = false;
 let racesByIdForTv = {};
 let raceTimeData = [];
 let forceScrollOnNextCollapse = true;
+
+// Ticker change-detection + audio state. Track the last-rendered raceId so we
+// only flash/chime when results genuinely advance to a new race — not every
+// 5-min broadcast or 60s reload of the same data.
+let lastTickerRaceId = null;
+let lastTickerHadHit = false;
+let tickerSoundEnabled = false;
+let tickerAudioCtx = null;
+const TICKER_SOUND_KEY = 'umanager-tv-ticker-sound';
 const LAYOUT_SPLIT_KEY = 'umanager-tv-split-percent';
 const LAYOUT_FLIP_KEY = 'umanager-tv-panel-flipped';
 
@@ -794,6 +940,216 @@ function pickInitialDate() {
     return all.length ? all[all.length - 1] : null;
 }
 
+/* ── Next-results-tick countdown (polls orchestrator status) ── */
+let nextTickEtaMs = null;
+async function pollOrchestratorNextTick() {
+    try {
+        const res = await fetch('/api/orchestrator/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        const iso = data?.next_tick_eta_utc;
+        nextTickEtaMs = iso ? new Date(iso).getTime() : null;
+    } catch (_) { /* keep last value */ }
+}
+function formatNextTickLabel() {
+    if (!nextTickEtaMs) return '';
+    const diffMs = nextTickEtaMs - Date.now();
+    if (diffMs <= 0) return 'next: now';
+    const total = Math.round(diffMs / 1000);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return m > 0
+        ? `next: ${m}:${String(s).padStart(2, '0')}`
+        : `next: ${s}s`;
+}
+function tickNextTickCountdown() {
+    const el = document.getElementById('rt-next-tick');
+    if (!el) return;
+    el.textContent = formatNextTickLabel();
+    const diff = nextTickEtaMs ? (nextTickEtaMs - Date.now()) : null;
+    el.classList.toggle('is-soon', diff != null && diff > 0 && diff <= 30000);
+}
+
+/* ── Ticker audio cue (WebAudio — no asset files) ── */
+function ensureTickerAudio() {
+    if (tickerAudioCtx) return tickerAudioCtx;
+    try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return null;
+        tickerAudioCtx = new Ctx();
+    } catch (_) { tickerAudioCtx = null; }
+    return tickerAudioCtx;
+}
+function playTickerChime(isWin) {
+    if (!tickerSoundEnabled) return;
+    const ctx = ensureTickerAudio();
+    if (!ctx) return;
+    // iOS / autoplay-policy browsers leave the context suspended until a user gesture.
+    if (ctx.state === 'suspended') { try { ctx.resume(); } catch (_) {} }
+    const now = ctx.currentTime;
+    // Two-tone bell for routine results, three-tone rising arpeggio for a win.
+    const notes = isWin ? [523.25, 659.25, 783.99] : [659.25, 880.00];
+    notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        const start = now + i * 0.14;
+        const dur = 0.35;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.18, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + dur + 0.02);
+    });
+}
+function toggleTickerSound() {
+    tickerSoundEnabled = !tickerSoundEnabled;
+    try { localStorage.setItem(TICKER_SOUND_KEY, tickerSoundEnabled ? '1' : '0'); } catch (_) {}
+    // Tapping the button counts as a user gesture — unlock the AudioContext now
+    // so the next chime can fire even on iOS / strict autoplay browsers.
+    if (tickerSoundEnabled) {
+        const ctx = ensureTickerAudio();
+        if (ctx && ctx.state === 'suspended') { try { ctx.resume(); } catch (_) {} }
+        playTickerChime(false); // confirmation blip
+    }
+    const btn = document.getElementById('rt-sound-toggle');
+    if (btn) btn.textContent = tickerSoundEnabled ? '🔔 Sound' : '🔕 Muted';
+}
+function loadTickerSoundPref() {
+    try { tickerSoundEnabled = localStorage.getItem(TICKER_SOUND_KEY) === '1'; } catch (_) {}
+}
+
+/* ── Results ticker (top-5 from most recent finished race) ── */
+function renderResultsTicker() {
+    const ticker = document.getElementById('results-ticker');
+    if (!ticker) return;
+
+    // Find most recent race with finish data across ALL dates. "Most recent" = highest
+    // sort_time among races that have at least one entry with Finish populated.
+    const allRaces = [];
+    for (const list of Object.values(racesData?.races_by_date || {})) {
+        if (Array.isArray(list)) allRaces.push(...list);
+    }
+    const finished = allRaces.filter(r => {
+        const entries = Array.isArray(r.entries) ? r.entries : [];
+        return entries.some(e => String(e.Finish || '').trim() !== '' && String(e.Finish).trim() !== '0');
+    });
+    if (!finished.length) {
+        ticker.classList.remove('visible');
+        ticker.innerHTML = '';
+        return;
+    }
+    finished.sort((a, b) => {
+        const ka = String(a.info?.sort_time || a.info?.race_id || '');
+        const kb = String(b.info?.sort_time || b.info?.race_id || '');
+        return kb.localeCompare(ka);
+    });
+    const race = finished[0];
+    const info = race.info || {};
+    const raceId = String(info.race_id || '').trim();
+
+    // Build mark lookup for THIS race only.
+    const marks = (marksData && marksData.marks) || {};
+    const markByHorse = {};
+    for (const [key, symbol] of Object.entries(marks)) {
+        if (!symbol || symbol === 'X') continue;
+        const under = key.lastIndexOf('_');
+        if (under < 0) continue;
+        if (key.slice(0, under) !== raceId) continue;
+        markByHorse[key.slice(under + 1)] = symbol;
+    }
+
+    const top5 = (Array.isArray(race.entries) ? race.entries : [])
+        .filter(e => {
+            const f = parseInt(String(e.Finish || '').trim(), 10);
+            return Number.isFinite(f) && f >= 1 && f <= 5;
+        })
+        .sort((a, b) => parseInt(a.Finish, 10) - parseInt(b.Finish, 10))
+        .slice(0, 5);
+
+    if (!top5.length) {
+        ticker.classList.remove('visible');
+        ticker.innerHTML = '';
+        return;
+    }
+
+    const place = String(info.place_name || info.place || '').toUpperCase();
+    const raceNo = info.race_number || '?';
+    const raceTime = tvFormatRaceTime(info);
+
+    // Same recap logic as the main dashboard's buildRaceWinBadgesHtml /
+    // evaluateRaceRecap: need a complete top-3, then check ◎ → 1st, picked-set
+    // covers 1+2 (quinella), picked-set covers 1+2+3 (trio).
+    const finishByRank = {};
+    (Array.isArray(race.entries) ? race.entries : []).forEach(row => {
+        const rank = parseInt(String(row.Finish || '').trim(), 10);
+        if (!rank || rank < 1 || rank > 3) return;
+        const hid = String(row.Horse_ID ?? '').split('.')[0].trim();
+        if (hid && !finishByRank[rank]) finishByRank[rank] = hid;
+    });
+    const hasCompleteTop3 = !!(finishByRank[1] && finishByRank[2] && finishByRank[3]);
+    const pickedSet = new Set(Object.keys(markByHorse));
+    const honmeiHit   = hasCompleteTop3 && markByHorse[finishByRank[1]] === '◎';
+    const quinellaHit = hasCompleteTop3 && pickedSet.has(finishByRank[1]) && pickedSet.has(finishByRank[2]);
+    const trioHit     = hasCompleteTop3 && quinellaHit && pickedSet.has(finishByRank[3]);
+
+    const hitPills = [];
+    if (honmeiHit)   hitPills.push('<span class="rt-hit-pill rt-hit-honmei" title="◎ Honmei hit">◎ Win</span>');
+    if (quinellaHit) hitPills.push('<span class="rt-hit-pill rt-hit-quinella" title="Quinella Box hit">Q Box</span>');
+    if (trioHit)     hitPills.push('<span class="rt-hit-pill rt-hit-trio" title="Trio Box hit">T Box</span>');
+
+    const soundLabel = tickerSoundEnabled ? '🔔' : '🔕';
+    let html = `<button id="rt-sound-toggle" type="button" onclick="toggleTickerSound()" title="Toggle ticker chime">${soundLabel}</button>`;
+    html += `<span class="rt-label">🏁 RESULTS</span>`;
+    html += `<span class="rt-race">${esc(place)} R${esc(String(raceNo))} · ${esc(raceTime)}</span>`;
+    if (hitPills.length) html += hitPills.join('');
+
+    for (const e of top5) {
+        const pos = parseInt(e.Finish, 10);
+        const horseId = String(e.Horse_ID ?? '').split('.')[0];
+        const symbol = markByHorse[horseId] || '';
+        const isMarked = !!symbol;
+        const pp = parseInt(e.PP, 10);
+        const bk = parseInt(e.BK, 10) || 0;
+        const c = BK_COLORS[bk] || { bg: '#444', color: '#fff', border: '#555' };
+        const ppHtml = Number.isFinite(pp)
+            ? `<span class="rt-pp" style="background:${c.bg};color:${c.color};border-color:${c.border}">${pp}</span>`
+            : '';
+        const markHtml = isMarked ? `<span class="rt-mark">${esc(symbol)}</span>` : '';
+        const name = String(e.Horse || '').trim() || '—';
+
+        html += `<span class="rt-finisher${isMarked ? ' is-marked' : ''}">`
+              + `<span class="rt-pos">${pos}</span>`
+              + ppHtml
+              + `<span class="rt-name">${esc(name)}</span>`
+              + markHtml
+              + `</span>`;
+    }
+
+    html += `<span id="rt-next-tick" title="Time until next results poll">${esc(formatNextTickLabel())}</span>`;
+
+    ticker.innerHTML = html;
+    ticker.classList.add('visible');
+
+    // Flash + chime only when something actually changed: the ticker advanced to
+    // a new race, or a hit appeared on the race we were already showing (e.g. the
+    // top-3 just completed). Same-race silent re-renders don't re-trigger.
+    const raceChanged = raceId !== lastTickerRaceId;
+    const hitAppeared = !lastTickerHadHit && hitPills.length > 0;
+    if (raceChanged || hitAppeared) {
+        const winFlash = hitPills.length > 0;
+        ticker.classList.remove('is-flashing', 'is-flashing-win');
+        // Re-flow so re-adding the class restarts the animation reliably.
+        void ticker.offsetWidth;
+        ticker.classList.add(winFlash ? 'is-flashing-win' : 'is-flashing');
+        playTickerChime(winFlash);
+    }
+    lastTickerRaceId = raceId;
+    lastTickerHadHit = hitPills.length > 0;
+}
+
 /* ── Main render ── */
 function renderAll() {
     if (!racesData) return;
@@ -814,6 +1170,7 @@ function renderAll() {
 
     renderDateTabs(allDates);
     renderRaceList();
+    renderResultsTicker();
     document.getElementById('racelist-date-label').textContent = activeDate;
 }
 
@@ -1006,16 +1363,45 @@ function autoCollapseRacesTv() {
     }
 }
 
-/* ── Auto-refresh every 60 s ── */
+/* ── Auto-refresh every 60 s (fallback; SignalR pushes faster) ── */
 setInterval(loadRaces, 60000);
 setInterval(autoCollapseRacesTv, 5000);
+// Next-tick ETA: orchestrator status every 10s, label refresh every 1s.
+setInterval(pollOrchestratorNextTick, 10000);
+setInterval(tickNextTickCountdown, 1000);
+
+/* ── Live updates via SignalR (matches main dashboard /hubs/live) ── */
+let liveRefreshScheduled = false;
+function scheduleLiveRefresh() {
+    if (liveRefreshScheduled) return;
+    liveRefreshScheduled = true;
+    setTimeout(() => { liveRefreshScheduled = false; loadRaces(); }, 750);
+}
+async function bootLiveHub() {
+    try {
+        await loadExternalScript('https://cdn.jsdelivr.net/npm/@microsoft/signalr@7/dist/browser/signalr.min.js');
+        if (typeof signalR === 'undefined') return;
+        const conn = new signalR.HubConnectionBuilder()
+            .withUrl('/hubs/live')
+            .withAutomaticReconnect()
+            .build();
+        // Either event reshapes the ticker or table — coalesce repeated bursts
+        // (12-race results batch fires one event per race) into a single reload.
+        conn.on('ResultsUpdated', scheduleLiveRefresh);
+        conn.on('OddsUpdated',    scheduleLiveRefresh);
+        await conn.start();
+    } catch (_) { /* fall back to 60s polling */ }
+}
 
 /* ── Boot ── */
+loadTickerSoundPref();
 loadLayoutPrefs();
 installSplitHandle();
 bootGchEmbed();
 forceScrollOnNextCollapse = true;
 loadRaces();
+bootLiveHub();
+pollOrchestratorNextTick();
 </script>
 </body>
 </html>

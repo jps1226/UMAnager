@@ -7,6 +7,7 @@ public interface IDiscordNotifier
     Task NotifyPhaseChangedAsync(AppPhase from, AppPhase to, CancellationToken ct = default);
     Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default);
+    Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, CancellationToken ct = default);
     Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default);
     Task NotifyTestAsync(CancellationToken ct = default);
 }
@@ -40,6 +41,12 @@ public sealed class DiscordNotifier : IDiscordNotifier
 
     public Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default)
         => SendAsync($":moneybag: **Bet card won** on `{raceId}` — {description} → ¥{payout:N0}", ct);
+
+    public Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, CancellationToken ct = default)
+    {
+        var pills = string.Join(" · ", hitPills);
+        return SendAsync($":trophy: **Win!** {raceLabel} — {pills}", ct);
+    }
 
     public Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default)
     {
