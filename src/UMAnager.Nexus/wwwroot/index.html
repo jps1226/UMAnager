@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260517-2">
+    <link rel="stylesheet" href="/static/style.css?v=20260517-3">
 </head>
 <body>
 
@@ -55,7 +55,10 @@
     <details id="race-database-group" class="sidebar-group" open>
         <summary>🔄 Race Database</summary>
         <div class="sidebar-group-content">
-            
+            <!-- Phase 13 follow-up: on mobile, the .search-container is moved into this slot via JS.
+                 On desktop it sits in .main-toolbar-left. Slot is empty until the move happens. -->
+            <div id="mobile-search-slot"></div>
+
             <button class="btn-full btn-primary-prominent" onclick="triggerScrape('new')" id="btn-new-race">🔍 Fetch Upcoming Races</button>
             <button class="btn-full btn-compact" onclick="enrichHorseInfoAfterScrape()" id="btn-enrich-horse-info" data-action="enrich">🧬 Fill Horse Names / Parents</button>
 

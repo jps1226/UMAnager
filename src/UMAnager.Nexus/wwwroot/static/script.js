@@ -66,6 +66,12 @@ const RACE_COLUMN_META = {
     Finish: { label: "Fin", sortable: true, sortKey: "Finish", initialAsc: true }
 };
 
+// Phase 13 follow-up: separate visibility maps for desktop vs mobile. The single
+// ordered column list (raceTableColumns) drives both order and desktop visibility;
+// raceTableMobileVisibility is just a {key: bool} override applied when the viewport
+// is below the mobile breakpoint. Mobile defaults below.
+const MOBILE_DEFAULT_VISIBLE = new Set(["Shirushi", "PP", "Horse", "Odds", "Fav", "Finish"]);
+
 function normalizeRaceColumnsLayout(layout) {
     const valid = new Set(DEFAULT_RACE_COLUMNS);
     const normalized = [];
@@ -86,14 +92,43 @@ function normalizeRaceColumnsLayout(layout) {
     return normalized;
 }
 
+function normalizeMobileVisibilityMap(map) {
+    const out = {};
+    DEFAULT_RACE_COLUMNS.forEach(key => {
+        if (map && typeof map === 'object' && key in map) {
+            out[key] = !!map[key];
+        } else {
+            out[key] = MOBILE_DEFAULT_VISIBLE.has(key);
+        }
+    });
+    return out;
+}
+
 function getRaceColumnsLayout() {
     if (!appConfig.ui) appConfig.ui = {};
     appConfig.ui.raceTableColumns = normalizeRaceColumnsLayout(appConfig.ui.raceTableColumns);
     return appConfig.ui.raceTableColumns;
 }
 
+function getMobileColumnVisibility() {
+    if (!appConfig.ui) appConfig.ui = {};
+    appConfig.ui.raceTableMobileVisibility = normalizeMobileVisibilityMap(appConfig.ui.raceTableMobileVisibility);
+    return appConfig.ui.raceTableMobileVisibility;
+}
+
+function isMobileViewport() {
+    // MOBILE_MQ is declared later in the file (TDZ-safe via typeof).
+    if (typeof MOBILE_MQ !== 'undefined' && MOBILE_MQ) return MOBILE_MQ.matches;
+    return window.matchMedia('(max-width: 768px)').matches;
+}
+
 function getVisibleRaceColumns() {
-    return getRaceColumnsLayout().filter(c => c.visible).map(c => c.key);
+    const layout = getRaceColumnsLayout();
+    if (isMobileViewport()) {
+        const mob = getMobileColumnVisibility();
+        return layout.filter(c => mob[c.key]).map(c => c.key);
+    }
+    return layout.filter(c => c.visible).map(c => c.key);
 }
 
 function isVoteSortingEnabled() {
@@ -121,6 +156,36 @@ function isDevModeEnabled() {
 function toggleMobileSidebar(force) {
     const open = (typeof force === 'boolean') ? force : !document.body.classList.contains('mobile-sidebar-open');
     document.body.classList.toggle('mobile-sidebar-open', open);
+}
+
+// Phase 13 follow-up: reparent the search bar so it doesn't eat top-bar
+// real estate on phones. On mobile it lives in the Race Database sidebar
+// group; on desktop it sits in the main toolbar. Move on init + on
+// viewport change (rotation, dev-tools resize, etc.).
+const MOBILE_MQ = window.matchMedia('(max-width: 768px)');
+function relocateSearchBar() {
+    const search = document.querySelector('.search-container');
+    if (!search) return;
+    const mobileSlot = document.getElementById('mobile-search-slot');
+    const desktopHome = document.querySelector('.main-toolbar-left');
+    const target = MOBILE_MQ.matches ? mobileSlot : desktopHome;
+    if (target && search.parentNode !== target) {
+        target.insertBefore(search, target.firstChild);
+    }
+}
+if (MOBILE_MQ.addEventListener) {
+    MOBILE_MQ.addEventListener('change', () => { relocateSearchBar(); rerenderAllRaceTables(); });
+}
+
+// Re-render every visible race table (used when the viewport crosses the
+// mobile breakpoint and the column-visibility set changes).
+function rerenderAllRaceTables() {
+    Object.keys(globalRaceEntries || {}).forEach(r_id => {
+        const tbody = document.getElementById(`tbody-${r_id}`);
+        const thead = document.getElementById(`thead-${r_id}`);
+        if (tbody) tbody.innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
+        if (thead) thead.innerHTML = buildTableHeaderRow(r_id);
+    });
 }
 
 function applyDevModeBodyClass() {
@@ -464,6 +529,7 @@ async function init() {
     const configRes = await fetch('/api/config');
     appConfig = await configRes.json();
     applyDevModeBodyClass();
+    relocateSearchBar();
 
     // Load OrePro per-race apply state so the Apply button can reflect history.
     await loadOreProApplyState();
@@ -6139,14 +6205,24 @@ function renderRaceColumnSettings() {
     if (!container) return;
 
     const cols = getRaceColumnsLayout();
-    container.innerHTML = cols.map((c, idx) => {
+    const mob = getMobileColumnVisibility();
+    // Header row clarifies the two checkboxes.
+    let html = `<div class="setting-column-row setting-column-header">
+        <span class="setting-column-label" style="font-weight:600;color:#8ea0c6;">Column</span>
+        <span style="font-size:11px;color:#8ea0c6;">🖥️ / 📱</span>
+        <div class="setting-column-actions"></div>
+    </div>`;
+    html += cols.map((c, idx) => {
         const meta = RACE_COLUMN_META[c.key] || { label: c.key };
         const upDisabled = idx === 0 ? 'disabled' : '';
         const downDisabled = idx === cols.length - 1 ? 'disabled' : '';
         return `<div class="setting-column-row">
             <label class="setting-column-label">
-                <input type="checkbox" ${c.visible ? 'checked' : ''} onchange="toggleRaceColumnVisibility('${c.key}', this.checked)">
+                <input type="checkbox" ${c.visible ? 'checked' : ''} onchange="toggleRaceColumnVisibility('${c.key}', this.checked)" title="Visible on desktop">
                 <span>${meta.label}</span>
+            </label>
+            <label title="Visible on mobile (phone width)">
+                <input type="checkbox" ${mob[c.key] ? 'checked' : ''} onchange="toggleMobileColumnVisibility('${c.key}', this.checked)">
             </label>
             <div class="setting-column-actions">
                 <button type="button" ${upDisabled} onclick="moveRaceColumn('${c.key}', -1)">↑</button>
@@ -6154,6 +6230,25 @@ function renderRaceColumnSettings() {
             </div>
         </div>`;
     }).join('');
+    container.innerHTML = html;
+}
+
+async function toggleMobileColumnVisibility(colKey, visible) {
+    const mob = { ...getMobileColumnVisibility() };
+    if (!visible) {
+        const visibleCount = Object.values(mob).filter(v => v).length;
+        if (visibleCount <= 1 && mob[colKey]) {
+            alert('At least one race column must remain visible on mobile.');
+            renderRaceColumnSettings();
+            return;
+        }
+    }
+    mob[colKey] = visible;
+    appConfig.ui.raceTableMobileVisibility = mob;
+    renderRaceColumnSettings();
+    await updateSidebarSettings();
+    // Re-render so the change shows up immediately if currently on mobile.
+    if (isMobileViewport()) rerenderAllRaceTables();
 }
 
 async function moveRaceColumn(colKey, direction) {
@@ -6191,6 +6286,7 @@ async function toggleRaceColumnVisibility(colKey, visible) {
     appConfig.ui.raceTableColumns = cols;
     renderRaceColumnSettings();
     await updateSidebarSettings();
+    if (!isMobileViewport()) rerenderAllRaceTables();
 }
 
 function applySidebarSettings() {

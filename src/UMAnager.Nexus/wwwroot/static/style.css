@@ -1722,13 +1722,9 @@ input[type=range]::-webkit-slider-runnable-track {
     .scrollable-races table th,
     .scrollable-races table td { padding: 4px 4px; font-size: 12px; }
 
-    /* Hide pedigree + form columns on phones. Cells are tagged
-       data-col="<ColumnKey>" by buildTableBody / buildTableHeaderRow. */
-    .scrollable-races [data-col="Sire"],
-    .scrollable-races [data-col="Dam"],
-    .scrollable-races [data-col="BMS"],
-    .scrollable-races [data-col="Last3"],
-    .scrollable-races [data-col="Record"] { display: none !important; }
+    /* Column visibility on mobile is now driven by the JS column manager
+       (appConfig.ui.raceTableMobileVisibility) — see getVisibleRaceColumns().
+       Defaults: only Shirushi/PP/Horse/Odds/Fav/Finish visible on phones. */
 
     /* Prediction cell has inline min-width:170px from buildTableBody. Override so
        the 5 mark buttons stay on a single row, and shrink the buttons themselves. */
