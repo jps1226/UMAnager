@@ -3451,61 +3451,6 @@ async function closeServerInstances() {
     }
 }
 
-async function enrichHorseInfoAfterScrape() {
-    const btn = document.getElementById('btn-enrich-horse-info');
-    const originalLabel = btn?.textContent || '';
-    const startedAt = performance.now();
-    let progressTimer = null;
-
-    if (btn) {
-        btn.disabled = true;
-        btn.textContent = '⏳ Filling Horse Info...';
-    }
-
-    const consoleBox = document.getElementById('scrape-console');
-    if (consoleBox) {
-        if ((appConfig?.ui?.showConsole ?? false) && isDevModeEnabled()) consoleBox.style.display = 'block';
-        consoleBox.textContent = 'Preparing horse info enrichment...';
-    }
-
-    logInterval = setInterval(fetchLogs, 500);
-    progressTimer = setInterval(() => {
-        appendConsoleLine(`[Horse Enrichment] Still running... ${Math.round((performance.now() - startedAt) / 1000)}s elapsed.`);
-    }, 12000);
-
-    try {
-        const res = await fetch('/api/races/enrich-horse-info', { method: 'POST' });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-            throw new Error(data.detail || data.message || `HTTP ${res.status}`);
-        }
-
-        await fetchLogs();
-        await loadRaces();
-        appendConsoleLine(
-            `[Horse Enrichment] Updated ${data.updated_rows || 0} entries across ${data.updated_races || 0} races ` +
-            `(horses=${data.unique_horses || 0}, fetch candidates=${data.fetch_candidates || 0}) in ` +
-            `${(performance.now() - startedAt).toFixed(0)}ms.`
-        );
-        alert(
-            `Horse info update complete.\n\n` +
-            `Updated entries: ${data.updated_rows || 0}\n` +
-            `Updated races: ${data.updated_races || 0}\n` +
-            `Unique horses scanned: ${data.unique_horses || 0}`
-        );
-    } catch (err) {
-        appendConsoleLine(`[Horse Enrichment] Failed: ${err.message}`);
-        alert(`Horse info update failed: ${err.message}`);
-    } finally {
-        clearInterval(logInterval);
-        clearInterval(progressTimer);
-        if (btn) {
-            btn.disabled = false;
-            btn.textContent = originalLabel || '🧬 Fill Horse Names / Parents';
-        }
-    }
-}
-
 async function triggerScrape(mode) {
     document.getElementById('btn-new-race').disabled = true;
     document.getElementById('btn-all-race').disabled = true;
