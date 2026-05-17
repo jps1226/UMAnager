@@ -69,15 +69,31 @@ public sealed class RacesController : ControllerBase
         {
             using var db = await _dbFactory.CreateDbContextAsync();
 
-            // For now, load only the most recent 300 races (roughly 1-2 weeks) to avoid
-            // massive response payloads. This prevents the UI from choking on 19MB+ responses.
-            // TODO: Implement proper pagination with query parameters once build/EF Core issues are resolved.
+            // Phase 14: trim default window to roughly the last 2 weeks + any upcoming.
+            // ~5 race days × 36 races = ~180 rows for the typical operator view. Older
+            // races are still reachable via /api/races?from=YYYY-MM-DD (future endpoint).
+            var jstNow = DateTime.UtcNow.AddHours(9);
+            var windowStart = jstNow.AddDays(-14);
             var races = await db.Races
-                .OrderByDescending(r => r.SortTime ?? DateTime.MinValue)
-                .Take(300)
+                .Where(r => r.SortTime != null && r.SortTime >= windowStart)
                 .OrderBy(r => r.SortTime)
                 .AsNoTracking()
                 .ToListAsync();
+
+            // Phase 14: ETag based on (race count, max LastUpdated). Cheap to compute,
+            // changes only when data actually changes. Browser sends If-None-Match on
+            // reload; we return 304 with no body if unchanged.
+            DateTime? maxLastUpdated = races.Count > 0
+                ? races.Max(r => r.LastUpdated)
+                : (DateTime?)null;
+            var etag = $"\"races-{races.Count}-{maxLastUpdated?.Ticks ?? 0}\"";
+            Response.Headers["Cache-Control"] = "no-cache"; // re-validate every time, but allow 304
+            Response.Headers["ETag"] = etag;
+            var ifNoneMatch = Request.Headers["If-None-Match"].ToString();
+            if (!string.IsNullOrEmpty(ifNoneMatch) && ifNoneMatch == etag)
+            {
+                return StatusCode(StatusCodes.Status304NotModified);
+            }
 
             var raceIds = races.Select(r => r.RaceId).ToHashSet();
             var allEntries = await db.RaceEntries.AsNoTracking()

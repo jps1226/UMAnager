@@ -1,4 +1,6 @@
+using System.IO.Compression;
 using System.Text.Json;
+using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
 using UMAnager.Nexus.Hubs;
@@ -20,6 +22,19 @@ builder.Services.AddControllers()
     .AddJsonOptions(o => o.JsonSerializerOptions.PropertyNamingPolicy = null);
 
 builder.Services.AddSignalR();
+
+// Phase 14: gzip/brotli for API responses. /api/races is ~1MB+ uncompressed;
+// gzip typically gets it under ~150KB. Static files are pre-compressed by
+// UseStaticFiles + the file extensions, so we mainly care about JSON here.
+builder.Services.AddResponseCompression(opts =>
+{
+    opts.EnableForHttps = true;
+    opts.Providers.Add<BrotliCompressionProvider>();
+    opts.Providers.Add<GzipCompressionProvider>();
+    opts.MimeTypes = new[] { "application/json", "text/plain", "text/html", "text/css", "application/javascript" };
+});
+builder.Services.Configure<BrotliCompressionProviderOptions>(o => o.Level = CompressionLevel.Fastest);
+builder.Services.Configure<GzipCompressionProviderOptions>(o => o.Level = CompressionLevel.Fastest);
 
 builder.Services.AddDbContextFactory<AppDbContext>(opts =>
     opts.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
@@ -48,6 +63,7 @@ var app = builder.Build();
 
 await app.Services.GetRequiredService<SettingsService>().SeedDefaultsAsync();
 
+app.UseResponseCompression();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
