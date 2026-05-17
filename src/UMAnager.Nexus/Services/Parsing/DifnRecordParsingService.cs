@@ -29,17 +29,19 @@ public class DifnRecordParsingService
         {
             _logger.LogInformation("Starting DIFN record parsing: UM → RA → SE");
 
-            // Parse in strict order: UM first (no dependencies), then RA, then SE
+            // Parse in strict order: UM first (no dependencies), then RA, then SE,
+            // then HR (race payouts — references races by RaceId, so must come after RA).
             await ParseRecordsByTypeAsync("UM", ParseUmRecord, stats, ct);
             await ParseRecordsByTypeAsync("RA", ParseRaRecord, stats, ct);
             await ParseRecordsByTypeAsync("SE", ParseSeRecord, stats, ct);
+            await ParseHrRecordsAsync(stats, ct);
 
             sw.Stop();
             stats.DurationMs = (int)sw.ElapsedMilliseconds;
 
             _logger.LogInformation(
-                "DIFN parsing complete: UM={ParsedUm} RA={ParsedRa} SE={ParsedSe} Failed={Failed} Duration={Duration}ms",
-                stats.ParsedUm, stats.ParsedRa, stats.ParsedSe, stats.FailedCount, stats.DurationMs);
+                "DIFN parsing complete: UM={ParsedUm} RA={ParsedRa} SE={ParsedSe} HR={ParsedHr} Failed={Failed} Duration={Duration}ms",
+                stats.ParsedUm, stats.ParsedRa, stats.ParsedSe, stats.ParsedHr, stats.FailedCount, stats.DurationMs);
 
             return stats;
         }
@@ -350,6 +352,97 @@ public class DifnRecordParsingService
         }
     }
 
+    /// <summary>
+    /// Parse HR (Haray / payout) records and UPDATE races.results_json with the JSON blob.
+    /// Doesn't fit the entity-upsert pipeline because HR mutates existing rows rather than
+    /// inserting new ones — separate batched UPDATE per chunk.
+    /// </summary>
+    private async Task ParseHrRecordsAsync(ParsingStats stats, CancellationToken ct)
+    {
+        const int BatchSize = 500;
+        using var context = _contextFactory.CreateDbContext();
+        long lastProcessedId = 0;
+        int batchNum = 0;
+
+        while (true)
+        {
+            var batch = await context.RawStagingRecords
+                .Where(r => r.RecordType == "HR" && !r.IsProcessed && r.Id > lastProcessedId)
+                .OrderBy(r => r.Id)
+                .Take(BatchSize)
+                .ToListAsync(ct);
+            if (batch.Count == 0) break;
+            batchNum++;
+
+            var parsed = new List<(string RaceId, string Json)>();
+            var idsToMark = new List<long>();
+            foreach (var raw in batch)
+            {
+                try
+                {
+                    var result = HrRecordParser.Parse(raw.RawBytes);
+                    if (result != null)
+                    {
+                        parsed.Add((result.RaceId, result.ResultsJson));
+                        idsToMark.Add(raw.Id);
+                        stats.ParsedHr++;
+                    }
+                    else
+                    {
+                        // Unparseable (e.g. truncated) — mark processed so we don't retry forever.
+                        idsToMark.Add(raw.Id);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    stats.FailedCount++;
+                    LogParsingError("HR", raw.RawBytes, ex);
+                }
+            }
+
+            // Dedupe by RaceId — if multiple HR records arrive for the same race
+            // (provisional then final), keep the last (later in batch order ≈ later in file).
+            var byRace = parsed.GroupBy(p => p.RaceId)
+                .ToDictionary(g => g.Key, g => g.Last().Json);
+
+            if (byRace.Count > 0)
+            {
+                // Single batched UPDATE using a VALUES clause: cheaper than N round-trips.
+                var values = new List<string>(byRace.Count);
+                var pgParams = new List<object>(byRace.Count * 2);
+                int idx = 0;
+                foreach (var kv in byRace)
+                {
+                    values.Add($"(@p{idx}, @p{idx + 1}::jsonb)");
+                    pgParams.Add(new NpgsqlParameter($"p{idx}", NpgsqlDbType.Text) { Value = kv.Key });
+                    pgParams.Add(new NpgsqlParameter($"p{idx + 1}", NpgsqlDbType.Text) { Value = kv.Value });
+                    idx += 2;
+                }
+                var sql = $@"
+                    UPDATE races AS r
+                    SET ""ResultsJson"" = v.json, ""LastUpdated"" = NOW()
+                    FROM (VALUES {string.Join(", ", values)}) AS v(race_id, json)
+                    WHERE r.""RaceId"" = v.race_id";
+                await context.Database.ExecuteSqlRawAsync(sql, pgParams.ToArray(), ct);
+
+                _logger.LogInformation("[HR] Batch {BatchNum}: Updated {Count} races (Total: {Total})",
+                    batchNum, byRace.Count, stats.ParsedHr);
+            }
+
+            if (idsToMark.Count > 0)
+            {
+                using var markContext = _contextFactory.CreateDbContext();
+                var toMark = await markContext.RawStagingRecords.Where(r => idsToMark.Contains(r.Id)).ToListAsync(ct);
+                foreach (var rec in toMark) rec.IsProcessed = true;
+                await markContext.SaveChangesAsync(ct);
+            }
+
+            lastProcessedId = batch.Last().Id;
+        }
+
+        _logger.LogInformation("[HR] Completed {TotalBatches} batches", batchNum);
+    }
+
     private void LogParsingError(string recordType, byte[] rawRecord, Exception ex)
     {
         // Only log hex for first few records to avoid massive log files
@@ -366,6 +459,7 @@ public class ParsingStats
     public int ParsedUm { get; set; }
     public int ParsedRa { get; set; }
     public int ParsedSe { get; set; }
+    public int ParsedHr { get; set; }
     public int FailedCount { get; set; }
     public int DurationMs { get; set; }
     public string? ErrorMessage { get; set; }

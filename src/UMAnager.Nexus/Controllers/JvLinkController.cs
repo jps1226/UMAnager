@@ -120,6 +120,7 @@ public sealed class JvLinkController : ControllerBase
                         parsed_um = stats.ParsedUm,
                         parsed_ra = stats.ParsedRa,
                         parsed_se = stats.ParsedSe,
+                        parsed_hr = stats.ParsedHr,
                         failed_count = stats.FailedCount,
                         duration_ms = stats.DurationMs
                     }
