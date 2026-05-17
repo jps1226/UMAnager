@@ -69,6 +69,17 @@ public sealed class BetWinNotifier
             .ToListAsync(ct);
         var raceMeta = races.ToDictionary(r => r.RaceId, r => r);
 
+        // Resolve horse names for every top-3 finisher across all candidate races. One round-trip;
+        // we'll filter to actual hits per-race below. NameEn preferred, fallback to NameJa.
+        var topFinisherIds = entries.Select(e => e.HorseId!).Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
+        var horseNames = await db.Horses.AsNoTracking()
+            .Where(h => topFinisherIds.Contains(h.HorseId))
+            .Select(h => new { h.HorseId, h.NameEn, h.NameJa })
+            .ToListAsync(ct);
+        var nameByHorse = horseNames.ToDictionary(
+            h => h.HorseId,
+            h => !string.IsNullOrEmpty(h.NameEn) ? h.NameEn! : (h.NameJa ?? h.HorseId));
+
         var anyNotified = false;
         foreach (var raceId in freshCandidates)
         {
@@ -101,12 +112,26 @@ public sealed class BetWinNotifier
 
             if (pills.Count == 0) continue; // top-3 complete but no hit — mark notified, no ping
 
+            // Build per-hit horse detail: each marked horse that landed in top 3, with mark + name + position.
+            // For Q Box show top-2; for T Box top-3; for ◎ Win alone, just the winner.
+            var maxPos = trio ? 3 : (quinella ? 2 : 1);
+            var hits = new List<MarkHit>();
+            for (int pos = 1; pos <= maxPos; pos++)
+            {
+                var horseId = top3[pos];
+                if (!raceMarks.TryGetValue(horseId, out var mark) || string.IsNullOrEmpty(mark)) continue;
+                var name = nameByHorse.TryGetValue(horseId, out var n) ? n : horseId;
+                hits.Add(new MarkHit(mark, name, pos));
+            }
+
             var label = BuildRaceLabel(raceMeta.TryGetValue(raceId, out var rm) ? rm.TrackCode : null,
                                        raceMeta.TryGetValue(raceId, out var rm2) ? rm2.RaceNumber : null);
             try
             {
-                await _discord.NotifyMarkHitsAsync(label, pills, ct);
-                _logger.LogInformation("[BetWin] Race {RaceId} hits: {Pills}", raceId, string.Join(",", pills));
+                await _discord.NotifyMarkHitsAsync(label, pills, hits, ct);
+                _logger.LogInformation("[BetWin] Race {RaceId} hits: {Pills} | {Hits}",
+                    raceId, string.Join(",", pills),
+                    string.Join(", ", hits.Select(h => $"{h.Mark} {h.HorseName} ({h.Finish})")));
             }
             catch (Exception ex)
             {

@@ -2,12 +2,14 @@ using System.Net.Http.Json;
 
 namespace UMAnager.Nexus.Services;
 
+public sealed record MarkHit(string Mark, string HorseName, int Finish);
+
 public interface IDiscordNotifier
 {
     Task NotifyPhaseChangedAsync(AppPhase from, AppPhase to, CancellationToken ct = default);
     Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default);
-    Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, CancellationToken ct = default);
+    Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, CancellationToken ct = default);
     Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default);
     Task NotifyTestAsync(CancellationToken ct = default);
 }
@@ -42,11 +44,24 @@ public sealed class DiscordNotifier : IDiscordNotifier
     public Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default)
         => SendAsync($":moneybag: **Bet card won** on `{raceId}` — {description} → ¥{payout:N0}", ct);
 
-    public Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, CancellationToken ct = default)
+    public Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, CancellationToken ct = default)
     {
         var pills = string.Join(" · ", hitPills);
-        return SendAsync($":trophy: **Win!** {raceLabel} — {pills}", ct);
+        var hitList = hits.OrderBy(h => h.Finish).ToList();
+        var content = $":trophy: **Win!** {raceLabel} — {pills}";
+        if (hitList.Count > 0)
+        {
+            var detail = string.Join(" · ", hitList.Select(h => $"{h.Mark} {h.HorseName} ({Ordinal(h.Finish)})"));
+            content += $"\n      {detail}";
+        }
+        return SendAsync(content, ct);
     }
+
+    private static string Ordinal(int n) => n switch
+    {
+        1 => "1st", 2 => "2nd", 3 => "3rd",
+        _ => $"{n}th"
+    };
 
     public Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default)
     {
