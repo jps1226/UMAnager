@@ -1648,3 +1648,91 @@ input[type=range]::-webkit-slider-runnable-track {
         grid-template-columns: 1fr;
     }
 }
+
+/* --- MOBILE LAYOUT (Phase 13) ---
+   Below 768px: collapse the sidebar into a drawer, slim top toolbar,
+   drop heavy pedigree/form columns from the race table. Hamburger button
+   in the top-left toggles the drawer. */
+
+.mobile-menu-btn { display: none; }
+.mobile-sidebar-backdrop { display: none; }
+
+@media (max-width: 768px) {
+    html, body { overflow-x: hidden; }
+    body { font-size: 13px; }
+
+    /* Sidebar: full-width drawer that slides in from the left. */
+    .sidebar {
+        position: fixed;
+        top: 0; left: 0; bottom: 0;
+        width: 86vw; max-width: 360px;
+        z-index: 2000;
+        transform: translateX(-100%);
+        transition: transform 220ms ease-out;
+        box-shadow: 4px 0 24px rgba(0,0,0,0.6);
+    }
+    body.mobile-sidebar-open .sidebar { transform: translateX(0); }
+
+    /* Backdrop appears behind open drawer; tap-to-close. */
+    .mobile-sidebar-backdrop {
+        display: block;
+        position: fixed; inset: 0;
+        background: rgba(0,0,0,0);
+        z-index: 1500;
+        pointer-events: none;
+        transition: background 220ms ease-out;
+    }
+    body.mobile-sidebar-open .mobile-sidebar-backdrop {
+        background: rgba(0,0,0,0.55);
+        pointer-events: auto;
+    }
+
+    /* Hamburger: floating top-left, only visible on phones. */
+    .mobile-menu-btn {
+        display: block;
+        position: fixed;
+        top: 8px; left: 8px;
+        z-index: 2500;
+        width: 38px; height: 38px;
+        border-radius: 8px;
+        background: rgba(26,28,35,0.92);
+        color: #1dd1a1;
+        border: 1px solid #333;
+        font-size: 20px;
+        line-height: 1;
+        cursor: pointer;
+    }
+    .mobile-menu-btn:active { background: #1dd1a1; color: #000; }
+
+    /* Main content fills the screen; tighten paddings. */
+    .main-content { width: 100vw; }
+    .top-sticky-bar { padding: 8px 10px 0 56px; /* leave room for hamburger */ }
+    .scrollable-races { padding: 0 8px 16px 8px; }
+
+    /* Clocks stack and shrink. */
+    .top-bar-clock-row { flex-direction: column; gap: 8px; margin-bottom: 10px; }
+    .clock-container { gap: 16px; padding: 8px; }
+    .clock-time { font-size: 16px; }
+
+    /* Main toolbar: wrap onto multiple lines. */
+    .main-toolbar { flex-direction: column; align-items: stretch; gap: 8px; padding-bottom: 4px; }
+    .main-toolbar-left { flex-wrap: wrap; gap: 6px; }
+
+    /* Race tables: tighten paddings and drop heavy columns. */
+    .scrollable-races table th,
+    .scrollable-races table td { padding: 4px 4px; font-size: 12px; }
+
+    /* Hide pedigree + form columns on phones. Cells are tagged
+       data-col="<ColumnKey>" by buildTableBody / buildTableHeaderRow. */
+    .scrollable-races [data-col="Sire"],
+    .scrollable-races [data-col="Dam"],
+    .scrollable-races [data-col="BMS"],
+    .scrollable-races [data-col="Last3"],
+    .scrollable-races [data-col="Record"] { display: none !important; }
+
+    /* Race header: smaller, no margin. */
+    .scrollable-races h3 { font-size: 14px; padding: 6px 4px; }
+
+    /* Settings modal: full-screen on phones. */
+    .settings-modal-content { width: 96vw; max-width: 96vw; max-height: 92vh; padding: 14px; }
+}

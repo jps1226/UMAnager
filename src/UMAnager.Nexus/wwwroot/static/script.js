@@ -116,6 +116,13 @@ function isDevModeEnabled() {
     return appConfig.ui?.devMode ?? false;
 }
 
+// Phase 13: mobile drawer-sidebar toggle. CSS handles the slide animation;
+// we just toggle the body class. Pass an explicit boolean to force open/close.
+function toggleMobileSidebar(force) {
+    const open = (typeof force === 'boolean') ? force : !document.body.classList.contains('mobile-sidebar-open');
+    document.body.classList.toggle('mobile-sidebar-open', open);
+}
+
 function applyDevModeBodyClass() {
     const on = isDevModeEnabled();
     document.body.classList.toggle('dev-mode', on);
@@ -949,9 +956,9 @@ function buildTableHeaderRow(r_id) {
 
         if (meta.sortable) {
             const sortKey = meta.sortKey;
-            html += `<th class="sortable" id="th-${r_id}-${sortKey}" onclick="setSort('${r_id}', '${sortKey}')">${meta.label} ${getSortIcon(r_id, sortKey)}</th>`;
+            html += `<th class="sortable" data-col="${col}" id="th-${r_id}-${sortKey}" onclick="setSort('${r_id}', '${sortKey}')">${meta.label} ${getSortIcon(r_id, sortKey)}</th>`;
         } else {
-            html += `<th>${meta.label}</th>`;
+            html += `<th data-col="${col}">${meta.label}</th>`;
         }
     });
 
@@ -1075,7 +1082,13 @@ function buildTableBody(r_id, entries) {
             Finish: (() => { const f = Number(row.Finish); const shown = (Number.isFinite(f) && f > 0) ? f : ''; return `<td data-cell="finish" class="finish-pos finish-pos-${shown}">${shown}</td>`; })()
         };
 
-        const orderedCells = getVisibleRaceColumns().map(col => cellHtmlByCol[col] || "").join("");
+        const orderedCells = getVisibleRaceColumns().map(col => {
+            const cellHtml = cellHtmlByCol[col] || "";
+            if (!cellHtml) return "";
+            // Inject data-col on the opening <td> so the mobile CSS can hide
+            // pedigree/form columns by key without depending on column order.
+            return cellHtml.replace(/^<td/, `<td data-col="${col}"`);
+        }).join("");
         rowsHtml += `<tr id="row-${r_id}-${h_id}" class="${trClass}">${orderedCells}</tr>`;
     });
     return rowsHtml;
