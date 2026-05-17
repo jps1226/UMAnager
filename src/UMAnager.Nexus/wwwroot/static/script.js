@@ -2111,7 +2111,7 @@ async function loadRaces() {
     appendDebugLine('loadRaces started');
     const racesRes = await fetch('/api/races');
     appendDebugLine(`/api/races status=${racesRes.status}`);
-    const data = await racesRes.json().catch(() => ({}));
+    const data = applyTimeDisplayToRacesPayload(await racesRes.json().catch(() => ({})));
     if (!racesRes.ok) {
         const detail = data?.detail || data?.message || `HTTP ${racesRes.status}`;
         appendConsoleLine(`[Races] Failed to load races: ${detail}`);
@@ -4328,13 +4328,48 @@ let globalOreProApplyState = {};
 // loadOreProSettingsLite at page init.
 let globalOreProSettings = {};
 
+// When true, render race times in the user's local timezone with AM/PM. When false,
+// keep JST 24h (the historical default — operator mentally maps it).
+let globalDisplayLocalTime = false;
+
 async function loadOreProSettingsLite() {
     try {
         const res = await fetch('/api/settings');
         if (!res.ok) return;
         const data = await res.json();
         globalOreProSettings = data?.settings || {};
+        globalDisplayLocalTime = String(globalOreProSettings.display_local_time || 'false').toLowerCase() === 'true';
     } catch (_) { /* fine — defaults will be used */ }
+}
+
+/// Returns a display time string for a race based on globalDisplayLocalTime.
+///  - JST mode: returns info.time verbatim (e.g. "09:55")
+///  - Local mode: parses sort_time_iso (proper JST offset) → user's tz with AM/PM (e.g. "8:55 PM")
+function formatRaceTimeDisplay(info) {
+    if (!globalDisplayLocalTime) return String(info?.time || 'TBA');
+    const iso = String(info?.sort_time_iso || '').trim();
+    if (!iso) return String(info?.time || 'TBA');
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(info?.time || 'TBA');
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+/// Walks /api/races response and overwrites every race's info.time with the formatted
+/// display string. Call once per fetch. After this, every existing render path that
+/// uses info.time gets the right value without further changes.
+function applyTimeDisplayToRacesPayload(data) {
+    const dicts = [data?.upcoming_races_by_date, data?.past_races_by_date, data?.races_by_date];
+    for (const dict of dicts) {
+        if (!dict || typeof dict !== 'object') continue;
+        for (const date of Object.keys(dict)) {
+            const races = dict[date];
+            if (!Array.isArray(races)) continue;
+            for (const race of races) {
+                if (race?.info) race.info.time = formatRaceTimeDisplay(race.info);
+            }
+        }
+    }
+    return data;
 }
 
 async function loadOreProApplyState() {
@@ -5664,7 +5699,7 @@ async function showExportModal() {
         <div class="popout-head-actions">
             <button id="btn-toggle-horse-layout" class="popout-layout-btn" onclick="toggleHorseLayout()" type="button">⇄ Layout: Numbers Left</button>
             <button id="btn-fullscreen" class="fullscreen-btn" onclick="toggleFullscreen()" type="button">⛶ Full Screen</button>
-            <a href="/tv" target="_blank" style="background:#f5a623;color:black;padding:6px 12px;text-decoration:none;border-radius:4px;font-weight:bold;font-size:14px;">📺 TV Mode</a>
+            <a href="/tv.html" target="_blank" style="background:#f5a623;color:black;padding:6px 12px;text-decoration:none;border-radius:4px;font-weight:bold;font-size:14px;">📺 TV Mode</a>
             <a href="https://orepro.netkeiba.com/bet/race_list.html" target="_blank" style="background:#1dd1a1;color:black;padding:6px 12px;text-decoration:none;border-radius:4px;font-weight:bold;font-size:14px;">🔗 Open OrePro</a>
         </div>
     </div>
@@ -6335,11 +6370,23 @@ async function loadOrchestratorSettings() {
         const navCb = document.getElementById('setting-orepro-nav-to-complete');
         if (navCb) navCb.checked = String(s.orepro_nav_to_complete_after_submit || 'false').toLowerCase() === 'true';
 
+        // Checkbox for "display in local timezone"
+        const tzCb = document.getElementById('setting-display-local-time');
+        if (tzCb) tzCb.checked = String(s.display_local_time || 'false').toLowerCase() === 'true';
+
         // Keep the lightweight global cache in sync so the apply flow sees fresh values.
         globalOreProSettings = s;
+        globalDisplayLocalTime = String(s.display_local_time || 'false').toLowerCase() === 'true';
     } catch (e) {
         console.warn('[Orchestrator] loadSettings failed', e);
     }
+}
+
+async function toggleDisplayLocalTime(enabled) {
+    globalDisplayLocalTime = !!enabled;
+    await saveOrchestratorSetting('display_local_time', enabled ? 'true' : 'false');
+    // Reload races so display strings update immediately. Cheap relative to a refresh.
+    try { await loadRaces(); } catch (_) { /* ignore — operator can refresh manually */ }
 }
 
 async function testOreProCookie() {

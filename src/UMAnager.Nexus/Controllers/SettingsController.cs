@@ -26,6 +26,7 @@ public sealed class SettingsController : ControllerBase
         SettingsService.Keys.OreProSessionCookie,
         SettingsService.Keys.OreProUserAgent,
         SettingsService.Keys.OreProNavToCompleteAfterSubmit,
+        SettingsService.Keys.DisplayLocalTime,
     };
 
     [HttpGet]

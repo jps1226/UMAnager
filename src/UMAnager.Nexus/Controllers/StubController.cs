@@ -81,7 +81,5 @@ public sealed class StubController : ControllerBase
     public IActionResult Shutdown() => Ok(new { status = "not_implemented" });
 
     // ── TV Mode ───────────────────────────────────────────────────────────────
-
-    [HttpGet("api/gch/live-playback-json")]
-    public IActionResult GchLivePlayback() => Ok(new { status = "not_implemented" });
+    // /api/gch/live-playback-json is now handled by GchController.
 }

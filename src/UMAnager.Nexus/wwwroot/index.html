@@ -221,7 +221,7 @@
                 </div>
 
                 <button id="btn-live-view-popout" onclick="showExportModal()" class="toolbar-btn toolbar-btn-primary">🪟 Live View Popout</button>
-                <button id="btn-tv-mode" onclick="window.open('/tv', '_blank', 'noopener')" class="toolbar-btn toolbar-btn-primary">📺 TV Mode</button>
+                <button id="btn-tv-mode" onclick="window.open('/tv.html', '_blank', 'noopener')" class="toolbar-btn toolbar-btn-primary">📺 TV Mode</button>
                 <button id="btn-winning-votes-focus" onclick="toggleWinningVotesFocus()" class="toolbar-btn toolbar-btn-muted" style="display:none;">🏁 Hit 0% (0/0)</button>
                 <button onclick="collapseVotedRaces()" class="toolbar-btn toolbar-btn-muted">✅ Collapse Voted</button>
                 <button onclick="toggleAllRaces()" class="toolbar-btn toolbar-btn-muted">↕️ Toggle All Races</button>
@@ -415,6 +415,17 @@
                 </div>
 
                 <div class="settings-card settings-card-full">
+                    <h4 class="settings-section-title">🕒 Display</h4>
+                    <div class="settings-helper-text">Race time display format. JST 24h is the historical default — the operator mentally maps it. Local AM/PM converts using your browser's timezone.</div>
+                    <div style="margin-top:8px;">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;" title="Show race times in your local timezone with AM/PM (e.g. '8:55 PM') instead of JST 24h (e.g. '09:55').">
+                            <input type="checkbox" id="setting-display-local-time" onchange="toggleDisplayLocalTime(this.checked)">
+                            <span>Show race times in my local timezone (AM/PM)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="settings-card settings-card-full">
                     <h4 class="settings-section-title">🎫 OrePro Auto-Bet</h4>
                     <div class="settings-helper-text">Server-side bet application via your OrePro session cookie. <b>How to capture:</b> log in to <a href="https://orepro.netkeiba.com/" target="_blank" rel="noopener">orepro.netkeiba.com</a> in any browser → open DevTools (F12) → Application tab → Cookies → orepro.netkeiba.com → right-click any cookie → "Copy as cURL" — then extract the long `cookie:` header value, OR open the Network tab, click any request to orepro.netkeiba.com, find Request Headers → Cookie, copy the entire value. Paste below. Re-paste whenever OrePro logs you out.</div>
                     <div class="settings-formula-grid" style="grid-template-columns: 1fr;">
@@ -447,6 +458,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260516-10"></script>
+<script src="/static/script.js?v=20260516-12"></script>
 </body>
 </html>

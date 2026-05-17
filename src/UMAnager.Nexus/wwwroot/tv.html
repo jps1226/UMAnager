@@ -436,6 +436,26 @@ async function fetchAppConfig() {
     return await res.json();
 }
 
+// Mirrors the dashboard's display-time setting. JST 24h by default; local AM/PM when enabled.
+let tvDisplayLocalTime = false;
+async function loadTvDisplayLocalTime() {
+    try {
+        const res = await fetch('/api/settings');
+        if (!res.ok) return;
+        const data = await res.json();
+        tvDisplayLocalTime = String(data?.settings?.display_local_time || 'false').toLowerCase() === 'true';
+    } catch (_) { /* default false */ }
+}
+function tvFormatRaceTime(info) {
+    if (!tvDisplayLocalTime) return String(info?.time || 'TBA');
+    const iso = String(info?.sort_time_iso || '').trim();
+    if (!iso) return String(info?.time || 'TBA');
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime())
+        ? String(info?.time || 'TBA')
+        : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
 async function saveTvLayoutToConfig() {
     try {
         const appConfig = await fetchAppConfig();
@@ -745,6 +765,7 @@ async function loadRaces() {
     document.getElementById('reload-btn').textContent = '…';
     forceScrollOnNextCollapse = true;
     try {
+        await loadTvDisplayLocalTime();
         const [r, m] = await Promise.all([
             fetch('/api/races').then(res => res.json()),
             fetch('/api/marks').then(res => res.json())
@@ -858,9 +879,9 @@ function renderRaceList() {
             };
         }).sort((a, b) => a.rank - b.rank);
 
-        const place = String(info.place || '').toUpperCase();
+        const place = String(info.place_name || info.place || '').toUpperCase();
         const raceNo = info.race_number || '?';
-        const raceTime = info.time || '';
+        const raceTime = tvFormatRaceTime(info);
         racesByIdForTv[raceId] = race;
         raceTimeData.push({ raceId, sortTime: String(info.sort_time || '').trim(), info });
         const titleId = 'rt-' + raceId;

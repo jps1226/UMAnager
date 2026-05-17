@@ -38,6 +38,11 @@ public sealed class SettingsService
         // Bool ("true"/"false") — after a successful Apply+Submit, navigate the popup
         // to /bet/bet_complete.html?race_id=... to show the receipt page. Mirrors v1 UX.
         public const string OreProNavToCompleteAfterSubmit = "orepro_nav_to_complete_after_submit";
+
+        // Bool ("true"/"false") — show race times in the operator's local timezone with
+        // AM/PM (e.g. "8:55 PM ET") instead of the default JST 24h ("09:55"). The clean_date
+        // and sort_time fields are unchanged; only the display string is converted.
+        public const string DisplayLocalTime = "display_local_time";
     }
 
     public static readonly TimeSpan LiveOddsHardFloor = TimeSpan.FromMinutes(5);
@@ -52,6 +57,7 @@ public sealed class SettingsService
         public const string?            OreProSessionCookie      = null;
         public const string             OreProUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
         public const string             OreProNavToCompleteAfterSubmit = "false";
+        public const string             DisplayLocalTime               = "false";
     }
 
     private readonly IDbContextFactory<AppDbContext> _contextFactory;
@@ -127,6 +133,7 @@ public sealed class SettingsService
         AddIfMissing(Keys.OreProSessionCookie,     Defaults.OreProSessionCookie);
         AddIfMissing(Keys.OreProUserAgent,         Defaults.OreProUserAgent);
         AddIfMissing(Keys.OreProNavToCompleteAfterSubmit, Defaults.OreProNavToCompleteAfterSubmit);
+        AddIfMissing(Keys.DisplayLocalTime,               Defaults.DisplayLocalTime);
 
         await ctx.SaveChangesAsync();
     }

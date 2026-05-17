@@ -8,6 +8,22 @@ namespace UMAnager.Nexus.Controllers;
 [Route("api/races")]
 public sealed class RacesController : ControllerBase
 {
+    // JRA central-track codes → romaji names. Source: JRA-VAN spec (Oracle Q5).
+    private static readonly IReadOnlyDictionary<string, string> TrackNames =
+        new Dictionary<string, string>
+        {
+            ["01"] = "Sapporo",  ["02"] = "Hakodate", ["03"] = "Fukushima", ["04"] = "Niigata",
+            ["05"] = "Tokyo",    ["06"] = "Nakayama", ["07"] = "Chukyo",    ["08"] = "Kyoto",
+            ["09"] = "Hanshin",  ["10"] = "Kokura",
+        };
+
+    private static string TrackName(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return "";
+        var padded = code.Trim().PadLeft(2, '0');
+        return TrackNames.TryGetValue(padded, out var name) ? name : padded;
+    }
+
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
 
     public RacesController(IDbContextFactory<AppDbContext> dbFactory)
@@ -99,8 +115,13 @@ public sealed class RacesController : ControllerBase
                     race_name = race.NameJa ?? "",
                     race_number = race.RaceNumber ?? 0,
                     place = race.TrackCode ?? "Unknown",
+                    place_name = TrackName(race.TrackCode),
                     time = race.SortTime?.ToString("HH:mm") ?? "TBA",
                     sort_time = sortTimeUtc.ToString("yyyy-MM-ddTHH:mm:ss"),
+                    // Proper ISO-8601 with JST offset so the frontend can convert to any
+                    // local timezone via new Date(sort_time_iso). sort_time (no offset)
+                    // is kept for backward-compat with parseRaceSortTime.
+                    sort_time_iso = race.SortTime?.ToString("yyyy-MM-ddTHH:mm:ss") + "+09:00",
                     clean_date = cleanDate,
                     history_refreshed = race.HistoryRefreshed
                 };
@@ -144,11 +165,25 @@ public sealed class RacesController : ControllerBase
                 bucket[cleanDate].Add(raceObj);
             }
 
+            // Combined map for clients (like tv.html) that just want all races by date.
+            var combinedByDate = new Dictionary<string, List<object>>();
+            foreach (var kv in upcomingByDate) combinedByDate[kv.Key] = new List<object>(kv.Value);
+            foreach (var kv in pastByDate)
+            {
+                if (!combinedByDate.TryGetValue(kv.Key, out var list))
+                {
+                    list = new List<object>();
+                    combinedByDate[kv.Key] = list;
+                }
+                list.AddRange(kv.Value);
+            }
+
             return Ok(new
             {
                 upcoming_races_by_date = upcomingByDate.ToDictionary(k => k.Key, v => v.Value.ToArray()),
-                past_races_by_date = pastByDate.ToDictionary(k => k.Key, v => v.Value.ToArray()),
-                top_picks = Array.Empty<object>()
+                past_races_by_date     = pastByDate.ToDictionary(k => k.Key, v => v.Value.ToArray()),
+                races_by_date          = combinedByDate.ToDictionary(k => k.Key, v => v.Value.ToArray()),
+                top_picks              = Array.Empty<object>()
             });
         }
         catch (Exception ex)
