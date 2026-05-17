@@ -3885,6 +3885,57 @@ function toggleWinningVotesFocus() {
     updateWinningVotesFocusButton();
 }
 
+function computeRaceNet(race) {
+    const recap = evaluateRaceRecap(race);
+    if (!recap.hasCompleteTop3) return null;
+    const marksCount = Object.keys(collectRaceMainMarks(recap.raceId) || {}).length;
+    if (!marksCount) return null;
+
+    const payouts = lookupRacePayouts(race, recap.ppByRank);
+    const legacyStake = parseFloat(globalOreProSettings?.bet_estimate_stake_yen) || 100;
+    const winStake = parseFloat(globalOreProSettings?.bet_stake_win_yen)      || legacyStake;
+    const qStake   = parseFloat(globalOreProSettings?.bet_stake_quinella_yen) || legacyStake;
+    const tStake   = parseFloat(globalOreProSettings?.bet_stake_trio_yen)     || legacyStake;
+
+    const wonYen = (recap.honmeiHit   ? payouts.win      * winStake / 100 : 0)
+                 + (recap.quinellaHit ? payouts.quinella * qStake   / 100 : 0)
+                 + (recap.trioHit     ? payouts.trio     * tStake   / 100 : 0);
+    const qCombos = marksCount >= 2 ? marksCount * (marksCount - 1) / 2 : 0;
+    const tCombos = marksCount >= 3 ? marksCount * (marksCount - 1) * (marksCount - 2) / 6 : 0;
+    const spentYen = winStake + (qCombos * qStake) + (tCombos * tStake);
+    const anyHit = recap.honmeiHit || recap.quinellaHit || recap.trioHit;
+    return { wonYen, spentYen, netYen: wonYen - spentYen, anyHit };
+}
+
+function buildDayTotalNetHtml(date) {
+    const races = globalRacesByDate[date] || [];
+    const timeline = globalDateTimelineByDate[date] || '';
+    if (timeline !== 'past' || !races.length) return '';
+
+    let won = 0, spent = 0, scored = 0, hits = 0;
+    races.forEach(race => {
+        const net = computeRaceNet(race);
+        if (!net) return;
+        won += net.wonYen;
+        spent += net.spentYen;
+        scored += 1;
+        if (net.anyHit) hits += 1;
+    });
+    if (!scored) return '';
+
+    const net = Math.round(won - spent);
+    const sign = net >= 0 ? '+' : '-';
+    const abs = Math.abs(net).toLocaleString();
+    const cls = net >= 0 ? 'is-positive' : 'is-negative';
+    const hitPct = scored > 0 ? Math.round((hits / scored) * 100) : 0;
+    return `
+        <span class="voting-day-total-label">Today</span>
+        <span class="voting-day-total-net ${cls}">${sign}¥${abs}</span>
+        <span class="voting-day-total-detail">won ¥${Math.round(won).toLocaleString()} − spent ¥${Math.round(spent).toLocaleString()}</span>
+        <span class="voting-day-total-detail">Hit ${hits}/${scored} (${hitPct}%)</span>
+    `;
+}
+
 function buildRaceWinBadgesHtml(race) {
     const recap = evaluateRaceRecap(race);
     if (!recap.hasCompleteTop3) return "";
@@ -3912,7 +3963,9 @@ function buildRaceWinBadgesHtml(race) {
 
     // Net pill: per-race won minus per-race spend across all three legs.
     // Spend model matches the day-recap: 1 Win ticket + C(marks,2) Q combos + C(marks,3) T combos.
-    const wonYen   = (payouts.win * winStake / 100) + (payouts.quinella * qStake / 100) + (payouts.trio * tStake / 100);
+    const wonYen   = (recap.honmeiHit   ? payouts.win      * winStake / 100 : 0)
+                   + (recap.quinellaHit ? payouts.quinella * qStake   / 100 : 0)
+                   + (recap.trioHit     ? payouts.trio     * tStake   / 100 : 0);
     const marksCount = Object.keys(collectRaceMainMarks(recap.raceId) || {}).length;
     const qCombos = marksCount >= 2 ? marksCount * (marksCount - 1) / 2 : 0;
     const tCombos = marksCount >= 3 ? marksCount * (marksCount - 1) * (marksCount - 2) / 6 : 0;
@@ -4381,23 +4434,25 @@ function buildRacecourseCheatHtml(targetDate) {
         });
     }
 
-    // Group races by track
-    const byTrack = {};
+    // Flatten all races into a chronological list. Track is shown per-card so
+    // mixed venues are unambiguous when sorted by post time.
+    const raceCards = [];
     for (const [r_id, group] of Object.entries(raceMarkGroups)) {
         group.marks.sort((a, b) => a.rank - b.rank);
         const info = group.info;
         const track = trackName(info.place);
         const raceNum = parseInt(info.race_number, 10) || 0;
-        // Build a minimal race object for win-badge evaluation
         const entriesArr = globalRaceEntries[r_id] || [];
         const raceObj = { info, entries: entriesArr };
+        const sortKey = parseRaceSortTime(info.sort_time_iso || info.sort_time, info);
 
-        if (!byTrack[track]) byTrack[track] = [];
-        byTrack[track].push({
+        raceCards.push({
             r_id,
+            track,
             raceNum,
             time: String(info.time || 'TBA'),
             raceName: localizeRaceName(info.race_name),
+            sortKey: sortKey ? sortKey.getTime() : Number.MAX_SAFE_INTEGER,
             winBadgesHtml: timeline === 'past' ? buildRaceWinBadgesHtml(raceObj) : '',
             orepro: oreproRaceMap.get(r_id) || null,
             betEstimate: raceBetEstimateCache[r_id] || null,
@@ -4405,21 +4460,18 @@ function buildRacecourseCheatHtml(targetDate) {
         });
     }
 
-    const tracks = Object.keys(byTrack).sort();
-    if (!tracks.length) {
+    if (!raceCards.length) {
         return "<p style='text-align:center; color:#888; margin-top:30px;'>No votes for this day yet.</p>";
     }
 
-    let html = '';
-    tracks.forEach(track => {
-        html += `<div class="export-track-header">${escapeHtml(track)}</div>`;
-        html += `<div class="export-track-grid">`;
+    raceCards.sort((a, b) => (a.sortKey - b.sortKey) || (a.raceNum - b.raceNum));
 
-        byTrack[track].sort((a, b) => a.raceNum - b.raceNum).forEach(raceCard => {
+    let html = '<div class="export-track-grid">';
+    raceCards.forEach(raceCard => {
             const isCollapsed = !!sidebarRaceCollapseState[raceCard.r_id];
             const arrow = isCollapsed ? '▶' : '▼';
             html += `<div class="export-race-card voting-race-card${isCollapsed ? ' is-collapsed' : ''}" data-rid="${escapeHtml(raceCard.r_id)}">`;
-            html += `<div class="export-race-title voting-race-title" onclick="toggleVotingSidebarRace('${escapeHtml(raceCard.r_id)}')" title="Click to collapse/expand this race"><span class="voting-race-arrow">${arrow}</span><span class="voting-race-title-text">🕒 ${escapeHtml(raceCard.time)} | Race ${raceCard.raceNum}: ${escapeHtml(raceCard.raceName || '')} ${raceCard.winBadgesHtml}${getOreProApplyBadge(raceCard.r_id)}</span><button class="toolbar-btn toolbar-btn-muted voting-race-apply-btn" onclick="applySingleRaceVotesToOrePro(event, '${escapeHtml(raceCard.r_id)}')" title="Apply only this race to OrePro">Apply</button></div>`;
+            html += `<div class="export-race-title voting-race-title" onclick="toggleVotingSidebarRace('${escapeHtml(raceCard.r_id)}')" title="Click to collapse/expand this race"><span class="voting-race-arrow">${arrow}</span><span class="voting-race-title-text">🕒 ${escapeHtml(raceCard.time)} | <span class="voting-race-track">${escapeHtml(raceCard.track)}</span> R${raceCard.raceNum}: ${escapeHtml(raceCard.raceName || '')} ${raceCard.winBadgesHtml}${getOreProApplyBadge(raceCard.r_id)}</span><button class="toolbar-btn toolbar-btn-muted voting-race-apply-btn" onclick="applySingleRaceVotesToOrePro(event, '${escapeHtml(raceCard.r_id)}')" title="Apply only this race to OrePro">Apply</button></div>`;
             html += `<div class="voting-race-body">`;
 
             if (raceCard.orepro) {
@@ -4448,25 +4500,12 @@ function buildRacecourseCheatHtml(targetDate) {
                 const winNetClass = estimateNetClass(win?.net);
                 const allHitClass = estimateNetClass(allHit?.maxNet);
 
-                const estBuyText = formatEstimateYen(purchase?.total);
                 const winNetText = formatEstimateYen(win?.net);
-                const qNetText = formatEstimateNetRange(q?.minNet, q?.maxNet);
-                const tNetText = formatEstimateNetRange(t?.minNet, t?.maxNet);
-                const allHitText = formatEstimateNetRange(allHit?.minNet, allHit?.maxNet);
-
-                const estBuyReason = estBuyText === '-' ? (warningText || 'Estimated purchase is unavailable.') : warningText;
                 const winReason = winNetText === '-' ? estimateValueReason(estimate, 'winNet') : warningText;
-                const qReason = qNetText === '-' ? estimateValueReason(estimate, 'quinellaNet') : warningText;
-                const tReason = tNetText === '-' ? estimateValueReason(estimate, 'trioNet') : warningText;
-                const allHitReason = allHitText === '-' ? estimateValueReason(estimate, 'allHitNet') : warningText;
 
                 html += `
                 <div class="bet-estimate-inline">
-                    <span class="bet-estimate-chip"${chipTitleAttr(estBuyReason)}>Est Buy ${escapeHtml(estBuyText)}</span>
                     <span class="bet-estimate-chip ${winNetClass}"${chipTitleAttr(winReason)}>◎ Net ${escapeHtml(winNetText)}</span>
-                    <span class="bet-estimate-chip"${chipTitleAttr(qReason)}>Q Net ${escapeHtml(qNetText)}</span>
-                    <span class="bet-estimate-chip"${chipTitleAttr(tReason)}>T Net ${escapeHtml(tNetText)}</span>
-                    <span class="bet-estimate-chip ${allHitClass}"${chipTitleAttr(allHitReason)}>All Hit ${escapeHtml(allHitText)}</span>
                 </div>`;
             } else if (!raceCard.orepro && raceCard.betEstimate?.data?.status === 'error') {
                 const errMsg = raceCard.betEstimate?.data?.message || 'Estimate unavailable';
@@ -4502,11 +4541,9 @@ function buildRacecourseCheatHtml(targetDate) {
 
             html += `</div>`;
             html += `</div>`;
-        });
-
-        html += `</div>`;
     });
 
+    html += `</div>`;
     return html;
 }
 
@@ -5634,7 +5671,9 @@ function renderLiveViewPanel() {
     const date = String(currentActiveDate || '').trim();
     const timeline = globalDateTimelineByDate[date] || '';
     sidebarTitle.textContent = `By Racecourse · ${date || 'No day selected'}`;
-    sidebarDisplay.innerHTML = buildRacecourseCheatHtml(date);
+    sidebarDisplay.innerHTML = '';
+    const mainRaces = document.getElementById('voting-races-main');
+    if (mainRaces) mainRaces.innerHTML = buildRacecourseCheatHtml(date);
     mainTitle.textContent = `OrePro Companion · ${date || 'No day selected'}`;
 
     if (winningVotesFocusEnabled) {
@@ -5647,6 +5686,18 @@ function renderLiveViewPanel() {
     } else {
         recapPanel.style.display = 'none';
         recapPanel.innerHTML = '';
+    }
+
+    const dayTotalEl = document.getElementById('voting-day-total');
+    if (dayTotalEl) {
+        const dayTotalHtml = buildDayTotalNetHtml(date);
+        if (dayTotalHtml) {
+            dayTotalEl.style.display = 'flex';
+            dayTotalEl.innerHTML = dayTotalHtml;
+        } else {
+            dayTotalEl.style.display = 'none';
+            dayTotalEl.innerHTML = '';
+        }
     }
 
     refreshBetEstimatesForDate(date);
