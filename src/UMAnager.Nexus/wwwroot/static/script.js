@@ -6447,6 +6447,7 @@ async function loadOrchestratorSettings() {
         set('setting-discord-webhook-url',        s.discord_webhook_url);
         set('setting-orepro-session-cookie',      s.orepro_session_cookie);
         set('setting-orepro-user-agent',          s.orepro_user_agent);
+        set('setting-betEstimateStake',           s.bet_estimate_stake_yen ?? '100');
 
         // Checkbox for "navigate to bet_complete.html after submit"
         const navCb = document.getElementById('setting-orepro-nav-to-complete');
@@ -6487,6 +6488,14 @@ async function testOreProCookie() {
     } catch (e) {
         alert(`OrePro probe failed: ${e.message}`);
     }
+}
+
+async function saveBetEstimateStake(value) {
+    const n = parseInt(value, 10);
+    const clean = (Number.isFinite(n) && n >= 100) ? String(n) : '100';
+    await saveOrchestratorSetting('bet_estimate_stake_yen', clean);
+    // Force a re-estimate so chips reflect the new stake immediately.
+    try { await reEstimateActiveDay(); } catch (_) { /* fine */ }
 }
 
 async function saveOrchestratorSetting(key, value) {

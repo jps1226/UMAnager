@@ -54,10 +54,12 @@ public sealed class RacesController : ControllerBase
     }
 
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
+    private readonly Services.SettingsService _settings;
 
-    public RacesController(IDbContextFactory<AppDbContext> dbFactory)
+    public RacesController(IDbContextFactory<AppDbContext> dbFactory, Services.SettingsService settings)
     {
         _dbFactory = dbFactory;
+        _settings = settings;
     }
 
     [HttpGet]
@@ -352,6 +354,95 @@ public sealed class RacesController : ControllerBase
     [HttpPost("prefetch/apply")]
     public IActionResult PrefetchApply() => Ok(new { status = "not_implemented" });
 
+    public sealed record BetEstimateItem(string race_id, int honmei_post, int[] box_posts);
+    public sealed record BetEstimateRequest(BetEstimateItem[] races);
+
     [HttpPost("bet-estimate")]
-    public IActionResult BetEstimate() => Ok(new { estimates = new { } });
+    public async Task<IActionResult> BetEstimate([FromBody] BetEstimateRequest body)
+    {
+        if (body?.races == null || body.races.Length == 0)
+            return Ok(new { estimates = new Dictionary<string, object>() });
+
+        var stake = await _settings.GetIntAsync(Services.SettingsService.Keys.BetEstimateStakeYen,
+                                                Services.SettingsService.Defaults.BetEstimateStakeYen);
+        if (stake <= 0) stake = Services.SettingsService.Defaults.BetEstimateStakeYen;
+
+        var raceIds = body.races.Select(r => r.race_id).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList();
+        using var db = await _dbFactory.CreateDbContextAsync();
+        var entries = await db.RaceEntries.AsNoTracking()
+            .Where(e => raceIds.Contains(e.RaceId))
+            .Select(e => new { e.RaceId, e.PostPosition, e.Odds })
+            .ToListAsync();
+        var byRace = entries.GroupBy(e => e.RaceId!)
+            .ToDictionary(g => g.Key, g => g.ToDictionary(e => e.PostPosition ?? 0, e => e.Odds));
+
+        var estimates = new Dictionary<string, object>(body.races.Length);
+        foreach (var item in body.races)
+        {
+            if (string.IsNullOrWhiteSpace(item.race_id)) continue;
+            var boxN = item.box_posts?.Length ?? 0;
+            var qTickets = boxN >= 2 ? boxN * (boxN - 1) / 2 : 0;
+            var tTickets = boxN >= 3 ? boxN * (boxN - 1) * (boxN - 2) / 6 : 0;
+            var totalTickets = 1 + qTickets + tTickets;
+            var purchaseTotal = stake * totalTickets;
+
+            double? winOdds = null;
+            if (byRace.TryGetValue(item.race_id, out var postMap)
+                && postMap.TryGetValue(item.honmei_post, out var od)
+                && od.HasValue && od.Value > 0)
+            {
+                winOdds = (double)od.Value;
+            }
+
+            object winObj;
+            if (winOdds.HasValue)
+            {
+                var winPayout = stake * winOdds.Value;
+                winObj = new
+                {
+                    odds    = winOdds.Value,
+                    payout  = (int)Math.Round(winPayout),
+                    net     = (int)Math.Round(winPayout - purchaseTotal),
+                };
+            }
+            else
+            {
+                winObj = new { odds = (double?)null, payout = (int?)null, net = (int?)null };
+            }
+
+            var warnings = new List<string> { "Quinella and Trio odds are not yet ingested — only the Win leg is computed." };
+
+            estimates[item.race_id] = new
+            {
+                status   = "partial",
+                raceId   = item.race_id,
+                purchase = new { total = purchaseTotal, tickets = totalTickets, stake },
+                win      = winObj,
+                quinellaBox = new
+                {
+                    tickets         = qTickets,
+                    resolvedTickets = 0,
+                    missingTickets  = qTickets,
+                    minPayout       = (int?)null,
+                    maxPayout       = (int?)null,
+                    minNet          = (int?)null,
+                    maxNet          = (int?)null,
+                },
+                trioBox = new
+                {
+                    tickets         = tTickets,
+                    resolvedTickets = 0,
+                    missingTickets  = tTickets,
+                    minPayout       = (int?)null,
+                    maxPayout       = (int?)null,
+                    minNet          = (int?)null,
+                    maxNet          = (int?)null,
+                },
+                allHit  = new { minNet = (int?)null, maxNet = (int?)null },
+                warnings,
+                message = "Q Box / T Box / All Hit pending O2/O3 odds ingest.",
+            };
+        }
+        return Ok(new { estimates });
+    }
 }

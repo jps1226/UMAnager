@@ -27,6 +27,7 @@ public sealed class SettingsController : ControllerBase
         SettingsService.Keys.OreProUserAgent,
         SettingsService.Keys.OreProNavToCompleteAfterSubmit,
         SettingsService.Keys.DisplayLocalTime,
+        SettingsService.Keys.BetEstimateStakeYen,
     };
 
     [HttpGet]

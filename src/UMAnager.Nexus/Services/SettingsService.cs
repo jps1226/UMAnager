@@ -43,6 +43,10 @@ public sealed class SettingsService
         // AM/PM (e.g. "8:55 PM ET") instead of the default JST 24h ("09:55"). The clean_date
         // and sort_time fields are unchanged; only the display string is converted.
         public const string DisplayLocalTime = "display_local_time";
+
+        // Int (yen) — per-ticket stake used by the voting-tab bet estimator. Total purchase
+        // for a 4-mark race = stake × (1 Win + C(n,2) Q + C(n,3) T) tickets. JRA standard is ¥100.
+        public const string BetEstimateStakeYen = "bet_estimate_stake_yen";
     }
 
     public static readonly TimeSpan LiveOddsHardFloor = TimeSpan.FromMinutes(5);
@@ -58,6 +62,7 @@ public sealed class SettingsService
         public const string             OreProUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
         public const string             OreProNavToCompleteAfterSubmit = "false";
         public const string             DisplayLocalTime               = "false";
+        public const int                BetEstimateStakeYen            = 100;
     }
 
     private readonly IDbContextFactory<AppDbContext> _contextFactory;
@@ -134,6 +139,7 @@ public sealed class SettingsService
         AddIfMissing(Keys.OreProUserAgent,         Defaults.OreProUserAgent);
         AddIfMissing(Keys.OreProNavToCompleteAfterSubmit, Defaults.OreProNavToCompleteAfterSubmit);
         AddIfMissing(Keys.DisplayLocalTime,               Defaults.DisplayLocalTime);
+        AddIfMissing(Keys.BetEstimateStakeYen,            Defaults.BetEstimateStakeYen.ToString());
 
         await ctx.SaveChangesAsync();
     }
