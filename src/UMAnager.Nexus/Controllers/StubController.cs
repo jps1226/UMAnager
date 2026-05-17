@@ -44,12 +44,7 @@ public sealed class StubController : ControllerBase
     public IActionResult DayDelete() => Ok(new { status = "not_implemented" });
 
     // ── OrePro ───────────────────────────────────────────────────────────────
-
-    [HttpPost("api/orepro/companion/window")]
-    public IActionResult OreProWindow() => Ok(new { status = "not_implemented", message = "" });
-
-    [HttpPost("api/orepro/votes/apply")]
-    public IActionResult OreProApply() => Ok(new { status = "not_implemented", message = "", results = Array.Empty<object>() });
+    // companion/window and votes/apply are now handled by OreProController.
 
     [HttpGet("api/orepro/results/last")]
     public IActionResult OreProResultsLast() => Ok(new { status = "no_data" });

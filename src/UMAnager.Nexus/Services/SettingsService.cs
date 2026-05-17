@@ -26,6 +26,18 @@ public sealed class SettingsService
 
         // String — Discord webhook URL for phase-change and bet-win notifications. Nullable.
         public const string DiscordWebhookUrl = "discord_webhook_url";
+
+        // String — Raw "Cookie:" header value from the user's logged-in OrePro browser session.
+        // User copies this from DevTools after logging in to orepro.netkeiba.com. Nullable.
+        public const string OreProSessionCookie = "orepro_session_cookie";
+
+        // String — User-Agent string to match the browser where the cookie was captured.
+        // Some sites bind sessions to UA fingerprints; matching it avoids stale-session errors.
+        public const string OreProUserAgent = "orepro_user_agent";
+
+        // Bool ("true"/"false") — after a successful Apply+Submit, navigate the popup
+        // to /bet/bet_complete.html?race_id=... to show the receipt page. Mirrors v1 UX.
+        public const string OreProNavToCompleteAfterSubmit = "orepro_nav_to_complete_after_submit";
     }
 
     public static readonly TimeSpan LiveOddsHardFloor = TimeSpan.FromMinutes(5);
@@ -37,6 +49,9 @@ public sealed class SettingsService
         public static readonly TimeSpan OddsPollIntervalLive     = TimeSpan.FromMinutes(5);
         public const int                LiveWindowMinutes        = 90;
         public const string?            DiscordWebhookUrl        = null;
+        public const string?            OreProSessionCookie      = null;
+        public const string             OreProUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        public const string             OreProNavToCompleteAfterSubmit = "false";
     }
 
     private readonly IDbContextFactory<AppDbContext> _contextFactory;
@@ -109,6 +124,9 @@ public sealed class SettingsService
         AddIfMissing(Keys.OddsPollIntervalLive,    Defaults.OddsPollIntervalLive.ToString());
         AddIfMissing(Keys.LiveWindowMinutes,       Defaults.LiveWindowMinutes.ToString());
         AddIfMissing(Keys.DiscordWebhookUrl,       Defaults.DiscordWebhookUrl);
+        AddIfMissing(Keys.OreProSessionCookie,     Defaults.OreProSessionCookie);
+        AddIfMissing(Keys.OreProUserAgent,         Defaults.OreProUserAgent);
+        AddIfMissing(Keys.OreProNavToCompleteAfterSubmit, Defaults.OreProNavToCompleteAfterSubmit);
 
         await ctx.SaveChangesAsync();
     }

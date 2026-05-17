@@ -415,6 +415,27 @@
                 </div>
 
                 <div class="settings-card settings-card-full">
+                    <h4 class="settings-section-title">🎫 OrePro Auto-Bet</h4>
+                    <div class="settings-helper-text">Server-side bet application via your OrePro session cookie. <b>How to capture:</b> log in to <a href="https://orepro.netkeiba.com/" target="_blank" rel="noopener">orepro.netkeiba.com</a> in any browser → open DevTools (F12) → Application tab → Cookies → orepro.netkeiba.com → right-click any cookie → "Copy as cURL" — then extract the long `cookie:` header value, OR open the Network tab, click any request to orepro.netkeiba.com, find Request Headers → Cookie, copy the entire value. Paste below. Re-paste whenever OrePro logs you out.</div>
+                    <div class="settings-formula-grid" style="grid-template-columns: 1fr;">
+                        <label title="The full Cookie request header value from a logged-in OrePro session.">OrePro session cookie</label>
+                        <textarea id="setting-orepro-session-cookie" rows="3" placeholder="name1=value1; name2=value2; ..." onblur="saveOrchestratorSetting('orepro_session_cookie', this.value)" class="settings-number-input" style="max-width:100%; font-family:monospace; font-size:11px;"></textarea>
+
+                        <label title="User-Agent header to match the browser where the cookie was captured. The default is usually fine.">User-Agent</label>
+                        <input type="text" id="setting-orepro-user-agent" placeholder="Mozilla/5.0 ..." onblur="saveOrchestratorSetting('orepro_user_agent', this.value)" class="settings-number-input" style="max-width:100%;">
+                    </div>
+                    <div style="margin-top:10px;">
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;" title="After a successful Apply+Submit, jump the OrePro popup to /bet/bet_complete.html so you see the receipt page (matches the legacy UX).">
+                            <input type="checkbox" id="setting-orepro-nav-to-complete" onchange="saveOrchestratorSetting('orepro_nav_to_complete_after_submit', this.checked ? 'true' : 'false'); globalOreProSettings.orepro_nav_to_complete_after_submit = this.checked ? 'true' : 'false';">
+                            <span>Navigate popup to receipt page after submit</span>
+                        </label>
+                    </div>
+                    <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+                        <button onclick="testOreProCookie()" class="settings-reset-btn">🔌 Test OrePro Session</button>
+                    </div>
+                </div>
+
+                <div class="settings-card settings-card-full">
                     <h4 class="settings-section-title">Race Table Columns</h4>
                     <div class="settings-helper-text settings-helper-text-tight">Toggle visibility and move columns up/down. This applies globally.</div>
                     <div id="setting-race-columns" class="setting-columns-wrap"></div>
@@ -426,6 +447,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260516-2"></script>
+<script src="/static/script.js?v=20260516-10"></script>
 </body>
 </html>

@@ -33,6 +33,7 @@ builder.Services.AddSingleton<ResultsFetchService>();
 builder.Services.AddSingleton<LiveBroadcastService>();
 builder.Services.AddHttpClient(nameof(DiscordNotifier));
 builder.Services.AddSingleton<IDiscordNotifier, DiscordNotifier>();
+builder.Services.AddSingleton<OreProVoteApplyService>();
 builder.Services.AddSingleton<LiveOrchestrator>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveOrchestrator>());
 builder.Services.AddSingleton<RaceCardRefreshService>();

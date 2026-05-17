@@ -434,6 +434,11 @@ async function init() {
     const configRes = await fetch('/api/config');
     appConfig = await configRes.json();
 
+    // Load OrePro per-race apply state so the Apply button can reflect history.
+    await loadOreProApplyState();
+    // Load OrePro behavior settings (e.g. navigate-to-receipt-after-submit).
+    await loadOreProSettingsLite();
+
     // Restore persisted race-level estimate cache to avoid recomputing every view switch.
     raceBetEstimateCache = loadStoredBetEstimateCache();
     
@@ -4190,7 +4195,7 @@ function buildRacecourseCheatHtml(targetDate) {
             const isCollapsed = !!sidebarRaceCollapseState[raceCard.r_id];
             const arrow = isCollapsed ? '▶' : '▼';
             html += `<div class="export-race-card voting-race-card${isCollapsed ? ' is-collapsed' : ''}" data-rid="${escapeHtml(raceCard.r_id)}">`;
-            html += `<div class="export-race-title voting-race-title" onclick="toggleVotingSidebarRace('${escapeHtml(raceCard.r_id)}')" title="Click to collapse/expand this race"><span class="voting-race-arrow">${arrow}</span><span class="voting-race-title-text">🕒 ${escapeHtml(raceCard.time)} | Race ${raceCard.raceNum}: ${escapeHtml(raceCard.raceName || '')} ${raceCard.winBadgesHtml}</span><button class="toolbar-btn toolbar-btn-muted voting-race-apply-btn" onclick="applySingleRaceVotesToOrePro(event, '${escapeHtml(raceCard.r_id)}')" title="Apply only this race to OrePro">Apply</button></div>`;
+            html += `<div class="export-race-title voting-race-title" onclick="toggleVotingSidebarRace('${escapeHtml(raceCard.r_id)}')" title="Click to collapse/expand this race"><span class="voting-race-arrow">${arrow}</span><span class="voting-race-title-text">🕒 ${escapeHtml(raceCard.time)} | Race ${raceCard.raceNum}: ${escapeHtml(raceCard.raceName || '')} ${raceCard.winBadgesHtml}${getOreProApplyBadge(raceCard.r_id)}</span><button class="toolbar-btn toolbar-btn-muted voting-race-apply-btn" onclick="applySingleRaceVotesToOrePro(event, '${escapeHtml(raceCard.r_id)}')" title="Apply only this race to OrePro">Apply</button></div>`;
             html += `<div class="voting-race-body">`;
 
             if (raceCard.orepro) {
@@ -4313,6 +4318,41 @@ function toggleVotingOrePro() {
 let oreproCompanionWindow = null;
 const OREPRO_COMPANION_WINDOW_NAME = 'OreProCompanionWindow';
 let oreproLastSyncPayload = null;
+
+// Per-race OrePro apply/submit state, persisted server-side. Shape:
+// { "<jraRaceId>": { appliedAt, submitted, submittedAt, marksCount, lastMessage } }
+let globalOreProApplyState = {};
+
+// Subset of /api/settings that the frontend cares about for OrePro behavior.
+// Kept in sync via loadOrchestratorSettings (called when Settings modal opens) and
+// loadOreProSettingsLite at page init.
+let globalOreProSettings = {};
+
+async function loadOreProSettingsLite() {
+    try {
+        const res = await fetch('/api/settings');
+        if (!res.ok) return;
+        const data = await res.json();
+        globalOreProSettings = data?.settings || {};
+    } catch (_) { /* fine — defaults will be used */ }
+}
+
+async function loadOreProApplyState() {
+    try {
+        const res = await fetch('/api/orepro/apply-state');
+        if (!res.ok) return;
+        const data = await res.json();
+        globalOreProApplyState = (data && typeof data === 'object') ? data : {};
+    } catch (_) { globalOreProApplyState = {}; }
+}
+
+function getOreProApplyBadge(raceId) {
+    const st = globalOreProApplyState?.[raceId];
+    if (!st) return '';
+    if (st.submitted)  return ` <span class="orepro-apply-badge is-submitted" title="Submitted to OrePro at ${escapeHtml(st.submittedAt || '')}">📤 Submitted</span>`;
+    if (st.appliedAt)  return ` <span class="orepro-apply-badge is-applied"   title="Marks applied to OrePro cart at ${escapeHtml(st.appliedAt)} but not submitted">📝 Applied</span>`;
+    return '';
+}
 let raceBetEstimateCache = {};
 
 const MAIN_BET_SYMBOLS = ["◎", "〇", "▲", "△"];
@@ -4344,23 +4384,71 @@ function isOreProCompanionOpen() {
     return !!(oreproCompanionWindow && !oreproCompanionWindow.closed);
 }
 
-async function controlOreProCompanion(action) {
+// JRA-VAN race_ids are 16 chars (YYYY+MMDD+TT+KK+DD+RR); netkeiba/OrePro use 12 chars
+// without the MMDD. Backend converts internally for HTTP calls; we mirror it here so
+// the popup can deep-link to the right shutuba page.
+function jraToOreproRaceId(raceId) {
+    const s = String(raceId || '').trim();
+    return s.length === 16 ? s.slice(0, 4) + s.slice(8) : s;
+}
+
+async function controlOreProCompanion(action, raceIdForDeepLink) {
     const normalizedAction = action === 'focus' ? 'focus' : 'open';
 
+    // Compute target URL. If we were given a raceId (per-race Apply path), deep-link
+    // straight to that race's shutuba page; otherwise open the generic race list.
+    const oreproRid = jraToOreproRaceId(raceIdForDeepLink || '');
+    const targetUrl = oreproRid
+        ? `https://orepro.netkeiba.com/bet/shutuba.html?race_id=${encodeURIComponent(oreproRid)}`
+        : 'https://orepro.netkeiba.com/bet/race_list.html';
+
+    // 1) Pop the OrePro window in THIS browser (client-side). The backend rewrite
+    //    is purely server-side HTTP via session cookie, so the popup is just visual —
+    //    it lets you watch OrePro update as Apply Votes pushes marks into your cart.
+    let popupOk = false;
+    try {
+        if (isOreProCompanionOpen()) {
+            try {
+                // Navigate the existing window to the target race when we have one.
+                if (oreproRid) {
+                    try { oreproCompanionWindow.location.href = targetUrl; } catch (_) {}
+                }
+                oreproCompanionWindow.focus();
+            } catch (_) {}
+            popupOk = true;
+        } else {
+            const features = 'width=1200,height=850,menubar=no,toolbar=no,location=yes,status=no,resizable=yes';
+            oreproCompanionWindow = window.open(targetUrl, OREPRO_COMPANION_WINDOW_NAME, features);
+            popupOk = !!(oreproCompanionWindow && !oreproCompanionWindow.closed);
+        }
+    } catch (_) { popupOk = false; }
+
+    // 2) Verify the backend has a session cookie configured. Marks won't apply without one.
+    let backend = null;
     try {
         const res = await fetch('/api/orepro/companion/window', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: normalizedAction })
         });
-        const payload = await res.json();
-        const status = payload?.status === 'ok' ? 'ok' : 'warn';
-        setOreProSessionStatus(payload?.message || 'OrePro companion request completed.', status);
-        return payload;
+        backend = await res.json();
     } catch (err) {
-        setOreProSessionStatus(`OrePro companion request failed: ${err?.message || err}`, 'error');
+        setOreProSessionStatus(`OrePro backend check failed: ${err?.message || err}`, 'error');
         return null;
     }
+
+    if (!popupOk) {
+        setOreProSessionStatus(
+            'Popup blocked by your browser. Allow popups for this page, then click Open OrePro again. ' +
+            `Backend: ${backend?.message || ''}`,
+            'warn'
+        );
+        return backend;
+    }
+
+    const status = backend?.status === 'ok' ? 'ok' : 'warn';
+    setOreProSessionStatus(backend?.message || 'OrePro companion window opened.', status);
+    return backend;
 }
 
 async function openOreProCompanion() {
@@ -4578,7 +4666,7 @@ async function autoBetActiveDay() {
 
     const riskVal = getCurrentAutoPickRisk();
     const confirmed = window.confirm(
-        `Auto-pick all remaining unlocked races for ${date} using Risk ${riskVal}, then apply those marks to OrePro?\n\nThis only updates OrePro marks/cart state and does not submit paid bets.`
+        `Auto-pick all remaining unlocked races for ${date} using Risk ${riskVal}?\n\nThis only updates marks within UMAnager. Nothing is sent to OrePro until you click Apply Votes.`
     );
     if (!confirmed) return;
 
@@ -4627,19 +4715,17 @@ async function autoBetActiveDay() {
             if (currentMainView === 'voting') renderLiveViewPanel();
         }
 
-        const payload = buildOreProApplyVotesPayload(date);
-        if (!payload.races.length) {
-            const lockNote = skippedLocked ? ` Skipped ${skippedLocked} locked race(s).` : '';
-            setOreProSessionStatus(`Auto-pick finished, but there were no valid marks to apply.${lockNote}`, 'warn');
+        // Auto-bet stays local to UMAnager — we don't push to OrePro here. Use Apply Votes
+        // afterwards (optionally tweak marks first) to send everything across.
+        const lockNote = skippedLocked ? ` Skipped ${skippedLocked} locked race(s).` : '';
+        if (!changedRaceIds.length) {
+            setOreProSessionStatus(`Auto-pick finished but produced no new marks for ${date}.${lockNote}`, 'warn');
             return;
         }
-
         setOreProSessionStatus(
-            `Auto-picked ${payload.races.length} race(s) for ${date} at Risk ${riskVal}.${skippedLocked ? ` Skipped ${skippedLocked} locked race(s).` : ''}`,
+            `Auto-picked ${changedRaceIds.length} race(s) for ${date} at Risk ${riskVal}. Click Apply Votes to send them to OrePro.${lockNote}`,
             'info'
         );
-
-        await applyVotesToOrePro();
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -4648,18 +4734,18 @@ async function autoBetActiveDay() {
     }
 }
 
+/// Apply Votes (bulk) — sends each voted race to OrePro one by one, with live progress
+/// in the results panel. Each per-race call uses submit_after_apply so the bet is both
+/// staged and committed in OrePro. This keeps the platforms separated: Auto Bet Day only
+/// updates marks within UMAnager; Apply Votes is the explicit push to OrePro.
 async function applyVotesToOrePro() {
-    const payload = buildOreProApplyVotesPayload(currentActiveDate);
-    payload.submit_after_apply = false;
-    payload.go_next_race = false;
-
-    if (!payload.races.length) {
+    const dayPayload = buildOreProApplyVotesPayload(currentActiveDate);
+    if (!dayPayload.races.length) {
         setOreProSessionStatus('No valid ◎〇▲△ marks found for the active day to apply.', 'warn');
         return;
     }
 
     setOreProSessionStatus(`Preparing OrePro companion session...`, 'info');
-
     const companion = await controlOreProCompanion('open');
     if (!companion || companion.status !== 'ok') {
         setOreProSessionStatus(
@@ -4669,48 +4755,67 @@ async function applyVotesToOrePro() {
         return;
     }
 
-    setOreProSessionStatus(`Applying marks to OrePro for ${payload.races.length} race(s)...`, 'info');
-
-    try {
-        const res = await fetch('/api/orepro/votes/apply', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-
-        const okCount = Array.isArray(data?.results)
-            ? data.results.filter(r => r?.status === 'ok').length
-            : 0;
-        const totalCount = Array.isArray(data?.results) ? data.results.length : 0;
-        const mode = okCount > 0 ? 'ok' : 'warn';
-
-        let serverMessage = data?.message || `Applied votes for ${okCount}/${totalCount} race(s).`;
-        try {
-            const nested = JSON.parse(serverMessage || '{}');
-            if (nested?.message) serverMessage = nested.message;
-        } catch (_) {}
-
-        setOreProSessionStatus(serverMessage, mode);
-
-        const out = document.getElementById('orepro-sync-results');
-        if (out && Array.isArray(data?.results)) {
-            const lines = data.results.map(r => {
-                const rid = escapeHtml(String(r?.raceId || '-'));
-                const stat = escapeHtml(String(r?.status || 'unknown'));
-                const msg = escapeHtml(String(r?.message || ''));
-                return `<div class="orepro-sync-list">[${stat}] race ${rid}: ${msg}</div>`;
-            }).join('');
-
-            out.innerHTML = `
-                <div class="orepro-sync-title">Apply Votes (Marks Only)</div>
-                <div class="orepro-sync-list">Requested ${totalCount} race(s), succeeded ${okCount}.</div>
-                ${lines}
-            `;
-        }
-    } catch (err) {
-        setOreProSessionStatus(`Failed applying votes: ${err?.message || err}`, 'error');
+    const total = dayPayload.races.length;
+    const out = document.getElementById('orepro-sync-results');
+    const lineEls = [];
+    if (out) {
+        out.innerHTML = `
+            <div class="orepro-sync-title">Apply Votes (one race at a time)</div>
+            <div id="orepro-bulk-progress" class="orepro-sync-list">Starting 0/${total}...</div>
+            <div id="orepro-bulk-lines"></div>
+        `;
     }
+
+    let okCount = 0;
+    for (let i = 0; i < total; i++) {
+        const race = dayPayload.races[i];
+        const raceId = String(race?.race_id || '').trim();
+        const progressEl = document.getElementById('orepro-bulk-progress');
+        if (progressEl) progressEl.textContent = `Sending ${i + 1}/${total} — race ${raceId}...`;
+        setOreProSessionStatus(`Applying to OrePro ${i + 1}/${total} — race ${raceId}...`, 'info');
+
+        const singleRacePayload = {
+            races: [race],
+            dry_run: false,
+            force_refresh: true,
+            submit_after_apply: true,
+            go_next_race: false,
+        };
+
+        let lineText = '';
+        let lineStatus = 'error';
+        try {
+            const res = await fetch('/api/orepro/votes/apply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(singleRacePayload)
+            });
+            const data = await res.json();
+            const result = Array.isArray(data?.results) ? data.results[0] : null;
+            lineStatus = String(result?.status || 'unknown');
+            lineText = String(result?.message || data?.message || '(no message)');
+            if (lineStatus === 'ok') okCount += 1;
+        } catch (err) {
+            lineText = `Failed: ${err?.message || err}`;
+        }
+
+        const linesContainer = document.getElementById('orepro-bulk-lines');
+        if (linesContainer) {
+            const lineDiv = document.createElement('div');
+            lineDiv.className = 'orepro-sync-list';
+            lineDiv.textContent = `[${lineStatus}] race ${raceId}: ${lineText}`;
+            linesContainer.appendChild(lineDiv);
+        }
+    }
+
+    // Refresh apply-state badges and the voting sidebar once at the end.
+    await loadOreProApplyState();
+    try { renderLiveViewPanel(); } catch (_) {}
+
+    const finalMsg = `Apply Votes finished: ${okCount}/${total} race(s) submitted to OrePro.`;
+    setOreProSessionStatus(finalMsg, okCount === total ? 'ok' : (okCount > 0 ? 'warn' : 'error'));
+    const progressEl = document.getElementById('orepro-bulk-progress');
+    if (progressEl) progressEl.textContent = finalMsg;
 }
 
 async function applySingleRaceVotesToOrePro(event, raceId) {
@@ -4730,7 +4835,8 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
 
     setOreProSessionStatus(`Preparing OrePro companion session...`, 'info');
 
-    const companion = await controlOreProCompanion('open');
+    // Pass raceId so the popup deep-links to this specific race's shutuba page.
+    const companion = await controlOreProCompanion('open', raceId);
     if (!companion || companion.status !== 'ok') {
         setOreProSessionStatus(
             companion?.message || 'Could not initialize companion OrePro session. Click Open OrePro and retry.',
@@ -4766,15 +4872,44 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
 
         setOreProSessionStatus(serverMessage, mode);
 
+        // Refresh persistent apply-state badges. After this and a re-render, the race
+        // title will show "📝 Applied" or "📤 Submitted".
+        await loadOreProApplyState();
+        try { renderLiveViewPanel(); } catch (_) {}
+
         const out = document.getElementById('orepro-sync-results');
         if (out && result) {
             const rid = escapeHtml(String(result?.raceId || raceId));
             const stat = escapeHtml(String(result?.status || 'unknown'));
             const msg = escapeHtml(String(result?.message || ''));
+            // Diagnostic dump: show what we sent and what OrePro returned. While we're
+            // still hunting the cart-doesn't-apply issue this is invaluable.
+            const resolvedDump = result?.resolved ? JSON.stringify(result.resolved, null, 0) : '(none)';
+            const cartDump = result?.cartResponse ? JSON.stringify(result.cartResponse, null, 0) : '(no cartResponse)';
+            const submitDump = result?.submitFlow ? JSON.stringify(result.submitFlow, null, 0) : '(submit not requested)';
+            const preview = Array.isArray(result?.betPreviewLines) ? result.betPreviewLines.join(' | ') : '';
             out.innerHTML = `
                 <div class="orepro-sync-title">Apply Votes / Submit / Next (Single Race)</div>
                 <div class="orepro-sync-list">[${stat}] race ${rid}: ${msg}</div>
+                <details style="margin-top:6px; font-size:11px; font-family:monospace;">
+                    <summary>diagnostics</summary>
+                    <div style="margin:4px 0;"><b>Resolved (post→seq):</b> ${escapeHtml(resolvedDump)}</div>
+                    <div style="margin:4px 0;"><b>cartResponse:</b> ${escapeHtml(cartDump)}</div>
+                    <div style="margin:4px 0;"><b>submitFlow:</b> ${escapeHtml(submitDump)}</div>
+                    ${preview ? `<div style="margin:4px 0;"><b>preview:</b> ${escapeHtml(preview)}</div>` : ''}
+                </details>
             `;
+        }
+
+        // If the user wants the v1-style "go to receipt page" UX, navigate the popup to
+        // bet_complete.html after a successful submit.
+        const submitOk = result?.submitFlow?.submitStatus === 'ok';
+        const navAfter = String(globalOreProSettings?.orepro_nav_to_complete_after_submit || 'false').toLowerCase() === 'true';
+        if (submitOk && navAfter && isOreProCompanionOpen()) {
+            try {
+                const oreproRid = jraToOreproRaceId(raceId);
+                oreproCompanionWindow.location.href = `https://orepro.netkeiba.com/bet/bet_complete.html?race_id=${encodeURIComponent(oreproRid)}`;
+            } catch (_) { /* popup may be closed/cross-origin */ }
         }
 
         if (collapseSucceeded) {
@@ -6193,8 +6328,35 @@ async function loadOrchestratorSettings() {
         set('setting-odds-poll-interval-live',    s.odds_poll_interval_live);
         set('setting-live-window-minutes',        s.live_window_minutes);
         set('setting-discord-webhook-url',        s.discord_webhook_url);
+        set('setting-orepro-session-cookie',      s.orepro_session_cookie);
+        set('setting-orepro-user-agent',          s.orepro_user_agent);
+
+        // Checkbox for "navigate to bet_complete.html after submit"
+        const navCb = document.getElementById('setting-orepro-nav-to-complete');
+        if (navCb) navCb.checked = String(s.orepro_nav_to_complete_after_submit || 'false').toLowerCase() === 'true';
+
+        // Keep the lightweight global cache in sync so the apply flow sees fresh values.
+        globalOreProSettings = s;
     } catch (e) {
         console.warn('[Orchestrator] loadSettings failed', e);
+    }
+}
+
+async function testOreProCookie() {
+    const cookie = (document.getElementById('setting-orepro-session-cookie') || {}).value || '';
+    const ua     = (document.getElementById('setting-orepro-user-agent')     || {}).value || '';
+    await saveOrchestratorSetting('orepro_session_cookie', cookie);
+    if (ua) await saveOrchestratorSetting('orepro_user_agent', ua);
+    try {
+        const res = await fetch('/api/orepro/companion/window', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'open' })
+        });
+        const data = await res.json();
+        alert(`${data.status}: ${data.message}`);
+    } catch (e) {
+        alert(`OrePro probe failed: ${e.message}`);
     }
 }
 

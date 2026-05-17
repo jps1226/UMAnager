@@ -31,6 +31,9 @@ memory/
 # All markdown — kept local-only (specs, logs, Q&A reference)
 *.md
 
+# Browser HAR captures — may contain session cookies / auth tokens
+*.har
+
 # OS
 .DS_Store
 Thumbs.db

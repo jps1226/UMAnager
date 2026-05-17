@@ -23,6 +23,9 @@ public sealed class SettingsController : ControllerBase
         SettingsService.Keys.OddsPollIntervalLive,
         SettingsService.Keys.LiveWindowMinutes,
         SettingsService.Keys.DiscordWebhookUrl,
+        SettingsService.Keys.OreProSessionCookie,
+        SettingsService.Keys.OreProUserAgent,
+        SettingsService.Keys.OreProNavToCompleteAfterSubmit,
     };
 
     [HttpGet]

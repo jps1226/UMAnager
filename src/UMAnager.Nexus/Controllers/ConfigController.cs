@@ -1,11 +1,20 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using UMAnager.Nexus.Services;
 
 namespace UMAnager.Nexus.Controllers;
 
+/// <summary>
+/// Persists the user's UI configuration (column order, formula weights, sidebar tabs, etc.)
+/// as a single JSON blob in app_state under <c>user_config_blob</c>. GET returns the stored
+/// blob if present, otherwise the built-in defaults.
+/// </summary>
 [ApiController]
 [Route("api/config")]
 public sealed class ConfigController : ControllerBase
 {
+    private const string StateKey = "user_config_blob";
+
     private static readonly object _defaultConfig = new
     {
         ui = new
@@ -55,9 +64,24 @@ public sealed class ConfigController : ControllerBase
         backend = new { dataEngine = "jv" },
     };
 
+    private readonly AppStateService _state;
+    public ConfigController(AppStateService state) => _state = state;
+
     [HttpGet]
-    public IActionResult Get() => Ok(_defaultConfig);
+    public async Task<IActionResult> Get()
+    {
+        var raw = await _state.GetStringAsync(StateKey);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return Ok(_defaultConfig);
+        }
+        return Content(raw, "application/json");
+    }
 
     [HttpPost]
-    public IActionResult Post() => Ok(new { status = "ok" });
+    public async Task<IActionResult> Post([FromBody] JsonElement body)
+    {
+        await _state.SetStringAsync(StateKey, body.GetRawText());
+        return Ok(new { status = "ok" });
+    }
 }
