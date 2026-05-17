@@ -73,9 +73,7 @@ public sealed class DayRecapNotifier
         if (dateKeys.Count == 0) return;
 
         var marks = await LoadMarksAsync();
-        var stake = await _settings.GetIntAsync(SettingsService.Keys.BetEstimateStakeYen,
-                                                SettingsService.Defaults.BetEstimateStakeYen);
-        if (stake <= 0) stake = SettingsService.Defaults.BetEstimateStakeYen;
+        var stakes = await _settings.GetBetStakesAsync();
 
         foreach (var dateKey in dateKeys)
         {
@@ -109,7 +107,7 @@ public sealed class DayRecapNotifier
                 .Select(e => new { e.RaceId, e.HorseId, e.PostPosition, Finish = e.FinishPos!.Value })
                 .ToListAsync(ct);
 
-            var recap = ComputeRecap(date, dateKey, dayRaces.Cast<object>().ToList(), topByRace.Cast<object>().ToList(), marks, stake);
+            var recap = ComputeRecap(date, dateKey, dayRaces.Cast<object>().ToList(), topByRace.Cast<object>().ToList(), marks, stakes);
 
             // Mark the day as recap-evaluated even if there were no marks, so we don't
             // keep computing this every tick for the rest of the week.
@@ -137,7 +135,8 @@ public sealed class DayRecapNotifier
     }
 
     private DayRecap? ComputeRecap(DateTime date, string dateKey, List<object> dayRaces,
-                                   List<object> topByRace, Dictionary<string, string> marks, int stake)
+                                   List<object> topByRace, Dictionary<string, string> marks,
+                                   (int Win, int Quinella, int Trio) stakes)
     {
         // dayRaces: anon { RaceId, TrackCode, RaceNumber, ResultsJson }
         // topByRace: anon { RaceId, HorseId, PostPosition, Finish }
@@ -213,9 +212,11 @@ public sealed class DayRecapNotifier
             }
             catch (JsonException) { /* payouts stay 0 */ }
 
-            // Scale per-¥100 ticket payouts by the operator's chosen stake.
-            var stakeMultiplier = stake / 100.0;
-            var raceWon = (int)Math.Round((winPayout + qPayout + tPayout) * stakeMultiplier);
+            // Scale per-¥100 payouts by each leg's own configured stake.
+            var winYen = (int)Math.Round(winPayout * (stakes.Win      / 100.0));
+            var qYen   = (int)Math.Round(qPayout   * (stakes.Quinella / 100.0));
+            var tYen   = (int)Math.Round(tPayout   * (stakes.Trio     / 100.0));
+            var raceWon = winYen + qYen + tYen;
 
             if (honmeiHit)   honmei++;
             if (quinellaHit) qBox++;
@@ -224,9 +225,9 @@ public sealed class DayRecapNotifier
 
             var trackName = (trackCode != null && TrackNames.TryGetValue(trackCode, out var n)) ? n : (trackCode ?? "?");
             var hitTags = new List<string>();
-            if (honmeiHit)   hitTags.Add($"◎ Win ¥{(int)Math.Round(winPayout * stakeMultiplier):N0}");
-            if (quinellaHit) hitTags.Add($"Q ¥{(int)Math.Round(qPayout * stakeMultiplier):N0}");
-            if (trioHit)     hitTags.Add($"T ¥{(int)Math.Round(tPayout * stakeMultiplier):N0}");
+            if (honmeiHit)   hitTags.Add($"◎ Win ¥{winYen:N0}");
+            if (quinellaHit) hitTags.Add($"Q ¥{qYen:N0}");
+            if (trioHit)     hitTags.Add($"T ¥{tYen:N0}");
             winningLines.Add($"{trackName} R{raceNumber} — {string.Join(" · ", hitTags)}");
         }
 

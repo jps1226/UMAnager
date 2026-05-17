@@ -28,6 +28,9 @@ public sealed class SettingsController : ControllerBase
         SettingsService.Keys.OreProNavToCompleteAfterSubmit,
         SettingsService.Keys.DisplayLocalTime,
         SettingsService.Keys.BetEstimateStakeYen,
+        SettingsService.Keys.BetStakeWinYen,
+        SettingsService.Keys.BetStakeQuinellaYen,
+        SettingsService.Keys.BetStakeTrioYen,
     };
 
     [HttpGet]

@@ -44,9 +44,16 @@ public sealed class SettingsService
         // and sort_time fields are unchanged; only the display string is converted.
         public const string DisplayLocalTime = "display_local_time";
 
-        // Int (yen) — per-ticket stake used by the voting-tab bet estimator. Total purchase
-        // for a 4-mark race = stake × (1 Win + C(n,2) Q + C(n,3) T) tickets. JRA standard is ¥100.
+        // Int (yen) — legacy single-stake fallback. Per-leg keys below override this.
         public const string BetEstimateStakeYen = "bet_estimate_stake_yen";
+
+        // Int (yen) — per-leg stakes matching how the operator actually bets in OrePro.
+        // Win = single-ticket stake on the ◎ horse. Quinella/Trio = stake PER COMBO in
+        // the box (so a 4-mark Q Box = quinellaStake × 6, T Box = trioStake × 4).
+        // Defaults to BetEstimateStakeYen when unset for backward-compat.
+        public const string BetStakeWinYen      = "bet_stake_win_yen";
+        public const string BetStakeQuinellaYen = "bet_stake_quinella_yen";
+        public const string BetStakeTrioYen     = "bet_stake_trio_yen";
     }
 
     public static readonly TimeSpan LiveOddsHardFloor = TimeSpan.FromMinutes(5);
@@ -103,6 +110,25 @@ public sealed class SettingsService
     {
         var raw = await GetStringAsync(key);
         return int.TryParse(raw, out var i) ? i : fallback;
+    }
+
+    /// <summary>
+    /// Per-leg bet stakes. Each leg falls back to the legacy single-stake setting
+    /// then to ¥100 (JRA standard). Used by the voting-tab estimator + DayRecapNotifier
+    /// so calculated winnings reflect how the operator actually bets in OrePro
+    /// (e.g. ¥5000 single Win ticket, ¥500/combo Q+T Box).
+    /// </summary>
+    public async Task<(int Win, int Quinella, int Trio)> GetBetStakesAsync()
+    {
+        var legacy = await GetIntAsync(Keys.BetEstimateStakeYen, Defaults.BetEstimateStakeYen);
+        var win    = await GetIntAsync(Keys.BetStakeWinYen,      legacy);
+        var quin   = await GetIntAsync(Keys.BetStakeQuinellaYen, legacy);
+        var trio   = await GetIntAsync(Keys.BetStakeTrioYen,     legacy);
+        return (
+            win  > 0 ? win  : Defaults.BetEstimateStakeYen,
+            quin > 0 ? quin : Defaults.BetEstimateStakeYen,
+            trio > 0 ? trio : Defaults.BetEstimateStakeYen
+        );
     }
 
     /// <summary>

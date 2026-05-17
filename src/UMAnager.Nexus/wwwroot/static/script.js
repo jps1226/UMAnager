@@ -3864,17 +3864,19 @@ function buildRaceWinBadgesHtml(race) {
     const recap = evaluateRaceRecap(race);
     if (!recap.hasCompleteTop3) return "";
 
-    // Look up actual ¥ payouts from HR data. Per-¥100 ticket; scaled to
-    // configured stake at render time so the label reflects what the
-    // operator would have actually won.
+    // Look up actual ¥ payouts from HR data. Per-¥100 ticket; scaled to the
+    // operator's per-leg stake (win/quinella/trio) so labels reflect what they
+    // actually would have won at their real bet sizing.
     const payouts = lookupRacePayouts(race, recap.ppByRank);
-    const stake = parseFloat(globalOreProSettings?.bet_estimate_stake_yen) || 100;
-    const stakeMul = stake / 100;
-    const fmtYen = (n) => n > 0 ? `¥${Math.round(n * stakeMul).toLocaleString()}` : '';
+    const legacyStake = parseFloat(globalOreProSettings?.bet_estimate_stake_yen) || 100;
+    const winStake = parseFloat(globalOreProSettings?.bet_stake_win_yen)      || legacyStake;
+    const qStake   = parseFloat(globalOreProSettings?.bet_stake_quinella_yen) || legacyStake;
+    const tStake   = parseFloat(globalOreProSettings?.bet_stake_trio_yen)     || legacyStake;
+    const fmtYen = (n, stake) => n > 0 ? `¥${Math.round(n * stake / 100).toLocaleString()}` : '';
 
-    const winYen = fmtYen(payouts.win);
-    const qYen   = fmtYen(payouts.quinella);
-    const tYen   = fmtYen(payouts.trio);
+    const winYen = fmtYen(payouts.win, winStake);
+    const qYen   = fmtYen(payouts.quinella, qStake);
+    const tYen   = fmtYen(payouts.trio, tStake);
 
     const badges = [];
     if (recap.honmeiHit)   badges.push(`<span class="race-hit-pill race-hit-honmei" title="◎ Honmei hit${winYen ? ` — paid ${winYen}` : ''}">◎ Win${winYen ? ` ${winYen}` : ''}</span>`);
@@ -6626,7 +6628,11 @@ async function loadOrchestratorSettings() {
         set('setting-discord-webhook-url',        s.discord_webhook_url);
         set('setting-orepro-session-cookie',      s.orepro_session_cookie);
         set('setting-orepro-user-agent',          s.orepro_user_agent);
-        set('setting-betEstimateStake',           s.bet_estimate_stake_yen ?? '100');
+        // Per-leg stakes; fall back to the legacy single-stake setting then ¥100.
+        const legacyStake = s.bet_estimate_stake_yen ?? '100';
+        set('setting-betStakeWin',      s.bet_stake_win_yen      ?? legacyStake);
+        set('setting-betStakeQuinella', s.bet_stake_quinella_yen ?? legacyStake);
+        set('setting-betStakeTrio',     s.bet_stake_trio_yen     ?? legacyStake);
 
         // Checkbox for "navigate to bet_complete.html after submit"
         const navCb = document.getElementById('setting-orepro-nav-to-complete');
@@ -6669,12 +6675,22 @@ async function testOreProCookie() {
     }
 }
 
-async function saveBetEstimateStake(value) {
+async function saveBetStake(leg, value) {
     const n = parseInt(value, 10);
     const clean = (Number.isFinite(n) && n >= 100) ? String(n) : '100';
-    await saveOrchestratorSetting('bet_estimate_stake_yen', clean);
-    // Force a re-estimate so chips reflect the new stake immediately.
+    const keyByLeg = {
+        win:      'bet_stake_win_yen',
+        quinella: 'bet_stake_quinella_yen',
+        trio:     'bet_stake_trio_yen'
+    };
+    const key = keyByLeg[leg];
+    if (!key) return;
+    await saveOrchestratorSetting(key, clean);
+    // Keep the local cache in sync so chips re-render with the new stake without a reload.
+    globalOreProSettings = { ...(globalOreProSettings || {}), [key]: clean };
     try { await reEstimateActiveDay(); } catch (_) { /* fine */ }
+    // Re-render past-race hit chips (they read stake at render time).
+    if (typeof rerenderAllRaceTables === 'function') rerenderAllRaceTables();
 }
 
 async function saveOrchestratorSetting(key, value) {

@@ -333,7 +333,9 @@ public sealed class RacesController : ControllerBase
     private static (BoxResolution Q, BoxResolution T, AllHitResolution AllHit) ResolveBoxPayouts(
         string? oddsJson,
         int[] boxPosts,
-        int stake,
+        int qStake,
+        int tStake,
+        int winStake,
         int qTickets,
         int tTickets,
         int purchaseTotal,
@@ -372,10 +374,10 @@ public sealed class RacesController : ControllerBase
         catch (System.Text.Json.JsonException) { /* empty lookups */ }
 
         var qPayouts = qCombos
-            .Select(c => quinellaLookup.TryGetValue(ComboKey(c), out var o) ? (int?)Math.Round(stake * (double)o) : null)
+            .Select(c => quinellaLookup.TryGetValue(ComboKey(c), out var o) ? (int?)Math.Round(qStake * (double)o) : null)
             .ToList();
         var tPayouts = tCombos
-            .Select(c => trioLookup.TryGetValue(ComboKey(c), out var o) ? (int?)Math.Round(stake * (double)o) : null)
+            .Select(c => trioLookup.TryGetValue(ComboKey(c), out var o) ? (int?)Math.Round(tStake * (double)o) : null)
             .ToList();
 
         var qResolved = qPayouts.Count(p => p.HasValue);
@@ -397,7 +399,7 @@ public sealed class RacesController : ControllerBase
             tMin.HasValue ? tMin - purchaseTotal : null,
             tMax.HasValue ? tMax - purchaseTotal : null);
 
-        int? winPayout = winOddsForAllHit.HasValue ? (int?)Math.Round(stake * winOddsForAllHit.Value) : null;
+        int? winPayout = winOddsForAllHit.HasValue ? (int?)Math.Round(winStake * winOddsForAllHit.Value) : null;
         int? allHitMin = (winPayout.HasValue && qMin.HasValue && tMin.HasValue)
             ? winPayout + qMin + tMin - purchaseTotal : null;
         int? allHitMax = (winPayout.HasValue && qMax.HasValue && tMax.HasValue)
@@ -427,9 +429,10 @@ public sealed class RacesController : ControllerBase
         if (body?.races == null || body.races.Length == 0)
             return Ok(new { estimates = new Dictionary<string, object>() });
 
-        var stake = await _settings.GetIntAsync(Services.SettingsService.Keys.BetEstimateStakeYen,
-                                                Services.SettingsService.Defaults.BetEstimateStakeYen);
-        if (stake <= 0) stake = Services.SettingsService.Defaults.BetEstimateStakeYen;
+        var stakes = await _settings.GetBetStakesAsync();
+        var winStake  = stakes.Win;
+        var qStake    = stakes.Quinella;
+        var tStake    = stakes.Trio;
 
         var raceIds = body.races.Select(r => r.race_id).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList();
         using var db = await _dbFactory.CreateDbContextAsync();
@@ -454,7 +457,8 @@ public sealed class RacesController : ControllerBase
             var qTickets = boxN >= 2 ? boxN * (boxN - 1) / 2 : 0;
             var tTickets = boxN >= 3 ? boxN * (boxN - 1) * (boxN - 2) / 6 : 0;
             var totalTickets = 1 + qTickets + tTickets;
-            var purchaseTotal = stake * totalTickets;
+            // Per-leg purchase: 1 Win ticket at winStake + qTickets at qStake + tTickets at tStake.
+            var purchaseTotal = winStake + qTickets * qStake + tTickets * tStake;
 
             double? winOdds = null;
             if (byRace.TryGetValue(item.race_id, out var postMap)
@@ -467,7 +471,7 @@ public sealed class RacesController : ControllerBase
             object winObj;
             if (winOdds.HasValue)
             {
-                var winPayout = stake * winOdds.Value;
+                var winPayout = winStake * winOdds.Value;
                 winObj = new
                 {
                     odds    = winOdds.Value,
@@ -484,7 +488,9 @@ public sealed class RacesController : ControllerBase
             var (quinellaBox, trioBox, allHit) = ResolveBoxPayouts(
                 oddsByRace.TryGetValue(item.race_id, out var oj) ? oj : null,
                 item.box_posts ?? Array.Empty<int>(),
-                stake,
+                qStake,
+                tStake,
+                winStake,
                 qTickets,
                 tTickets,
                 purchaseTotal,
@@ -505,7 +511,8 @@ public sealed class RacesController : ControllerBase
             {
                 status,
                 raceId   = item.race_id,
-                purchase = new { total = purchaseTotal, tickets = totalTickets, stake },
+                purchase = new { total = purchaseTotal, tickets = totalTickets,
+                                 winStake, quinellaStake = qStake, trioStake = tStake },
                 win      = winObj,
                 quinellaBox = new
                 {
