@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260517-8">
+    <link rel="stylesheet" href="/static/style.css?v=20260518-3">
 </head>
 <body>
 
@@ -363,6 +363,9 @@
                         <label title="Scale on recency-weighted form score from the last 3 finishes (weights 0.5/0.3/0.2, top-5 only). Higher = recent results matter more.">Recent Form Scale</label>
                         <input type="number" id="fw-formWeight" min="0" max="500" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
 
+                        <label title="Phase 9 sire-fit weight. Adds sire's historical win% on this race's surface + distance bucket as a low-weight tiebreaker. Skipped when the sire has <10 progeny starts in the bucket.">Sire Fit Weight</label>
+                        <input type="number" id="fw-sireFitWeight" min="0" max="200" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
+
                         <label title="Yen stake on a single ◎ Win ticket. Match your real OrePro Win-leg stake (often higher than the per-combo Q/T stakes).">Win Stake (¥)</label>
                         <input type="number" id="setting-betStakeWin" min="100" max="1000000" step="100" onblur="saveBetStake('win', this.value)" class="settings-number-input">
 
@@ -444,6 +447,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260517-15"></script>
+<script src="/static/script.js?v=20260518-6"></script>
 </body>
 </html>

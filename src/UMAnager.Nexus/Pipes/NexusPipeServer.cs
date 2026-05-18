@@ -244,6 +244,16 @@ public sealed class NexusPipeServer : BackgroundService
                                     var dayRecap = scope.ServiceProvider.GetRequiredService<Services.DayRecapNotifier>();
                                     await dayRecap.EvaluateAndNotifyAsync(raceIds, CancellationToken.None);
 
+                                    // Phase 9: refresh sire_performance MV after new finishes land.
+                                    // CONCURRENTLY — readers never block, ~sub-second on ~10K rows.
+                                    // Fire-and-forget so a slow refresh can't stall the pipe.
+                                    var sirePerf = scope.ServiceProvider.GetRequiredService<Services.SirePerformanceService>();
+                                    _ = Task.Run(async () =>
+                                    {
+                                        try { await sirePerf.RefreshAsync(CancellationToken.None); }
+                                        catch (Exception ex) { _logger.LogError(ex, "[Nexus] sire_performance refresh failed."); }
+                                    });
+
                                     // JRA publishes finishers 1-3 (the official umaban) immediately,
                                     // then the rest of the field a few seconds-to-minutes later. If
                                     // any race in this batch has top-3 but is missing some of 4-5,

@@ -217,7 +217,7 @@ public class DifnRecordParsingService
 
                 foreach (var race in races)
                 {
-                    raceValues.Add($"(@p{raceParamIndex}, @p{raceParamIndex+1}, @p{raceParamIndex+2}, @p{raceParamIndex+3}, @p{raceParamIndex+4}, @p{raceParamIndex+5}, @p{raceParamIndex+6}, @p{raceParamIndex+7}, @p{raceParamIndex+8}, @p{raceParamIndex+9}, NOW())");
+                    raceValues.Add($"(@p{raceParamIndex}, @p{raceParamIndex+1}, @p{raceParamIndex+2}, @p{raceParamIndex+3}, @p{raceParamIndex+4}, @p{raceParamIndex+5}, @p{raceParamIndex+6}, @p{raceParamIndex+7}, @p{raceParamIndex+8}, @p{raceParamIndex+9}, @p{raceParamIndex+10}, NOW())");
                     raceParams.Add(NullableParam($"p{raceParamIndex + 0}", NpgsqlDbType.Text,        race.RaceId ?? ""));
                     raceParams.Add(NullableParam($"p{raceParamIndex + 1}", NpgsqlDbType.TimestampTz, DateTime.SpecifyKind(race.RaceDate, DateTimeKind.Utc)));
                     raceParams.Add(NullableParam($"p{raceParamIndex + 2}", NpgsqlDbType.Text,        race.TrackCode));
@@ -228,13 +228,14 @@ public class DifnRecordParsingService
                     raceParams.Add(NullableParam($"p{raceParamIndex + 7}", NpgsqlDbType.Smallint,    race.DataStatus));
                     raceParams.Add(NullableParam($"p{raceParamIndex + 8}", NpgsqlDbType.Date,        race.LastModified));
                     raceParams.Add(NullableParam($"p{raceParamIndex + 9}", NpgsqlDbType.TimestampTz, race.SortTime));
-                    raceParamIndex += 10;
+                    raceParams.Add(NullableParam($"p{raceParamIndex + 10}", NpgsqlDbType.Text,       race.RaceClass));
+                    raceParamIndex += 11;
                 }
 
                 if (raceValues.Count > 0)
                 {
                     var raceSql = $@"
-                        INSERT INTO races (""RaceId"", ""RaceDate"", ""TrackCode"", ""RaceNumber"", ""NameJa"", ""Distance"", ""Surface"", ""DataStatus"", ""LastModified"", ""SortTime"", ""LastUpdated"")
+                        INSERT INTO races (""RaceId"", ""RaceDate"", ""TrackCode"", ""RaceNumber"", ""NameJa"", ""Distance"", ""Surface"", ""DataStatus"", ""LastModified"", ""SortTime"", ""RaceClass"", ""LastUpdated"")
                         VALUES {string.Join(", ", raceValues)}
                         ON CONFLICT (""RaceId"") DO UPDATE SET
                             ""TrackCode""    = excluded.""TrackCode"",
@@ -245,6 +246,7 @@ public class DifnRecordParsingService
                             ""DataStatus""   = excluded.""DataStatus"",
                             ""LastModified"" = excluded.""LastModified"",
                             ""SortTime""     = excluded.""SortTime"",
+                            ""RaceClass""    = COALESCE(excluded.""RaceClass"", races.""RaceClass""),
                             ""LastUpdated""  = excluded.""LastUpdated""
                         WHERE excluded.""DataStatus"" > races.""DataStatus""
                            OR (excluded.""DataStatus"" = races.""DataStatus""

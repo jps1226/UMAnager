@@ -55,11 +55,16 @@ public sealed class RacesController : ControllerBase
 
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly Services.SettingsService _settings;
+    private readonly Services.SirePerformanceService _sirePerf;
 
-    public RacesController(IDbContextFactory<AppDbContext> dbFactory, Services.SettingsService settings)
+    public RacesController(
+        IDbContextFactory<AppDbContext> dbFactory,
+        Services.SettingsService settings,
+        Services.SirePerformanceService sirePerf)
     {
         _dbFactory = dbFactory;
         _settings = settings;
+        _sirePerf = sirePerf;
     }
 
     [HttpGet]
@@ -158,6 +163,22 @@ public sealed class RacesController : ControllerBase
                     g => g.OrderByDescending(x => x.RaceDate).Select(x => (x.RaceDate, x.Finish)).ToList()
                 );
 
+            // Race class is now stored on the races table (Oracle Q20: JyokenCD slot 5
+            // parsed from RA bytes at ingest time). No per-request computation needed —
+            // just emit race.RaceClass straight into the API payload below.
+
+            // Phase 9: load sire_performance MV once per request (~5–10K rows) and
+            // index by (sire_id, surface, bucket) for O(1) lookup per entry. Min
+            // sample size of 10 starts — below that, sire_fit is null to avoid
+            // noisy 100%/0% from rare sires.
+            const int MinSireStarts = 10;
+            var sirePerfRows = await _sirePerf.LoadAllAsync();
+            var sirePerfLookup = sirePerfRows
+                .Where(r => r.Starts >= MinSireStarts)
+                .ToDictionary(
+                    r => (r.SireId, r.Surface ?? "", r.Bucket ?? ""),
+                    r => r.WinPct);
+
 
             string ResolveAncestorName(string? id)
             {
@@ -195,6 +216,10 @@ public sealed class RacesController : ControllerBase
                     sort_time_iso = race.SortTime?.ToString("yyyy-MM-ddTHH:mm:ss") + "+09:00",
                     clean_date = cleanDate,
                     history_refreshed = race.HistoryRefreshed,
+                    // JRA-canonical race class from JyokenCD slot 5 (Oracle Q20).
+                    // "debut" / "maiden" / "1win" / "2win" / "3win" / "open" / "other" / null.
+                    // Set at RA-ingest time; never changes.
+                    race_class = race.RaceClass,
                     // Phase 11 backward: HR payouts — emitted as a raw JSON string for the
                     // frontend to parse only when it needs to enrich past-race recap chips
                     // (◎ Win / Q Box / T Box) with the actual ¥ amount that paid out.
@@ -202,6 +227,8 @@ public sealed class RacesController : ControllerBase
                 };
 
                 var raceEntries = entriesByRace.TryGetValue(race.RaceId, out var re) ? re : new List<Data.Entities.RaceEntry>();
+                var raceSurface = race.Surface ?? "";
+                var raceBucket = Services.SirePerformanceService.DistanceBucket(race.Distance);
                 var entries = raceEntries
                     .OrderBy(e => e.PostPosition ?? 0)
                     .Select(e =>
@@ -209,6 +236,16 @@ public sealed class RacesController : ControllerBase
                         horseLookup.TryGetValue(e.HorseId ?? "", out var horse);
                         finishesByHorse.TryGetValue(e.HorseId ?? "", out var hist);
                         var (last3Str, formScore) = ComputeLast3(hist, race.RaceDate);
+
+                        // Phase 9: sire-fit % for THIS race's (surface, bucket). null when
+                        // the sire's sample in the bucket is below MinSireStarts.
+                        decimal? sireFitPct = null;
+                        var sireId = horse?.SireId;
+                        if (!string.IsNullOrEmpty(sireId) && !string.IsNullOrEmpty(raceSurface) && !string.IsNullOrEmpty(raceBucket))
+                        {
+                            if (sirePerfLookup.TryGetValue((sireId, raceSurface, raceBucket), out var pct))
+                                sireFitPct = pct;
+                        }
 
                         return (object)new
                         {
@@ -221,6 +258,7 @@ public sealed class RacesController : ControllerBase
                             Form_Score = formScore,
                             Sire = ResolveAncestorName(horse?.SireId),
                             Sire_ID = horse?.SireId ?? "",
+                            Sire_Fit = sireFitPct,
                             Dam = ResolveAncestorName(horse?.DamId),
                             Dam_ID = horse?.DamId ?? "",
                             BMS = ResolveAncestorName(horse?.BmsId),

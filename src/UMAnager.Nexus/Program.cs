@@ -58,12 +58,46 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<RaceCardRefreshSer
 builder.Services.AddScoped<DifnRecordParsingService>();
 builder.Services.AddScoped<BreedingHorseBackfillService>();
 builder.Services.AddScoped<HnNameBackfillService>();
+builder.Services.AddScoped<SurfaceBackfillService>();
+builder.Services.AddScoped<RaceClassBackfillService>();
 builder.Services.AddScoped<OddsApplyService>();
+builder.Services.AddSingleton<SirePerformanceService>();
 builder.Services.AddHostedService<NexusPipeServer>();
 
 var app = builder.Build();
 
 await app.Services.GetRequiredService<SettingsService>().SeedDefaultsAsync();
+
+// Race-class column (Oracle Q20). Inline ALTER matches the NameEn/OddsJson pattern.
+// Safe to run on every startup — IF NOT EXISTS makes it a no-op once added.
+using (var scope = app.Services.CreateScope())
+{
+    try
+    {
+        var factory = scope.ServiceProvider.GetRequiredService<Microsoft.EntityFrameworkCore.IDbContextFactory<UMAnager.Nexus.Data.AppDbContext>>();
+        using var db = await factory.CreateDbContextAsync();
+        await db.Database.ExecuteSqlRawAsync(
+            "ALTER TABLE races ADD COLUMN IF NOT EXISTS \"RaceClass\" VARCHAR(16)");
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "[Startup] races.RaceClass column ensure failed (non-fatal).");
+    }
+}
+
+// Phase 9: ensure the sire_performance MV exists (idempotent). First-run also kicks
+// off an initial population so /api/races has data immediately; subsequent restarts
+// no-op since the MV already holds rows.
+try
+{
+    var sirePerf = app.Services.GetRequiredService<SirePerformanceService>();
+    await sirePerf.EnsureSchemaAsync();
+    _ = Task.Run(async () => { try { await sirePerf.RefreshAsync(); } catch { /* logged inside */ } });
+}
+catch (Exception ex)
+{
+    app.Logger.LogError(ex, "[Startup] sire_performance MV bootstrap failed (non-fatal).");
+}
 
 app.UseResponseCompression();
 app.UseDefaultFiles();

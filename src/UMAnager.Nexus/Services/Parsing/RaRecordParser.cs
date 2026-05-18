@@ -54,13 +54,31 @@ public static class RaRecordParser
                 distance = d;
             }
 
-            // Surface: 706-707 (2 bytes, 1=turf, 2=dirt)
+            // JyokenCD slot 5 (最若年条件 / "youngest eligible age condition"): offset 635, len 3.
+            // Per Oracle Q20, this is the authoritative slot for the race's primary class —
+            // unaffected by historical condition-rule changes (pre-2006 had age-tiered earnings
+            // caps; today the same code is duplicated across slots). The map (Code Table 2007):
+            //   701/702 → debut (新馬/未出走)
+            //   703     → maiden (未勝利)
+            //   005/010/016 → 1win/2win/3win class
+            //   999     → open (stakes/listed/graded)
+            //   else    → other
+            var jyokenCdSlot5 = ExtractString(data, 634, 3).Trim();
+            var raceClass = MapJyokenCdToRaceClass(jyokenCdSlot5);
+
+            // TrackCD: 706-707 (2 bytes). Real JV-Link codes are 2-digit:
+            // 10-19 = 芝 (turf, inner/outer/etc), 21-29 = ダート (dirt), 50-59 = 障害 (jump).
+            // Only the first digit determines surface. Earlier versions of this parser
+            // compared the whole field to "1"/"2" and never matched — fixed 2026-05-18.
             var surfaceStr = ExtractString(data, 705, 2).Trim();
             string? surface = null;
-            if (surfaceStr == "1")
-                surface = "turf";
-            else if (surfaceStr == "2")
-                surface = "dirt";
+            if (surfaceStr.Length >= 1)
+            {
+                var first = surfaceStr[0];
+                if (first == '1') surface = "turf";
+                else if (first == '2') surface = "dirt";
+                else if (first == '5') surface = "jump";
+            }
 
             // Start Time: 874-877 (4 bytes, HHMM format)
             var startTimeStr = ExtractString(data, 873, 4).Trim();
@@ -75,6 +93,7 @@ public static class RaRecordParser
                 NameJa = string.IsNullOrEmpty(nameJa) ? null : nameJa,
                 Distance = distance,
                 Surface = surface,
+                RaceClass = raceClass,
                 DataStatus = dataStatus,
                 LastModified = lastModified,
                 SortTime = sortTime,
@@ -85,6 +104,23 @@ public static class RaRecordParser
         {
             throw new InvalidOperationException($"Failed to parse RA record: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>Oracle Q20: JyokenCD code → race class string.</summary>
+    public static string? MapJyokenCdToRaceClass(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return null;
+        return code switch
+        {
+            "701" or "702" => "debut",
+            "703"          => "maiden",
+            "005"          => "1win",
+            "010"          => "2win",
+            "016"          => "3win",
+            "999"          => "open",
+            "000"          => null,    // unset slot — treat as unknown, not "other"
+            _              => "other"
+        };
     }
 
     private static string ExtractString(ReadOnlySpan<byte> data, int startIndex, int length)

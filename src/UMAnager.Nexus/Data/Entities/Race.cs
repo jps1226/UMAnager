@@ -9,6 +9,7 @@ public class Race
     public string? NameJa { get; set; }       // Race name (Shift-JIS decoded, Hondai)
     public int? Distance { get; set; }        // Distance in meters (1000-3600)
     public string? Surface { get; set; }      // 'turf' or 'dirt' (from 1=turf, 2=dirt)
+    public string? RaceClass { get; set; }    // Oracle Q20: JyokenCD slot 5 → 'debut'/'maiden'/'1win'/'2win'/'3win'/'open'/'other'
     public DateTime? SortTime { get; set; }   // Combined date + scheduled race time
     public string? ResultsJson { get; set; }  // Payoffs and finish positions (JSONB)
     public string? OddsJson { get; set; }     // Phase 11 forward: O2/O5 quinella+trio odds (JSONB)

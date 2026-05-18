@@ -32,6 +32,9 @@ public class RaceConfiguration : IEntityTypeConfiguration<Race>
         builder.Property(r => r.Surface)
             .HasMaxLength(10);  // 'turf' or 'dirt'
 
+        builder.Property(r => r.RaceClass)
+            .HasMaxLength(16);  // Oracle Q20: 'debut'/'maiden'/'1win'/'2win'/'3win'/'open'/'other'
+
         builder.Property(r => r.SortTime);
 
         builder.Property(r => r.ResultsJson)

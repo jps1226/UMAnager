@@ -1265,6 +1265,96 @@ td.last3-strip .last3-show  { color: #fff;    background: #cd7f32; }
 td.last3-strip .last3-out   { color: #888; }
 td.last3-strip .last3-none  { color: #555; background: transparent; }
 
+/* --- AUTO-PICK SCORE EXPLAIN POPOVER (Phase 18) ---
+   ⓘ trigger lives inside the Horse cell; popover anchors next to the row. */
+.score-explain-trigger {
+    background: transparent;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0 2px;
+    margin-left: 4px;
+    vertical-align: middle;
+    line-height: 1;
+    opacity: 0.55;
+    transition: opacity 120ms ease, color 120ms ease;
+}
+tr:hover .score-explain-trigger { opacity: 1; }
+.score-explain-trigger:hover    { color: #1dd1a1; opacity: 1; }
+
+.score-explain-popover {
+    position: absolute;
+    z-index: 9999;
+    min-width: 320px;
+    max-width: 400px;
+    background: #1c1f24;
+    border: 1px solid #333;
+    border-radius: 6px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.6);
+    color: #e6e6e6;
+    font-size: 12px;
+    padding: 10px 12px;
+}
+.score-explain-popover .sx-head {
+    display: flex; align-items: baseline; gap: 8px;
+    border-bottom: 1px solid #2a2e35;
+    padding-bottom: 6px; margin-bottom: 6px;
+}
+.score-explain-popover .sx-title { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+.score-explain-popover .sx-maiden-badge {
+    display: inline-block; margin-left: 6px;
+    background: #b94a48; color: #fff;
+    padding: 1px 5px; border-radius: 3px;
+    font-size: 9px; letter-spacing: 0.8px; font-weight: bold;
+    vertical-align: middle;
+}
+.score-explain-popover .sx-horse { font-weight: bold; flex: 1; color: #ffd700; }
+.score-explain-popover .sx-close {
+    background: transparent; border: none; color: #888; cursor: pointer;
+    font-size: 13px; padding: 0 4px; line-height: 1;
+}
+.score-explain-popover .sx-close:hover { color: #fff; }
+.score-explain-popover .sx-risk {
+    font-size: 11px; color: #aaa; margin-bottom: 8px;
+    padding: 4px 6px; background: rgba(255,255,255,0.03); border-radius: 3px;
+}
+.score-explain-popover .sx-section { margin-bottom: 8px; }
+.score-explain-popover .sx-section-head {
+    display: flex; justify-content: space-between;
+    font-size: 10px; letter-spacing: 1px;
+    color: #888; margin-bottom: 3px;
+}
+.score-explain-popover .sx-section-title { color: #1dd1a1; font-weight: bold; }
+.score-explain-popover .sx-line {
+    display: flex; justify-content: space-between;
+    padding: 1px 0; font-size: 11px;
+}
+.score-explain-popover .sx-line-label { color: #ccc; }
+.score-explain-popover .sx-line-value { color: #e6e6e6; font-family: 'Consolas', 'Menlo', monospace; }
+.score-explain-popover .sx-line-subtotal {
+    border-top: 1px dashed #2a2e35;
+    margin-top: 2px; padding-top: 3px;
+}
+.score-explain-popover .sx-line-subtotal .sx-line-label,
+.score-explain-popover .sx-line-subtotal .sx-line-value { color: #fff; font-weight: bold; }
+.score-explain-popover .sx-total {
+    display: flex; justify-content: space-between;
+    border-top: 2px solid #1dd1a1; margin-top: 6px; padding-top: 6px;
+    font-weight: bold;
+}
+.score-explain-popover .sx-total-label { color: #1dd1a1; letter-spacing: 1px; }
+.score-explain-popover .sx-total-value { color: #ffd700; font-family: 'Consolas', 'Menlo', monospace; font-size: 14px; }
+
+/* --- SIRE FIT % (Phase 9) ---
+   Compact win-rate pill in the SF column. Color tiers:
+   strong ≥15%, mid 9–14%, weak <9%, none = below 10-start sample threshold. */
+td.sire-fit { text-align: center; white-space: nowrap; min-width: 38px; padding: 4px 6px; font-weight: bold; font-size: 12px; }
+td.sire-fit-strong { color: #1dd1a1; }
+td.sire-fit-mid    { color: #e6e6e6; }
+td.sire-fit-weak   { color: #888; }
+td.sire-fit-none   { color: #444; }
+
 .btn-history-refresh {
     background: transparent;
     border: 1px solid #1dd1a1;

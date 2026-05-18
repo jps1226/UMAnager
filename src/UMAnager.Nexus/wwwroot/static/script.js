@@ -7,6 +7,7 @@ let upcomingRaces = []; // NEW: Stores our parsed race times
 const BET_ESTIMATE_STORAGE_KEY = 'umanager-bet-estimate-cache-v1';
 const BET_ESTIMATE_MAX_AGE_MS = 1000 * 60 * 60 * 12;
 let globalRaceEntries = {}; // NEW: Stores local row data for instant sorting
+let globalRaceClass = {};   // Phase: maiden detection. {r_id: {isMaiden, isDebut}}
 let globalRaceInfo = {}; // NEW: Stores the Racetrack names and numbers
 let globalRacesByDate = {}; // All race days organized by date for navigation and jump dropdowns
 let globalAllRacesByDate = { upcoming: {}, past: {} }; // Full timeline buckets from API
@@ -25,7 +26,7 @@ let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 let appConfig = {}; // NEW: Stores app configuration
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
 
-const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Last3", "Sire", "Dam", "BMS", "Odds", "Fav", "Finish"];
+const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Last3", "Sire", "SF", "Dam", "BMS", "Odds", "Fav", "Finish"];
 
 // JRA track codes → romaji names. Source: JRA-VAN spec.
 const TRACK_NAMES = {
@@ -59,6 +60,7 @@ const RACE_COLUMN_META = {
     Record: { label: "W/S", sortable: true, sortKey: "Record", initialAsc: true },
     Last3: { label: "Form", sortable: true, sortKey: "Last3", initialAsc: false },
     Sire: { label: "Sire", sortable: true, sortKey: "Sire", initialAsc: true },
+    SF: { label: "SF", sortable: true, sortKey: "SF", initialAsc: false },
     Dam: { label: "Dam", sortable: true, sortKey: "Dam", initialAsc: true },
     BMS: { label: "BMS", sortable: true, sortKey: "BMS", initialAsc: true },
     Odds: { label: "Odds", sortable: true, sortKey: "Odds", initialAsc: true },
@@ -543,6 +545,7 @@ async function init() {
     document.getElementById('risk-slider').addEventListener('change', saveConfigToServer);
     document.getElementById('risk-slider').addEventListener('input', updateAllRiskBadges);
     document.getElementById('risk-slider').addEventListener('input', updateAutoBetHighlighting);
+    document.getElementById('risk-slider').addEventListener('input', refreshScoreExplainIfOpen);
     
     // NEW: Load saved slider state from config
     const savedRisk = appConfig.ui?.riskSlider || 50;
@@ -682,7 +685,7 @@ async function quickAddFromHover(id, listType) {
         body: JSON.stringify({id: id, list_type: listType})
     });
     const data = await res.json();
-    
+
     if(data.status === "success") {
         // Refresh lists and update highlighting/buttons
         await refreshListsOnly();
@@ -990,6 +993,15 @@ function applySortLogic(r_id, col, asc) {
             comparison = comparePrimitiveValues(parseFloat(a.Form_Score) || 0, parseFloat(b.Form_Score) || 0, asc);
         } else if (col === 'Sire') {
             comparison = comparePrimitiveValues(normalizeRaceText(a.Sire), normalizeRaceText(b.Sire), asc);
+        } else if (col === 'SF') {
+            // Phase 9: sire-fit % for THIS race's (surface, bucket). Null entries
+            // (below MinSireStarts sample size) sort to the bottom regardless of asc/desc.
+            const av = (a.Sire_Fit === null || a.Sire_Fit === undefined) ? null : parseFloat(a.Sire_Fit);
+            const bv = (b.Sire_Fit === null || b.Sire_Fit === undefined) ? null : parseFloat(b.Sire_Fit);
+            if (av === null && bv === null) comparison = 0;
+            else if (av === null) comparison = 1;
+            else if (bv === null) comparison = -1;
+            else comparison = comparePrimitiveValues(av, bv, asc);
         } else if (col === 'Dam') {
             comparison = comparePrimitiveValues(normalizeRaceText(a.Dam), normalizeRaceText(b.Dam), asc);
         } else if (col === 'BMS') {
@@ -1123,7 +1135,7 @@ function buildTableBody(r_id, entries) {
             </td>`,
             BK: `<td${fallbackCellAttrs('BK')}>${row.BK || ""}</td>`,
             PP: `<td${fallbackCellAttrs('PP')}>${row.PP || ""}</td>`,
-            Horse: `<td style="font-weight: bold;">${horseStr}</td>`,
+            Horse: `<td style="font-weight: bold;">${horseStr} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></td>`,
             Record: `<td>${row.Record || ""}</td>`,
             Last3: (() => {
                 const raw = String(row.Last3 || "—-—-—");
@@ -1141,6 +1153,16 @@ function buildTableBody(r_id, entries) {
                 return `<td class="last3-strip" title="Form score: ${(parseFloat(row.Form_Score) || 0).toFixed(3)}">${cells}</td>`;
             })(),
             Sire: `<td>${sireStr}</td>`,
+            SF: (() => {
+                const sf = (row.Sire_Fit === null || row.Sire_Fit === undefined) ? null : parseFloat(row.Sire_Fit);
+                if (sf === null || !Number.isFinite(sf)) return `<td class="sire-fit sire-fit-none" title="No sample (need ≥10 progeny starts in this surface/distance bucket)">—</td>`;
+                let cls = 'sire-fit';
+                if (sf >= 15) cls += ' sire-fit-strong';
+                else if (sf >= 9) cls += ' sire-fit-mid';
+                else cls += ' sire-fit-weak';
+                const tip = `Sire win% for this surface + distance bucket`;
+                return `<td class="${cls}" title="${tip}">${sf.toFixed(0)}%</td>`;
+            })(),
             Dam: `<td>${damStr}</td>`,
             BMS: `<td>${bmsStr}</td>`,
             Odds: `<td data-cell="odds"${fallbackCellAttrs('Odds')}>${row.Odds || ""}</td>`,
@@ -1363,14 +1385,21 @@ function getFormulaWeights() {
         freshnessBreakeven:   parseFW(fw.freshnessBreakeven,    10),
         pedigreeMultiplier:   parseFW(fw.pedigreeMultiplier,    30),
         formWeight:           parseFW(fw.formWeight,            80),
+        sireFitWeight:        parseFW(fw.sireFitWeight,         10),
     };
 }
 
-function calculatePowerScore(row, riskVal) {
+function calculatePowerScore(row, riskVal, raceClass) {
     const fw = getFormulaWeights();
+    const cls = raceClass || globalRaceClass[row._raceId] || { isDebut: false, isMaiden: false };
+    // Maiden/debut races: Career W/S is uninformative (0 wins for everyone in maidens,
+    // 0 starts for everyone in debuts). Skip those terms and rely more heavily on
+    // Sire Fit, which is the strongest signal we have for unraced/winless horses.
+    const isMaidenLike = cls.isDebut || cls.isMaiden;
+    const sireFitBoost = cls.isDebut ? 5 : (cls.isMaiden ? 3 : 1);
     // Ensures risk is always exactly between 0.0 and 1.0
-    const risk = Math.max(0, Math.min(100, riskVal)) / 100; 
-    
+    const risk = Math.max(0, Math.min(100, riskVal)) / 100;
+
     // 1. Base Odds Score
     let baseOddsScore = 0;
     const odds = parseFloat(row.Odds);
@@ -1380,13 +1409,13 @@ function calculatePowerScore(row, riskVal) {
 
     // 2. Base Form Score
     let baseFormScore = 0;
-    if (row.Record) {
+    if (row.Record && !isMaidenLike) {
         const nums = String(row.Record).match(/\d+/g);
         if (nums && nums.length > 0) {
             const wins = parseInt(nums[0]) || 0;
             // FIX: Reads "Starts" correctly from the "W/S" format (e.g., 2/10 -> Starts = 10)
-            const starts = nums.length > 1 ? parseInt(nums[1]) : wins; 
-            
+            const starts = nums.length > 1 ? parseInt(nums[1]) : wins;
+
             if (starts > 0) {
                 baseFormScore += (wins / starts) * fw.formMultiplier;
             }
@@ -1397,11 +1426,25 @@ function calculatePowerScore(row, riskVal) {
 
     // Phase 7: recency-weighted form score (server-computed, weights [0.5, 0.3, 0.2] · 1/pos top-5).
     // Range roughly [0, 1]; scale into the same magnitude as the win-rate term.
-    const formScoreVal = parseFloat(row.Form_Score) || 0;
-    baseFormScore += formScoreVal * fw.formWeight;
+    // Skipped for debut races (no prior runs → always 0 for everyone anyway).
+    if (!cls.isDebut) {
+        const formScoreVal = parseFloat(row.Form_Score) || 0;
+        baseFormScore += formScoreVal * fw.formWeight;
+    }
 
     // 3. Base Pedigree Score (from Tracked Bloodlines)
-    const basePedScore = (parseFloat(row.Score) || 0) * fw.pedigreeMultiplier;
+    let basePedScore = (parseFloat(row.Score) || 0) * fw.pedigreeMultiplier;
+
+    // Phase 9: sire-fit tiebreaker — sire's historical win% on THIS race's
+    // (surface × distance-bucket). Normalize to 0..1 (divide by 100) so a 20%
+    // sire at weight 10 contributes 2 to basePedScore — low-weight tiebreaker
+    // per the CLAUDE.md spec. Null sire-fit (below MinSireStarts) contributes 0.
+    // In maiden/debut races we multiply the weight (5× debut, 3× maiden) because
+    // it's the most reliable ability proxy when career stats are uninformative.
+    const sireFitVal = (row.Sire_Fit === null || row.Sire_Fit === undefined) ? null : parseFloat(row.Sire_Fit);
+    if (sireFitVal !== null && Number.isFinite(sireFitVal)) {
+        basePedScore += (sireFitVal / 100) * fw.sireFitWeight * sireFitBoost;
+    }
 
     // 4. THE SLIDER MIXER
     // At Risk 0: 100% Odds, 0% Form/Pedigree
@@ -1418,6 +1461,223 @@ function calculatePowerScore(row, riskVal) {
     totalScore -= (favRank * 0.0001);
 
     return totalScore;
+}
+
+// Phase 18: same math as calculatePowerScore, but returns a structured breakdown
+// for the hover popover. Keeping it as a parallel function instead of folding
+// {total, breakdown} into calculatePowerScore so the 4 hot-path call sites stay
+// allocation-free during auto-pick sorts over hundreds of entries.
+function explainPowerScore(row, riskVal) {
+    const fw = getFormulaWeights();
+    const cls = globalRaceClass[row._raceId] || { isDebut: false, isMaiden: false };
+    const isMaidenLike = cls.isDebut || cls.isMaiden;
+    const sireFitBoost = cls.isDebut ? 5 : (cls.isMaiden ? 3 : 1);
+    const risk = Math.max(0, Math.min(100, riskVal)) / 100;
+    const oddsMix = 1.0 - risk;
+    const formMix = risk;
+    const pedMix  = risk;
+
+    // ODDS branch
+    let baseOddsScore = 0;
+    const odds = parseFloat(row.Odds);
+    const oddsLines = [];
+    if (!isNaN(odds) && odds > 0) {
+        baseOddsScore = fw.oddsCap / Math.max(1.0, odds);
+        oddsLines.push({ label: `Odds ${odds.toFixed(1)} → ${fw.oddsCap}/${odds.toFixed(1)}`, value: baseOddsScore });
+    } else {
+        oddsLines.push({ label: 'Odds not posted', value: 0 });
+    }
+
+    // FORM branch
+    let baseFormScore = 0;
+    const formLines = [];
+    if (row.Record && !isMaidenLike) {
+        const nums = String(row.Record).match(/\d+/g);
+        if (nums && nums.length > 0) {
+            const wins = parseInt(nums[0]) || 0;
+            const starts = nums.length > 1 ? parseInt(nums[1]) : wins;
+            if (starts > 0) {
+                const wr = (wins / starts) * fw.formMultiplier;
+                baseFormScore += wr;
+                const pct = ((wins / starts) * 100).toFixed(1);
+                formLines.push({ label: `Career ${wins}/${starts} (${pct}%) × ${fw.formMultiplier}`, value: wr });
+            }
+            const fresh = (fw.freshnessBreakeven - starts) * fw.freshnessBonus;
+            baseFormScore += fresh;
+            formLines.push({ label: `Freshness (${fw.freshnessBreakeven}−${starts}) × ${fw.freshnessBonus}`, value: fresh });
+        }
+    } else if (isMaidenLike) {
+        formLines.push({ label: `Career W/S skipped (${cls.isDebut ? 'debut race' : 'maiden race'})`, value: 0 });
+    }
+    if (!cls.isDebut) {
+        const formScoreVal = parseFloat(row.Form_Score) || 0;
+        const last3Contrib = formScoreVal * fw.formWeight;
+        baseFormScore += last3Contrib;
+        formLines.push({ label: `Last-3 form ${formScoreVal.toFixed(3)} × ${fw.formWeight}`, value: last3Contrib });
+    } else {
+        formLines.push({ label: 'Last-3 skipped (debut race)', value: 0 });
+    }
+
+    // PEDIGREE branch
+    const pedLines = [];
+    const tracked = parseFloat(row.Score) || 0;
+    let basePedScore = tracked * fw.pedigreeMultiplier;
+    pedLines.push({ label: `Tracked bloodlines ${tracked.toFixed(2)} × ${fw.pedigreeMultiplier}`, value: tracked * fw.pedigreeMultiplier });
+
+    const sireFitVal = (row.Sire_Fit === null || row.Sire_Fit === undefined) ? null : parseFloat(row.Sire_Fit);
+    if (sireFitVal !== null && Number.isFinite(sireFitVal)) {
+        const sf = (sireFitVal / 100) * fw.sireFitWeight * sireFitBoost;
+        basePedScore += sf;
+        const boostLabel = sireFitBoost > 1 ? ` (×${sireFitBoost} ${cls.isDebut ? 'debut' : 'maiden'})` : '';
+        pedLines.push({ label: `Sire Fit ${sireFitVal.toFixed(1)}% × ${fw.sireFitWeight}${boostLabel}`, value: sf });
+    } else {
+        pedLines.push({ label: 'Sire Fit — (no sample)', value: 0 });
+    }
+
+    // MIX
+    const oddsMixed = baseOddsScore * oddsMix;
+    const formMixed = baseFormScore * formMix;
+    const pedMixed  = basePedScore  * pedMix;
+
+    // TIEBREAKER
+    const favRank = parseFloat(row.Fav) || 999;
+    const tiebreaker = -(favRank * 0.0001);
+
+    const total = oddsMixed + formMixed + pedMixed + tiebreaker;
+
+    return {
+        total,
+        risk: Math.round(risk * 100),
+        raceClass: cls,
+        mix: { odds: oddsMix, form: formMix, ped: pedMix },
+        odds:    { lines: oddsLines, subtotal: baseOddsScore, mixed: oddsMixed },
+        form:    { lines: formLines, subtotal: baseFormScore, mixed: formMixed },
+        pedigree:{ lines: pedLines,  subtotal: basePedScore,  mixed: pedMixed  },
+        tiebreaker: { favRank, value: tiebreaker }
+    };
+}
+
+// Race class flag is now computed server-side from prior-career history strictly
+// BEFORE each race's date (RacesController.GetRaces). Stable historically. The
+// frontend just reads race.info.race_class — values: "debut" | "maiden" | "normal".
+function raceClassFlags(rc) {
+    const v = String(rc || '').toLowerCase();
+    return { isDebut: v === 'debut', isMaiden: v === 'maiden' };
+}
+
+// Phase 18: popover state. Single global popover element; we re-render it each
+// time the operator opens a new row or the risk slider moves while it's open.
+let scoreExplainState = { raceId: null, horseId: null };
+
+function getRiskLabel(risk) {
+    if (risk <= 20) return 'Safe';
+    if (risk <= 40) return 'Chalky';
+    if (risk <= 60) return 'Balanced';
+    if (risk <= 80) return 'Lucky';
+    return 'Wild';
+}
+
+function ensureScoreExplainPopover() {
+    let pop = document.getElementById('score-explain-popover');
+    if (pop) return pop;
+    pop = document.createElement('div');
+    pop.id = 'score-explain-popover';
+    pop.className = 'score-explain-popover';
+    pop.style.display = 'none';
+    pop.addEventListener('click', (e) => e.stopPropagation());
+    document.body.appendChild(pop);
+    document.addEventListener('click', (e) => {
+        if (pop.style.display === 'none') return;
+        if (e.target.closest('.score-explain-trigger')) return;
+        closeScoreExplain();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeScoreExplain(); });
+    return pop;
+}
+
+function closeScoreExplain() {
+    const pop = document.getElementById('score-explain-popover');
+    if (pop) pop.style.display = 'none';
+    scoreExplainState = { raceId: null, horseId: null };
+}
+
+function openScoreExplain(event, raceId, horseId) {
+    event.stopPropagation();
+    const entries = globalRaceEntries[raceId] || [];
+    const row = entries.find(e => String(e.Horse_ID).split('.')[0] === String(horseId));
+    if (!row) return;
+    scoreExplainState = { raceId, horseId };
+    renderScoreExplain(row, event.currentTarget);
+}
+
+function renderScoreExplain(row, anchor) {
+    const pop = ensureScoreExplainPopover();
+    const risk = getCurrentAutoPickRisk();
+    const b = explainPowerScore(row, risk);
+    const fmt = (n) => (n >= 0 ? '+' : '') + n.toFixed(2);
+    const horseName = row.Horse || row.Horse_ID || '';
+
+    const sectionHtml = (title, branch, mixPct) => `
+        <div class="sx-section">
+            <div class="sx-section-head">
+                <span class="sx-section-title">${title}</span>
+                <span class="sx-section-mix">×${Math.round(mixPct * 100)}%</span>
+            </div>
+            ${branch.lines.map(l => `<div class="sx-line"><span class="sx-line-label">${l.label}</span><span class="sx-line-value">${fmt(l.value)}</span></div>`).join('')}
+            <div class="sx-line sx-line-subtotal">
+                <span class="sx-line-label">Subtotal ${fmt(branch.subtotal)} × ${Math.round(mixPct * 100)}%</span>
+                <span class="sx-line-value">${fmt(branch.mixed)}</span>
+            </div>
+        </div>
+    `;
+
+    const maidenBadge = b.raceClass?.isDebut
+        ? '<span class="sx-maiden-badge">DEBUT</span>'
+        : (b.raceClass?.isMaiden ? '<span class="sx-maiden-badge">MAIDEN</span>' : '');
+    pop.innerHTML = `
+        <div class="sx-head">
+            <div class="sx-title">Auto-Pick Breakdown ${maidenBadge}</div>
+            <div class="sx-horse">${horseName}</div>
+            <button class="sx-close" onclick="closeScoreExplain()" title="Close">✕</button>
+        </div>
+        <div class="sx-risk">Risk ${b.risk} (${getRiskLabel(b.risk)}) — mix ${Math.round(b.mix.odds*100)}% odds + ${Math.round(b.mix.form*100)}% form + ${Math.round(b.mix.ped*100)}% pedigree</div>
+        ${sectionHtml('ODDS', b.odds, b.mix.odds)}
+        ${sectionHtml('FORM', b.form, b.mix.form)}
+        ${sectionHtml('PEDIGREE', b.pedigree, b.mix.ped)}
+        <div class="sx-section">
+            <div class="sx-line"><span class="sx-line-label">Tiebreaker −(Fav ${b.tiebreaker.favRank} × 0.0001)</span><span class="sx-line-value">${fmt(b.tiebreaker.value)}</span></div>
+        </div>
+        <div class="sx-total">
+            <span class="sx-total-label">TOTAL</span>
+            <span class="sx-total-value">${b.total.toFixed(2)}</span>
+        </div>
+    `;
+
+    // Anchor: place to the right of the trigger if there's room, else left, else below.
+    pop.style.display = 'block';
+    const rect = anchor.getBoundingClientRect();
+    const popRect = pop.getBoundingClientRect();
+    const margin = 8;
+    let left = rect.right + margin;
+    let top = rect.top;
+    if (left + popRect.width > window.innerWidth - 8) left = rect.left - popRect.width - margin;
+    if (left < 8) left = 8;
+    if (top + popRect.height > window.innerHeight - 8) top = window.innerHeight - popRect.height - 8;
+    if (top < 8) top = 8;
+    pop.style.left = (left + window.scrollX) + 'px';
+    pop.style.top  = (top + window.scrollY) + 'px';
+}
+
+// Live-update the popover when the risk slider moves while it's open.
+function refreshScoreExplainIfOpen() {
+    if (!scoreExplainState.raceId || !scoreExplainState.horseId) return;
+    const pop = document.getElementById('score-explain-popover');
+    if (!pop || pop.style.display === 'none') return;
+    const entries = globalRaceEntries[scoreExplainState.raceId] || [];
+    const row = entries.find(e => String(e.Horse_ID).split('.')[0] === String(scoreExplainState.horseId));
+    if (!row) return;
+    // Use the current popover position as the anchor proxy.
+    renderScoreExplain(row, pop);
 }
 
 function getCurrentAutoPickRisk(riskOverride = null) {
@@ -2136,8 +2396,9 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
             const arrow = shouldCollapse ? "▶" : "▼";
             const collapsedClass = shouldCollapse ? "collapsed" : "";
 
-            race.entries.forEach((row, idx) => { row.original_index = idx; });
+            race.entries.forEach((row, idx) => { row.original_index = idx; row._raceId = r_id; });
             globalRaceEntries[r_id] = race.entries;
+            globalRaceClass[r_id] = raceClassFlags(race?.info?.race_class);
 
             if (!raceSorts[r_id]) {
                 raceSorts[r_id] = { col: 'Default', asc: true };
@@ -2256,6 +2517,7 @@ async function loadRaces() {
     upcomingRaces = [];
     searchableHorses = [];
     globalRaceEntries = {};
+    globalRaceClass = {};
     globalRaceInfo = {};
     globalRacesByDate = {};
     globalDateTimelineByDate = {};
@@ -2279,8 +2541,10 @@ async function loadRaces() {
                         if (row.original_index === undefined) {
                             row.original_index = idx;
                         }
+                        row._raceId = r_id;
                     });
                     globalRaceEntries[r_id] = race.entries;
+                    globalRaceClass[r_id]   = raceClassFlags(race?.info?.race_class);
                 }
 
                 globalRaceInfo[r_id] = { ...race.info, _timeline: timeline };
@@ -6064,6 +6328,7 @@ function showSettingsModal() {
     document.getElementById('fw-freshnessBreakeven').value = fw.freshnessBreakeven;
     document.getElementById('fw-pedigreeMultiplier').value = fw.pedigreeMultiplier;
     document.getElementById('fw-formWeight').value         = fw.formWeight;
+    document.getElementById('fw-sireFitWeight').value      = fw.sireFitWeight;
     renderRaceColumnSettings();
     loadOrchestratorSettings();
 
@@ -6081,6 +6346,7 @@ function resetFormulaWeights() {
     document.getElementById('fw-freshnessBreakeven').value = 10;
     document.getElementById('fw-pedigreeMultiplier').value = 30;
     document.getElementById('fw-formWeight').value         = 80;
+    document.getElementById('fw-sireFitWeight').value      = 10;
     updateSidebarSettings();
 }
 
@@ -6122,6 +6388,7 @@ async function updateSidebarSettings() {
             freshnessBreakeven: parseFWInput('fw-freshnessBreakeven',  10),
             pedigreeMultiplier: parseFWInput('fw-pedigreeMultiplier',  30),
             formWeight:         parseFWInput('fw-formWeight',          80),
+            sireFitWeight:      parseFWInput('fw-sireFitWeight',       10),
         }
     };
     appConfig.backend = {

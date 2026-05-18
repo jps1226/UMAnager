@@ -16,6 +16,9 @@ public sealed class JvLinkController : ControllerBase
     private readonly DifnRecordParsingService _parsingService;
     private readonly BreedingHorseBackfillService _breedingBackfill;
     private readonly HnNameBackfillService _hnNameBackfill;
+    private readonly SurfaceBackfillService _surfaceBackfill;
+    private readonly RaceClassBackfillService _raceClassBackfill;
+    private readonly SirePerformanceService _sirePerf;
     private readonly RaceCardRefreshService _refreshService;
     private readonly AppStateService _appState;
     private readonly OddsApplyService _oddsApply;
@@ -28,6 +31,9 @@ public sealed class JvLinkController : ControllerBase
         DifnRecordParsingService parsingService,
         BreedingHorseBackfillService breedingBackfill,
         HnNameBackfillService hnNameBackfill,
+        SurfaceBackfillService surfaceBackfill,
+        RaceClassBackfillService raceClassBackfill,
+        SirePerformanceService sirePerf,
         RaceCardRefreshService refreshService,
         AppStateService appState,
         OddsApplyService oddsApply,
@@ -39,6 +45,9 @@ public sealed class JvLinkController : ControllerBase
         _parsingService   = parsingService;
         _breedingBackfill = breedingBackfill;
         _hnNameBackfill   = hnNameBackfill;
+        _surfaceBackfill  = surfaceBackfill;
+        _raceClassBackfill = raceClassBackfill;
+        _sirePerf         = sirePerf;
         _refreshService   = refreshService;
         _appState         = appState;
         _oddsApply        = oddsApply;
@@ -187,6 +196,62 @@ public sealed class JvLinkController : ControllerBase
         {
             var (scanned, updated) = await _hnNameBackfill.BackfillAsync(ct);
             return Ok(new { status = "HN name backfill complete", scanned, updated });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    // Phase 9: force a refresh of the sire_performance materialized view. Cheap
+    // (CONCURRENTLY, sub-second). Mostly useful after a manual backfill; the normal
+    // results-tick path already refreshes after each batch of finishes.
+    [HttpPost("refresh-sire-performance")]
+    public async Task<IActionResult> RefreshSirePerformance(CancellationToken ct)
+    {
+        try
+        {
+            await _sirePerf.EnsureSchemaAsync(ct);
+            await _sirePerf.RefreshAsync(ct);
+            return Ok(new { status = "sire_performance refreshed" });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    // Oracle Q20: backfill races.RaceClass from JyokenCD slot 5 in raw_staging RA
+    // records. Run once after the column is added; subsequent ingests populate it
+    // automatically via the fixed RaRecordParser.
+    [HttpPost("backfill-race-class")]
+    public async Task<IActionResult> BackfillRaceClass(CancellationToken ct)
+    {
+        try
+        {
+            var (scanned, updated) = await _raceClassBackfill.BackfillAsync(ct);
+            return Ok(new { status = "race class backfill complete", scanned, updated });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    // Phase 9 dependency: backfill races.Surface from raw_staging RA records. The
+    // original RaRecordParser had a bug where it compared the 2-digit TrackCD field
+    // to "1"/"2" and never matched, leaving Surface NULL on all 6,631 historical
+    // races. This re-parses RA records with the fixed code and UPDATEs Surface.
+    [HttpPost("backfill-surface")]
+    public async Task<IActionResult> BackfillSurface(CancellationToken ct)
+    {
+        try
+        {
+            var (scanned, updated) = await _surfaceBackfill.BackfillAsync(ct);
+            // Chain: surface fix invalidates the MV; refresh it now so the next
+            // /api/races call returns non-null Sire_Fit values.
+            await _sirePerf.RefreshAsync(ct);
+            return Ok(new { status = "surface backfill complete", scanned, updated });
         }
         catch (Exception ex)
         {
