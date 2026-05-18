@@ -80,13 +80,15 @@ public sealed class RacesController : ControllerBase
                 .AsNoTracking()
                 .ToListAsync();
 
-            // Phase 14: ETag based on (race count, max LastUpdated). Cheap to compute,
-            // changes only when data actually changes. Browser sends If-None-Match on
-            // reload; we return 304 with no body if unchanged.
+            // Phase 14: ETag based on (race count, max race LastUpdated, max breeding_horses
+            // LastUpdated). The breeding_horses signal ensures that an HN-name backfill
+            // (Phase 15) invalidates the cached response even when no race row was touched.
             DateTime? maxLastUpdated = races.Count > 0
                 ? races.Max(r => r.LastUpdated)
                 : (DateTime?)null;
-            var etag = $"\"races-{races.Count}-{maxLastUpdated?.Ticks ?? 0}\"";
+            var maxBreedingUpdated = await db.BreedingHorses.AsNoTracking()
+                .MaxAsync(b => (DateTime?)b.LastUpdated);
+            var etag = $"\"races-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}\"";
             Response.Headers["Cache-Control"] = "no-cache"; // re-validate every time, but allow 304
             Response.Headers["ETag"] = etag;
             var ifNoneMatch = Request.Headers["If-None-Match"].ToString();

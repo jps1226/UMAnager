@@ -4520,21 +4520,6 @@ function updateLiveViewPopoutAvailability() {
     btn.style.display = isPast ? 'none' : 'inline-block';
 }
 
-function setVotingOreProCollapsed(collapsed) {
-    const container = document.getElementById('live-view-container');
-    const toggleBtn = document.getElementById('btn-voting-orepro-toggle');
-    if (!container || !toggleBtn) return;
-
-    container.classList.toggle('orepro-collapsed', !!collapsed);
-    toggleBtn.textContent = collapsed ? '🌐 Show OrePro' : '🧾 Collapse OrePro';
-}
-
-function toggleVotingOrePro() {
-    const container = document.getElementById('live-view-container');
-    if (!container) return;
-    setVotingOreProCollapsed(!container.classList.contains('orepro-collapsed'));
-}
-
 let oreproCompanionWindow = null;
 const OREPRO_COMPANION_WINDOW_NAME = 'OreProCompanionWindow';
 let oreproLastSyncPayload = null;
@@ -4708,10 +4693,6 @@ async function controlOreProCompanion(action, raceIdForDeepLink) {
 
 async function openOreProCompanion() {
     return controlOreProCompanion('open');
-}
-
-async function focusOreProCompanion() {
-    return controlOreProCompanion('focus');
 }
 
 function collectOreProMarksFromEntries(raceId, entries) {
@@ -4993,92 +4974,6 @@ async function autoBetActiveDay() {
 /// in the results panel. Each per-race call uses submit_after_apply so the bet is both
 /// staged and committed in OrePro. This keeps the platforms separated: Auto Bet Day only
 /// updates marks within UMAnager; Apply Votes is the explicit push to OrePro.
-async function applyVotesToOrePro() {
-    const dayPayload = buildOreProApplyVotesPayload(currentActiveDate);
-    if (!dayPayload.races.length) {
-        setOreProSessionStatus('No valid ◎〇▲△ marks found for the active day to apply.', 'warn');
-        return;
-    }
-
-    setOreProSessionStatus(`Preparing OrePro companion session...`, 'info');
-    const companion = await controlOreProCompanion('open');
-    if (!companion || companion.status !== 'ok') {
-        setOreProSessionStatus(
-            companion?.message || 'Could not initialize companion OrePro session. Click Open OrePro and retry.',
-            'warn'
-        );
-        return;
-    }
-
-    const total = dayPayload.races.length;
-    const out = document.getElementById('orepro-sync-results');
-    const lineEls = [];
-    if (out) {
-        out.innerHTML = `
-            <div class="orepro-sync-title">Apply Votes (one race at a time)</div>
-            <div id="orepro-bulk-progress" class="orepro-sync-list">Starting 0/${total}...</div>
-            <div id="orepro-bulk-lines"></div>
-        `;
-    }
-
-    let okCount = 0;
-    for (let i = 0; i < total; i++) {
-        const race = dayPayload.races[i];
-        const raceId = String(race?.race_id || '').trim();
-        const progressEl = document.getElementById('orepro-bulk-progress');
-        if (progressEl) progressEl.textContent = `Sending ${i + 1}/${total} — race ${raceId}...`;
-        setOreProSessionStatus(`Applying to OrePro ${i + 1}/${total} — race ${raceId}...`, 'info');
-
-        const singleRacePayload = {
-            races: [race],
-            dry_run: false,
-            force_refresh: true,
-            submit_after_apply: true,
-            go_next_race: false,
-        };
-
-        let lineText = '';
-        let lineStatus = 'error';
-        try {
-            const res = await fetch('/api/orepro/votes/apply', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(singleRacePayload)
-            });
-            const data = await res.json();
-            const result = Array.isArray(data?.results) ? data.results[0] : null;
-            lineStatus = String(result?.status || 'unknown');
-            lineText = String(result?.message || data?.message || '(no message)');
-            if (lineStatus === 'ok') okCount += 1;
-        } catch (err) {
-            lineText = `Failed: ${err?.message || err}`;
-        }
-
-        const linesContainer = document.getElementById('orepro-bulk-lines');
-        if (linesContainer) {
-            const lineDiv = document.createElement('div');
-            lineDiv.className = 'orepro-sync-list';
-            lineDiv.textContent = `[${lineStatus}] race ${raceId}: ${lineText}`;
-            linesContainer.appendChild(lineDiv);
-        }
-    }
-
-    // Refresh apply-state badges and the voting sidebar once at the end.
-    await loadOreProApplyState();
-    try { renderLiveViewPanel(); } catch (_) {}
-
-    // Lock every race on this day so accidental mark edits can't drift from
-    // what's already in OrePro. Operator can still unlock per-race manually.
-    if (dayPayload.races?.length) {
-        lockAllRacesForRaceDay(dayPayload.races[0].race_id);
-    }
-
-    const finalMsg = `Apply Votes finished: ${okCount}/${total} race(s) submitted to OrePro.`;
-    setOreProSessionStatus(finalMsg, okCount === total ? 'ok' : (okCount > 0 ? 'warn' : 'error'));
-    const progressEl = document.getElementById('orepro-bulk-progress');
-    if (progressEl) progressEl.textContent = finalMsg;
-}
-
 async function applySingleRaceVotesToOrePro(event, raceId) {
     if (event) {
         event.preventDefault();
@@ -5372,37 +5267,6 @@ async function loadOreProSessionStatus() {
         renderOreProHistorySummary(last?.historySummary || history || {});
     } catch (err) {
         setOreProSessionStatus(`Failed loading OrePro sync state: ${err?.message || err}`, 'warn');
-    }
-}
-
-async function syncOreProResults() {
-    // Derive date from the calendar's currently selected day
-    const kaisai_date = currentActiveDate ? currentActiveDate.replace(/-/g, '') : '';
-    const kaisai_id = (document.getElementById('orepro-kaisai-id')?.value || '').trim();
-    const yosoka_id = (document.getElementById('orepro-yosoka-id')?.value || '').trim();
-
-    if (!kaisai_date) {
-        setOreProSessionStatus('No day selected in the calendar. Select a race day first.', 'warn');
-        return;
-    }
-
-    const label = ` for ${kaisai_date}`;
-    setOreProSessionStatus(`Syncing OrePro results${label}...`, 'warn');
-    try {
-        const res = await fetch('/api/orepro/results/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ kaisai_date, kaisai_id, yosoka_id }),
-        });
-        const data = await res.json();
-        renderOreProSyncPayload(data);
-        if (data.status === 'success') {
-            setOreProSessionStatus(`OrePro results synced${label}.`, 'ok');
-        } else {
-            setOreProSessionStatus(data.message || 'OrePro sync finished with warnings.', 'warn');
-        }
-    } catch (err) {
-        setOreProSessionStatus(`OrePro sync failed: ${err?.message || err}`, 'error');
     }
 }
 

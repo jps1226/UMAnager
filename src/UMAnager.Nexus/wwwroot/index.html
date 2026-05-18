@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260517-6">
+    <link rel="stylesheet" href="/static/style.css?v=20260517-8">
 </head>
 <body>
 
@@ -200,7 +200,27 @@
         </div>
     </div>
     
-    <div id="schedules-container" class="scrollable-races"></div>
+    <div id="schedules-container" class="scrollable-races">
+        <!-- First-paint skeleton. Wiped by renderDayTabsAndSchedules() once /api/races resolves. -->
+        <div class="first-paint-skeleton" aria-hidden="true">
+            <div class="skel-tabs">
+                <div class="skel-tab shimmer"></div>
+                <div class="skel-tab shimmer"></div>
+                <div class="skel-tab shimmer"></div>
+                <div class="skel-tab shimmer"></div>
+            </div>
+            <div class="skel-races">
+                <div class="skel-race shimmer"></div>
+                <div class="skel-race shimmer"></div>
+                <div class="skel-race shimmer"></div>
+                <div class="skel-race shimmer"></div>
+                <div class="skel-race shimmer"></div>
+                <div class="skel-race shimmer"></div>
+                <div class="skel-race shimmer"></div>
+                <div class="skel-race shimmer"></div>
+            </div>
+        </div>
+    </div>
     <div id="live-view-container" class="voting-main-shell" style="display:none;">
         <div class="voting-main-head">
             <h3 id="voting-main-title">Voting Workspace</h3>
@@ -424,6 +444,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260517-13"></script>
+<script src="/static/script.js?v=20260517-15"></script>
 </body>
 </html>
