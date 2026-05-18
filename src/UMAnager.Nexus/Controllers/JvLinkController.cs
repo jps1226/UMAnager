@@ -18,6 +18,9 @@ public sealed class JvLinkController : ControllerBase
     private readonly HnNameBackfillService _hnNameBackfill;
     private readonly SurfaceBackfillService _surfaceBackfill;
     private readonly RaceClassBackfillService _raceClassBackfill;
+    private readonly JockeyTrainerIngestService _jtIngest;
+    private readonly SeCodeBackfillService _seBackfill;
+    private readonly JockeyTrainerStatsService _jtStats;
     private readonly SirePerformanceService _sirePerf;
     private readonly RaceCardRefreshService _refreshService;
     private readonly AppStateService _appState;
@@ -33,6 +36,9 @@ public sealed class JvLinkController : ControllerBase
         HnNameBackfillService hnNameBackfill,
         SurfaceBackfillService surfaceBackfill,
         RaceClassBackfillService raceClassBackfill,
+        JockeyTrainerIngestService jtIngest,
+        SeCodeBackfillService seBackfill,
+        JockeyTrainerStatsService jtStats,
         SirePerformanceService sirePerf,
         RaceCardRefreshService refreshService,
         AppStateService appState,
@@ -47,6 +53,9 @@ public sealed class JvLinkController : ControllerBase
         _hnNameBackfill   = hnNameBackfill;
         _surfaceBackfill  = surfaceBackfill;
         _raceClassBackfill = raceClassBackfill;
+        _jtIngest         = jtIngest;
+        _seBackfill       = seBackfill;
+        _jtStats          = jtStats;
         _sirePerf         = sirePerf;
         _refreshService   = refreshService;
         _appState         = appState;
@@ -196,6 +205,46 @@ public sealed class JvLinkController : ControllerBase
         {
             var (scanned, updated) = await _hnNameBackfill.BackfillAsync(ct);
             return Ok(new { status = "HN name backfill complete", scanned, updated });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    // Phase 8: process staged KS/CH records into jockeys / trainers, then re-parse staged
+    // SE records to fill the new JockeyCode / TrainerCode columns on race_entries. Idempotent.
+    [HttpPost("ingest-jockeys-trainers")]
+    public async Task<IActionResult> IngestJockeysTrainers(CancellationToken ct)
+    {
+        try
+        {
+            var (jScanned, jUpserted) = await _jtIngest.IngestJockeysAsync(ct);
+            var (tScanned, tUpserted) = await _jtIngest.IngestTrainersAsync(ct);
+            var (sScanned, sUpdated)  = await _seBackfill.BackfillAsync(ct);
+            await _jtStats.RefreshAsync(ct);
+            return Ok(new {
+                status = "Phase 8 ingest complete",
+                jockeys  = new { scanned = jScanned, upserted = jUpserted },
+                trainers = new { scanned = tScanned, upserted = tUpserted },
+                se_codes = new { scanned = sScanned, updated  = sUpdated  }
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    // Phase 8: force a refresh of jockey/trainer rolling stats. Normally fires off the
+    // results-tick path; this endpoint is for manual recompute after a backfill.
+    [HttpPost("refresh-jockey-trainer-stats")]
+    public async Task<IActionResult> RefreshJockeyTrainerStats(CancellationToken ct)
+    {
+        try
+        {
+            await _jtStats.RefreshAsync(ct);
+            return Ok(new { status = "jockey/trainer stats refreshed" });
         }
         catch (Exception ex)
         {

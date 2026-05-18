@@ -254,6 +254,14 @@ public sealed class NexusPipeServer : BackgroundService
                                         catch (Exception ex) { _logger.LogError(ex, "[Nexus] sire_performance refresh failed."); }
                                     });
 
+                                    // Phase 8: refresh jockey/trainer rolling stats. Same fire-and-forget pattern.
+                                    var jtStats = scope.ServiceProvider.GetRequiredService<Services.JockeyTrainerStatsService>();
+                                    _ = Task.Run(async () =>
+                                    {
+                                        try { await jtStats.RefreshAsync(CancellationToken.None); }
+                                        catch (Exception ex) { _logger.LogError(ex, "[Nexus] jockey/trainer stats refresh failed."); }
+                                    });
+
                                     // JRA publishes finishers 1-3 (the official umaban) immediately,
                                     // then the rest of the field a few seconds-to-minutes later. If
                                     // any race in this batch has top-3 but is missing some of 4-5,

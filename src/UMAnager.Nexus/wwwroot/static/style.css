@@ -1355,6 +1355,15 @@ td.sire-fit-mid    { color: #e6e6e6; }
 td.sire-fit-weak   { color: #888; }
 td.sire-fit-none   { color: #444; }
 
+/* --- JOCKEY / TRAINER WIN% (Phase 8) ---
+   Rolling 90d (jockey) / 180d (trainer). Hover for full name + A/E + sample size.
+   Tiers tuned per role: jockey strong ≥18%, trainer strong ≥15% — gated by class on the cell. */
+td.jt-rate { text-align: center; white-space: nowrap; min-width: 36px; padding: 4px 6px; font-weight: bold; font-size: 12px; }
+td.jt-rate-strong { color: #1dd1a1; }
+td.jt-rate-mid    { color: #e6e6e6; }
+td.jt-rate-weak   { color: #888; }
+td.jt-rate-none   { color: #444; }
+
 .btn-history-refresh {
     background: transparent;
     border: 1px solid #1dd1a1;

@@ -26,7 +26,7 @@ let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 let appConfig = {}; // NEW: Stores app configuration
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
 
-const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Last3", "Sire", "SF", "Dam", "BMS", "Odds", "Fav", "Finish"];
+const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Last3", "J%", "T%", "Sire", "SF", "Dam", "BMS", "Odds", "Fav", "Finish"];
 
 // JRA track codes → romaji names. Source: JRA-VAN spec.
 const TRACK_NAMES = {
@@ -59,6 +59,8 @@ const RACE_COLUMN_META = {
     Horse: { label: "Horse", sortable: true, sortKey: "Horse", initialAsc: true },
     Record: { label: "W/S", sortable: true, sortKey: "Record", initialAsc: true },
     Last3: { label: "Form", sortable: true, sortKey: "Last3", initialAsc: false },
+    "J%": { label: "J%", sortable: true, sortKey: "J%", initialAsc: false },
+    "T%": { label: "T%", sortable: true, sortKey: "T%", initialAsc: false },
     Sire: { label: "Sire", sortable: true, sortKey: "Sire", initialAsc: true },
     SF: { label: "SF", sortable: true, sortKey: "SF", initialAsc: false },
     Dam: { label: "Dam", sortable: true, sortKey: "Dam", initialAsc: true },
@@ -1032,6 +1034,16 @@ function applySortLogic(r_id, col, asc) {
             else if (av === null) comparison = 1;
             else if (bv === null) comparison = -1;
             else comparison = comparePrimitiveValues(av, bv, asc);
+        } else if (col === 'J%' || col === 'T%') {
+            // Phase 8: jockey/trainer Win% (rolling 90d / 180d). Null below min-sample
+            // sorts to the bottom regardless of direction.
+            const field = col === 'J%' ? 'Jockey_Win_Pct' : 'Trainer_Win_Pct';
+            const av = (a[field] === null || a[field] === undefined) ? null : parseFloat(a[field]);
+            const bv = (b[field] === null || b[field] === undefined) ? null : parseFloat(b[field]);
+            if (av === null && bv === null) comparison = 0;
+            else if (av === null) comparison = 1;
+            else if (bv === null) comparison = -1;
+            else comparison = comparePrimitiveValues(av, bv, asc);
         } else if (col === 'Dam') {
             comparison = comparePrimitiveValues(normalizeRaceText(a.Dam), normalizeRaceText(b.Dam), asc);
         } else if (col === 'BMS') {
@@ -1181,6 +1193,42 @@ function buildTableBody(r_id, entries) {
                     return `<span class="${cls}">${p}</span>`;
                 }).join('');
                 return `<td class="last3-strip" title="Form score: ${(parseFloat(row.Form_Score) || 0).toFixed(3)}">${cells}</td>`;
+            })(),
+            "J%": (() => {
+                const wp = (row.Jockey_Win_Pct === null || row.Jockey_Win_Pct === undefined) ? null : parseFloat(row.Jockey_Win_Pct);
+                const ae = parseFloat(row.Jockey_AE);
+                const name = row.Jockey || row.Jockey_Code || '';
+                const starts = row.Jockey_Starts;
+                if (wp === null || !Number.isFinite(wp)) {
+                    const tip = starts ? `${name} (${starts} starts in 90d — below 30 min)` : `${name} (no recent rides)`;
+                    return `<td class="jt-rate jt-rate-none" title="${escapeHtml(tip)}">—</td>`;
+                }
+                const pct = wp * 100;
+                let cls = 'jt-rate';
+                if (pct >= 18) cls += ' jt-rate-strong';
+                else if (pct >= 11) cls += ' jt-rate-mid';
+                else cls += ' jt-rate-weak';
+                const aeStr = Number.isFinite(ae) ? ` · A/E ${ae.toFixed(2)}` : '';
+                const tip = `${name} — 90d Win% ${pct.toFixed(0)}%${aeStr} (${starts || 0} starts)`;
+                return `<td class="${cls}" title="${escapeHtml(tip)}">${pct.toFixed(0)}%</td>`;
+            })(),
+            "T%": (() => {
+                const wp = (row.Trainer_Win_Pct === null || row.Trainer_Win_Pct === undefined) ? null : parseFloat(row.Trainer_Win_Pct);
+                const ae = parseFloat(row.Trainer_AE);
+                const name = row.Trainer || row.Trainer_Code || '';
+                const starts = row.Trainer_Starts;
+                if (wp === null || !Number.isFinite(wp)) {
+                    const tip = starts ? `${name} (${starts} starts in 180d — below 20 min)` : `${name} (no recent runners)`;
+                    return `<td class="jt-rate jt-rate-none" title="${escapeHtml(tip)}">—</td>`;
+                }
+                const pct = wp * 100;
+                let cls = 'jt-rate';
+                if (pct >= 15) cls += ' jt-rate-strong';
+                else if (pct >= 9) cls += ' jt-rate-mid';
+                else cls += ' jt-rate-weak';
+                const aeStr = Number.isFinite(ae) ? ` · A/E ${ae.toFixed(2)}` : '';
+                const tip = `${name} — 180d Win% ${pct.toFixed(0)}%${aeStr} (${starts || 0} starts)`;
+                return `<td class="${cls}" title="${escapeHtml(tip)}">${pct.toFixed(0)}%</td>`;
             })(),
             Sire: `<td>${sireStr}</td>`,
             SF: (() => {
@@ -1416,6 +1464,8 @@ function getFormulaWeights() {
         pedigreeMultiplier:   parseFW(fw.pedigreeMultiplier,    30),
         formWeight:           parseFW(fw.formWeight,            80),
         sireFitWeight:        parseFW(fw.sireFitWeight,         10),
+        jockeyWeight:         parseFW(fw.jockeyWeight,          40),
+        trainerWeight:        parseFW(fw.trainerWeight,         20),
     };
 }
 
@@ -1461,6 +1511,14 @@ function calculatePowerScore(row, riskVal, raceClass) {
         const formScoreVal = parseFloat(row.Form_Score) || 0;
         baseFormScore += formScoreVal * fw.formWeight;
     }
+
+    // Phase 8: jockey + trainer A/E (Actual/Expected wins, market-bias-corrected).
+    // ~1.0 = market-neutral; we center on 1.0 and weight the deviation. Null when
+    // the rolling-window sample is below min-starts (server already gated).
+    const jAE = parseFloat(row.Jockey_AE);
+    if (Number.isFinite(jAE)) baseFormScore += (jAE - 1.0) * fw.jockeyWeight;
+    const tAE = parseFloat(row.Trainer_AE);
+    if (Number.isFinite(tAE)) baseFormScore += (tAE - 1.0) * fw.trainerWeight;
 
     // 3. Base Pedigree Score (from Tracked Bloodlines)
     let basePedScore = (parseFloat(row.Score) || 0) * fw.pedigreeMultiplier;
@@ -1546,6 +1604,26 @@ function explainPowerScore(row, riskVal) {
         formLines.push({ label: `Last-3 form ${formScoreVal.toFixed(3)} × ${fw.formWeight}`, value: last3Contrib });
     } else {
         formLines.push({ label: 'Last-3 skipped (debut race)', value: 0 });
+    }
+
+    // Phase 8: jockey/trainer A/E contributions.
+    const jAEv = parseFloat(row.Jockey_AE);
+    if (Number.isFinite(jAEv)) {
+        const jc = (jAEv - 1.0) * fw.jockeyWeight;
+        baseFormScore += jc;
+        const jName = row.Jockey || row.Jockey_Code || 'jockey';
+        formLines.push({ label: `${jName} A/E ${jAEv.toFixed(2)} (${jAEv >= 1 ? '+' : ''}${(jAEv - 1).toFixed(2)}) × ${fw.jockeyWeight}`, value: jc });
+    } else if (row.Jockey_Code) {
+        formLines.push({ label: `${row.Jockey || row.Jockey_Code} A/E — (low sample)`, value: 0 });
+    }
+    const tAEv = parseFloat(row.Trainer_AE);
+    if (Number.isFinite(tAEv)) {
+        const tc = (tAEv - 1.0) * fw.trainerWeight;
+        baseFormScore += tc;
+        const tName = row.Trainer || row.Trainer_Code || 'trainer';
+        formLines.push({ label: `${tName} A/E ${tAEv.toFixed(2)} (${tAEv >= 1 ? '+' : ''}${(tAEv - 1).toFixed(2)}) × ${fw.trainerWeight}`, value: tc });
+    } else if (row.Trainer_Code) {
+        formLines.push({ label: `${row.Trainer || row.Trainer_Code} A/E — (low sample)`, value: 0 });
     }
 
     // PEDIGREE branch
@@ -3424,6 +3502,22 @@ async function runJvlinkLoadBloodline() {
 async function runJvlinkBackfillHnNames() {
     await runJvlinkPanelCall('Backfill HN EN Names', async () => {
         const res = await fetch('/api/jvlink/backfill-hn-names', { method: 'POST' });
+        return await res.json();
+    });
+}
+
+// Phase 8: ingest staged KS/CH records into jockeys/trainers and backfill JockeyCode/
+// TrainerCode on race_entries from staged SE records, then refresh rolling stats.
+async function runJvlinkIngestJockeysTrainers() {
+    await runJvlinkPanelCall('Ingest Jockeys + Trainers', async () => {
+        const res = await fetch('/api/jvlink/ingest-jockeys-trainers', { method: 'POST' });
+        return await res.json();
+    });
+}
+
+async function runJvlinkRefreshJtStats() {
+    await runJvlinkPanelCall('Refresh J/T Stats', async () => {
+        const res = await fetch('/api/jvlink/refresh-jockey-trainer-stats', { method: 'POST' });
         return await res.json();
     });
 }
@@ -6359,6 +6453,8 @@ function showSettingsModal() {
     document.getElementById('fw-pedigreeMultiplier').value = fw.pedigreeMultiplier;
     document.getElementById('fw-formWeight').value         = fw.formWeight;
     document.getElementById('fw-sireFitWeight').value      = fw.sireFitWeight;
+    document.getElementById('fw-jockeyWeight').value       = fw.jockeyWeight;
+    document.getElementById('fw-trainerWeight').value      = fw.trainerWeight;
     renderRaceColumnSettings();
     loadOrchestratorSettings();
 
@@ -6377,6 +6473,8 @@ function resetFormulaWeights() {
     document.getElementById('fw-pedigreeMultiplier').value = 30;
     document.getElementById('fw-formWeight').value         = 80;
     document.getElementById('fw-sireFitWeight').value      = 10;
+    document.getElementById('fw-jockeyWeight').value       = 40;
+    document.getElementById('fw-trainerWeight').value      = 20;
     updateSidebarSettings();
 }
 
@@ -6419,6 +6517,8 @@ async function updateSidebarSettings() {
             pedigreeMultiplier: parseFWInput('fw-pedigreeMultiplier',  30),
             formWeight:         parseFWInput('fw-formWeight',          80),
             sireFitWeight:      parseFWInput('fw-sireFitWeight',       10),
+            jockeyWeight:       parseFWInput('fw-jockeyWeight',         40),
+            trainerWeight:      parseFWInput('fw-trainerWeight',        20),
         }
     };
     appConfig.backend = {

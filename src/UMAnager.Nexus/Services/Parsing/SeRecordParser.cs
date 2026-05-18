@@ -61,8 +61,16 @@ public static class SeRecordParser
                 horseWeight = hw;
             }
 
-            // JockeyName: 307-314 (8 bytes, Shift-JIS)
+            // JockeyName: 307-314 (8 bytes, Shift-JIS short kanji)
             var jockeyName = ExtractString(data, 306, 8).Trim();
+
+            // TrainerCode (ChokyosiCode): 86-90 (5 bytes ASCII). Oracle Q21.
+            var trainerCode = ExtractString(data, 85, 5).Trim();
+            if (string.IsNullOrEmpty(trainerCode) || trainerCode == "00000") trainerCode = null;
+
+            // JockeyCode (KisyuCode): 297-301 (5 bytes ASCII). Oracle Q21.
+            var jockeyCode = ExtractString(data, 296, 5).Trim();
+            if (string.IsNullOrEmpty(jockeyCode) || jockeyCode == "00000") jockeyCode = null;
 
             // Odds: 360-363 (4 bytes, raw odds ÷ 10 = actual). Oracle-confirmed offset.
             var oddsStr = ExtractString(data, 359, 4).Trim();
@@ -99,6 +107,8 @@ public static class SeRecordParser
                 Weight = burdenWeight,
                 HorseWeight = horseWeight,
                 JockeyName = string.IsNullOrEmpty(jockeyName) ? null : jockeyName,
+                JockeyCode = jockeyCode,
+                TrainerCode = trainerCode,
                 Odds = odds,
                 FavRank = favRank,
                 FinishPos = finishPos,

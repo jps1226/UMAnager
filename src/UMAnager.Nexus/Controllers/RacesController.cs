@@ -56,15 +56,18 @@ public sealed class RacesController : ControllerBase
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly Services.SettingsService _settings;
     private readonly Services.SirePerformanceService _sirePerf;
+    private readonly Services.JockeyTrainerStatsService _jtStats;
 
     public RacesController(
         IDbContextFactory<AppDbContext> dbFactory,
         Services.SettingsService settings,
-        Services.SirePerformanceService sirePerf)
+        Services.SirePerformanceService sirePerf,
+        Services.JockeyTrainerStatsService jtStats)
     {
         _dbFactory = dbFactory;
         _settings = settings;
         _sirePerf = sirePerf;
+        _jtStats = jtStats;
     }
 
     [HttpGet]
@@ -93,7 +96,16 @@ public sealed class RacesController : ControllerBase
                 : (DateTime?)null;
             var maxBreedingUpdated = await db.BreedingHorses.AsNoTracking()
                 .MaxAsync(b => (DateTime?)b.LastUpdated);
-            var etag = $"\"races-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}\"";
+            // Phase 8: include jockey/trainer stats refresh tick so a stats recompute (no race
+            // row touched) still busts the 304 cache.
+            var maxJockeyRefresh = await db.Database
+                .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM jockeys")
+                .FirstOrDefaultAsync();
+            var maxTrainerRefresh = await db.Database
+                .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
+                .FirstOrDefaultAsync();
+            var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
+            var etag = $"\"races-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{jtTicks}\"";
             Response.Headers["Cache-Control"] = "no-cache"; // re-validate every time, but allow 304
             Response.Headers["ETag"] = etag;
             var ifNoneMatch = Request.Headers["If-None-Match"].ToString();
@@ -179,6 +191,16 @@ public sealed class RacesController : ControllerBase
                     r => (r.SireId, r.Surface ?? "", r.Bucket ?? ""),
                     r => r.WinPct);
 
+            // Phase 8: jockey/trainer rolling stats. Indexed by code for O(1) lookup per entry.
+            // MinJockeyStarts=30 (90d), MinTrainerStarts=20 (180d) floor — below these, stats
+            // are surfaced as null and contribute nothing to scoring (avoids noisy 1-ride 100%).
+            const int MinJockeyStarts = 30;
+            const int MinTrainerStarts = 20;
+            var jockeyStats = (await _jtStats.LoadAllJockeysAsync())
+                .ToDictionary(j => j.Code, j => j);
+            var trainerStats = (await _jtStats.LoadAllTrainersAsync())
+                .ToDictionary(t => t.Code, t => t);
+
 
             string ResolveAncestorName(string? id)
             {
@@ -247,6 +269,20 @@ public sealed class RacesController : ControllerBase
                                 sireFitPct = pct;
                         }
 
+                        // Phase 8: jockey/trainer rolling stats. Surface raw rates + A/E. The
+                        // frontend gates the scoring contribution behind min-sample floors; we
+                        // still emit small-sample names so the column doesn't go blank entirely.
+                        Services.JockeyTrainerStatsService.JockeyStat? jStat = null;
+                        if (!string.IsNullOrEmpty(e.JockeyCode))
+                            jockeyStats.TryGetValue(e.JockeyCode, out jStat);
+
+                        Services.JockeyTrainerStatsService.TrainerStat? tStat = null;
+                        if (!string.IsNullOrEmpty(e.TrainerCode))
+                            trainerStats.TryGetValue(e.TrainerCode, out tStat);
+
+                        bool jQualifies = jStat != null && (jStat.Starts ?? 0) >= MinJockeyStarts;
+                        bool tQualifies = tStat != null && (tStat.Starts ?? 0) >= MinTrainerStarts;
+
                         return (object)new
                         {
                             Horse_ID = e.HorseId,
@@ -265,7 +301,19 @@ public sealed class RacesController : ControllerBase
                             BMS_ID = horse?.BmsId ?? "",
                             Odds = e.Odds?.ToString("F1") ?? "",
                             Fav = e.FavRank?.ToString() ?? "",
-                            Finish = e.FinishPos?.ToString() ?? ""
+                            Finish = e.FinishPos?.ToString() ?? "",
+                            Jockey      = jStat?.NameEn ?? jStat?.NameJa ?? e.JockeyName ?? "",
+                            Jockey_Code = e.JockeyCode ?? "",
+                            Jockey_Starts = jStat?.Starts,
+                            Jockey_Win_Pct  = jQualifies ? jStat!.WinPct  : null,
+                            Jockey_Place_Pct= jQualifies ? jStat!.PlacePct: null,
+                            Jockey_AE       = jQualifies ? jStat!.Ae     : null,
+                            Trainer      = tStat?.NameEn ?? tStat?.NameJa ?? "",
+                            Trainer_Code = e.TrainerCode ?? "",
+                            Trainer_Starts = tStat?.Starts,
+                            Trainer_Win_Pct  = tQualifies ? tStat!.WinPct  : null,
+                            Trainer_Place_Pct= tQualifies ? tStat!.PlacePct: null,
+                            Trainer_AE       = tQualifies ? tStat!.Ae     : null
                         };
                     })
                     .ToList();

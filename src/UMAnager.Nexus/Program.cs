@@ -60,8 +60,11 @@ builder.Services.AddScoped<BreedingHorseBackfillService>();
 builder.Services.AddScoped<HnNameBackfillService>();
 builder.Services.AddScoped<SurfaceBackfillService>();
 builder.Services.AddScoped<RaceClassBackfillService>();
+builder.Services.AddScoped<JockeyTrainerIngestService>();
+builder.Services.AddScoped<SeCodeBackfillService>();
 builder.Services.AddScoped<OddsApplyService>();
 builder.Services.AddSingleton<SirePerformanceService>();
+builder.Services.AddSingleton<JockeyTrainerStatsService>();
 builder.Services.AddHostedService<NexusPipeServer>();
 
 var app = builder.Build();
@@ -82,6 +85,43 @@ using (var scope = app.Services.CreateScope())
     catch (Exception ex)
     {
         app.Logger.LogError(ex, "[Startup] races.RaceClass column ensure failed (non-fatal).");
+    }
+}
+
+// Phase 8: jockey/trainer code columns on race_entries + rolling-stats columns on jockeys/trainers.
+// Inline ALTER matches the RaceClass / NameEn / OddsJson pattern.
+using (var scope = app.Services.CreateScope())
+{
+    try
+    {
+        var factory = scope.ServiceProvider.GetRequiredService<Microsoft.EntityFrameworkCore.IDbContextFactory<UMAnager.Nexus.Data.AppDbContext>>();
+        using var db = await factory.CreateDbContextAsync();
+        await db.Database.ExecuteSqlRawAsync(@"
+            ALTER TABLE race_entries ADD COLUMN IF NOT EXISTS ""JockeyCode""  VARCHAR(5);
+            ALTER TABLE race_entries ADD COLUMN IF NOT EXISTS ""TrainerCode"" VARCHAR(5);
+            CREATE INDEX IF NOT EXISTS ix_race_entries_jockey  ON race_entries (""JockeyCode"")  WHERE ""JockeyCode""  IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS ix_race_entries_trainer ON race_entries (""TrainerCode"") WHERE ""TrainerCode"" IS NOT NULL;
+
+            ALTER TABLE jockeys  ADD COLUMN IF NOT EXISTS starts_90d  INT;
+            ALTER TABLE jockeys  ADD COLUMN IF NOT EXISTS wins_90d    INT;
+            ALTER TABLE jockeys  ADD COLUMN IF NOT EXISTS places_90d  INT;
+            ALTER TABLE jockeys  ADD COLUMN IF NOT EXISTS win_pct_90d   NUMERIC(5,4);
+            ALTER TABLE jockeys  ADD COLUMN IF NOT EXISTS place_pct_90d NUMERIC(5,4);
+            ALTER TABLE jockeys  ADD COLUMN IF NOT EXISTS ae_90d        NUMERIC(6,4);
+            ALTER TABLE jockeys  ADD COLUMN IF NOT EXISTS stats_refreshed_at TIMESTAMPTZ;
+
+            ALTER TABLE trainers ADD COLUMN IF NOT EXISTS starts_180d INT;
+            ALTER TABLE trainers ADD COLUMN IF NOT EXISTS wins_180d   INT;
+            ALTER TABLE trainers ADD COLUMN IF NOT EXISTS places_180d INT;
+            ALTER TABLE trainers ADD COLUMN IF NOT EXISTS win_pct_180d   NUMERIC(5,4);
+            ALTER TABLE trainers ADD COLUMN IF NOT EXISTS place_pct_180d NUMERIC(5,4);
+            ALTER TABLE trainers ADD COLUMN IF NOT EXISTS ae_180d        NUMERIC(6,4);
+            ALTER TABLE trainers ADD COLUMN IF NOT EXISTS stats_refreshed_at TIMESTAMPTZ;
+        ");
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "[Startup] Phase 8 jockey/trainer column ensure failed (non-fatal).");
     }
 }
 

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260518-3">
+    <link rel="stylesheet" href="/static/style.css?v=20260518-4">
 </head>
 <body>
 
@@ -98,6 +98,8 @@
                         <div class="jvlink-btn-grid">
                             <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadBloodline()" title="One-time: pull HN (breeding-horse master) records via BLDN spec. Populates raw_staging.">🩸 Load Bloodline (BLDN)</button>
                             <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkBackfillHnNames()" title="Parse HN records from raw_staging and fill breeding_horses.NameEn (romaji names for pedigree ancestors)">🌐 Backfill EN Names</button>
+                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkIngestJockeysTrainers()" title="Phase 8: parse staged KS/CH records into jockeys/trainers + re-parse staged SE records to fill JockeyCode/TrainerCode on race_entries + refresh rolling stats.">🏇 Ingest Jockeys + Trainers</button>
+                            <button class="btn-full btn-micro" onclick="runJvlinkRefreshJtStats()" title="Recompute rolling 90d jockey + 180d trainer Win%/Place%/AE. Auto-runs after each results tick; this is for manual recompute.">↻ Refresh J/T Stats</button>
                         </div>
                         <div id="jvlink-test-status" class="jvlink-test-status">Ready.</div>
                         <pre id="jvlink-test-output" class="jvlink-test-output">{}</pre>
@@ -366,6 +368,12 @@
                         <label title="Phase 9 sire-fit weight. Adds sire's historical win% on this race's surface + distance bucket as a low-weight tiebreaker. Skipped when the sire has <10 progeny starts in the bucket.">Sire Fit Weight</label>
                         <input type="number" id="fw-sireFitWeight" min="0" max="200" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
 
+                        <label title="Phase 8 jockey weight. Applied to (A/E − 1.0) where A/E is jockey's actual wins ÷ market-expected wins over the last 90 days. >1.0 = beats market, <1.0 = drag. Min 30 starts to count.">Jockey Weight</label>
+                        <input type="number" id="fw-jockeyWeight" min="0" max="200" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
+
+                        <label title="Phase 8 trainer weight. Same A/E logic as jockey, rolling 180-day window. Min 20 starts to count.">Trainer Weight</label>
+                        <input type="number" id="fw-trainerWeight" min="0" max="200" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
+
                         <label title="Yen stake on a single ◎ Win ticket. Match your real OrePro Win-leg stake (often higher than the per-combo Q/T stakes).">Win Stake (¥)</label>
                         <input type="number" id="setting-betStakeWin" min="100" max="1000000" step="100" onblur="saveBetStake('win', this.value)" class="settings-number-input">
 
@@ -447,6 +455,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260518-6"></script>
+<script src="/static/script.js?v=20260518-7"></script>
 </body>
 </html>
