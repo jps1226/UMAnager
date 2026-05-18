@@ -679,19 +679,46 @@ async function quickAdd(id, listType) {
     else alert(data.message);
 }
 
-async function quickAddFromHover(id, listType) {
-    const res = await fetch('/api/snipe', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({id: id, list_type: listType})
-    });
-    const data = await res.json();
+async function quickAddFromHover(id, listType, nameEncoded) {
+    // Symmetric with removeHorseFromHover: edit listsData locally + POST /api/lists.
+    // /api/snipe is a stub that returns { status: "not_implemented" } with no
+    // message field, so the old fetch path produced "alert(undefined)".
+    // Persists as "<id>#<name>" so buildListHTML renders names even for breeding
+    // horses (sires/dams) that don't appear in searchableHorses.
+    const cleanId = String(id || '').trim();
+    if (!cleanId) return;
+    if (!listsData[listType]) listsData[listType] = '';
 
-    if(data.status === "success") {
-        // Refresh lists and update highlighting/buttons
-        await refreshListsOnly();
+    let name = '';
+    try { name = decodeURIComponent(String(nameEncoded || '')); } catch (_) { name = String(nameEncoded || ''); }
+    name = name.trim();
+    const line = name ? `${cleanId}#${name}` : cleanId;
+
+    const existing = listsData[listType].split('\n').map(l => l.trim()).filter(Boolean);
+    const matchIdx = existing.findIndex(l => l === cleanId || l.startsWith(cleanId + '#') || l.startsWith(cleanId + ' ') || l.startsWith(cleanId + '\t'));
+    if (matchIdx >= 0) {
+        // Upgrade an existing bare-ID line to include the name if we have one now.
+        if (name && existing[matchIdx] === cleanId) {
+            existing[matchIdx] = line;
+            listsData[listType] = existing.join('\n') + '\n';
+        } else {
+            await refreshListsOnly();
+            return;
+        }
     } else {
-        alert(data.message);
+        existing.push(line);
+        listsData[listType] = existing.join('\n') + '\n';
     }
+
+    await fetch('/api/lists', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            favorites: listsData.favorites,
+            watchlist: listsData.watchlist
+        })
+    });
+
+    await refreshListsOnly();
 }
 
 async function removeHorseFromHover(id, listType) {
@@ -767,11 +794,14 @@ function buildNameWithHover(id, name, listType, trackedStatus, intensity, isMixe
     const escapedListType = escapeHtml(listType);
     const escapedName = escapeHtml(name);
     
+    // Encode the name so we can pass it through the inline onclick handler
+    // without worrying about quotes or backslashes in horse names.
+    const nameEnc = encodeURIComponent(name || '');
     let btnHtml = "";
     if (isTracked) {
         btnHtml = `<button class="hover-action-btn remove-btn" data-horse-id="${cleanId}" data-list-type="${listType}" onclick="removeHorseFromHover('${cleanId}', '${listType}')">➖ Remove</button>`;
     } else {
-        btnHtml = `<button class="hover-action-btn add-btn" data-horse-id="${cleanId}" data-list-type="${listType}" onclick="quickAddFromHover('${cleanId}', '${listType}')">➕ Add</button>`;
+        btnHtml = `<button class="hover-action-btn add-btn" data-horse-id="${cleanId}" data-list-type="${listType}" onclick="quickAddFromHover('${cleanId}', '${listType}', '${nameEnc}')">➕ Add</button>`;
     }
     
     // Generate the link to the English Netkeiba Database!

@@ -322,12 +322,7 @@ public sealed class RacesController : ControllerBase
     [HttpPost("../marks")]
     public IActionResult PostMarks([FromBody] object marks) => Ok(new { status = "ok" });
 
-    [HttpGet("../lists")]
-    public IActionResult GetLists() => Ok(new
-    {
-        favorites = "",
-        watchlist = ""
-    });
+    // /api/lists is owned by ListsController — duplicate empty stub removed 2026-05-18.
 
     // ── Phase 2+ stubs ───────────────────────────────────────────────────────
 
