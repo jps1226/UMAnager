@@ -1894,43 +1894,157 @@ function renderScoreExplain(row, anchor) {
     const pop = ensureScoreExplainPopover();
     const risk = getCurrentAutoPickRisk();
     const b = explainPowerScore(row, risk);
-    const fmt = (n) => (n >= 0 ? '+' : '') + n.toFixed(2);
     const horseName = row.Horse || row.Horse_ID || '';
+    const raceId = scoreExplainState.raceId;
+    const horseId = scoreExplainState.horseId;
 
-    const sectionHtml = (title, branch, mixPct) => `
-        <div class="sx-section">
-            <div class="sx-section-head">
-                <span class="sx-section-title">${title}</span>
-                <span class="sx-section-mix">×${Math.round(mixPct * 100)}%</span>
+    const mark = (globalMarks || {})[`${raceId}_${horseId}`] || null;
+    const allEntries = globalRaceEntries[raceId] || [];
+    const total = allEntries.length || 1;
+
+    // Rank this horse among the field for a given metric (1 = best).
+    function fieldRank(extractor, higherIsBetter) {
+        const thisVal = extractor(row);
+        if (thisVal === null || !Number.isFinite(thisVal)) return null;
+        const vals = allEntries.map(extractor).filter(v => v !== null && Number.isFinite(v));
+        vals.sort((a, c) => higherIsBetter ? c - a : a - c);
+        const idx = vals.findIndex(v => Math.abs(v - thisVal) < 1e-9);
+        return idx >= 0 ? idx + 1 : null;
+    }
+
+    // Mini-bar: 6 chars, filled proportional to percentile (rank 1 = full).
+    function miniBar(rank, outOf) {
+        if (rank === null || outOf <= 1) return '';
+        const pct = (outOf - rank) / (outOf - 1);
+        const f = Math.round(pct * 6);
+        return '<span class="sx-bar-filled">' + '█'.repeat(f) + '</span><span class="sx-bar-empty">' + '░'.repeat(6 - f) + '</span>';
+    }
+
+    // Sentiment: top-third positive, bottom-third negative, middle neutral.
+    function sentiment(rank, outOf) {
+        if (rank === null) return 'sx-neu';
+        const third = Math.ceil(outOf / 3);
+        return rank <= third ? 'sx-pos' : rank > outOf - third ? 'sx-neg' : 'sx-neu';
+    }
+
+    const oddsVal  = parseFloat(row.Odds);
+    const formScore = parseFloat(row.Form_Score) || 0;
+    const jAE      = parseFloat(row.Jockey_AE);
+    const tAE      = parseFloat(row.Trainer_AE);
+    const sfVal    = parseFloat(row.Sire_Fit);
+    const sfPlace  = parseFloat(row.Sire_Place_Fit);
+    const sfStarts = parseFloat(row.Sire_Starts);
+
+    const oddsRank = fieldRank(e => { const v = parseFloat(e.Odds); return Number.isFinite(v) && v > 0 ? v : null; }, false);
+    const formRank = fieldRank(e => parseFloat(e.Form_Score) || 0, true);
+    const jRank    = fieldRank(e => { const v = parseFloat(e.Jockey_AE); return Number.isFinite(v) ? v : null; }, true);
+    const tRank    = fieldRank(e => { const v = parseFloat(e.Trainer_AE); return Number.isFinite(v) ? v : null; }, true);
+    const sfRank   = fieldRank(e => { const v = parseFloat(e.Sire_Fit); return Number.isFinite(v) ? v : null; }, true);
+
+    // Plain-English descriptions for each factor.
+    function oddsDesc() {
+        if (!Number.isFinite(oddsVal) || oddsVal <= 0) return 'No odds posted yet';
+        const tier = oddsRank === 1 ? 'Favorite' : oddsRank <= 2 ? 'Near-favorite'
+            : oddsRank <= Math.ceil(total / 2) ? 'Mid-field' : 'Longshot';
+        return `${tier} at ${oddsVal.toFixed(1)}×`;
+    }
+    function formDesc() {
+        const last3 = row.Last3 && row.Last3 !== '—-—-—'
+            ? ' (' + String(row.Last3).replace(/-/g, '–') + ')' : '';
+        if (b.raceClass?.isDebut) return 'First career start — no race history';
+        if (formScore >= 0.65) return `Excellent recent form${last3}`;
+        if (formScore >= 0.35) return `Solid recent form${last3}`;
+        if (formScore >= 0.1)  return `Mixed recent form${last3}`;
+        return `Poor / no recent form${last3}`;
+    }
+    function aeDesc(ae, name) {
+        const nameStr = name ? `${name} — ` : '';
+        if (!Number.isFinite(ae)) return `${nameStr}not scored (low sample)`;
+        const pct = Math.round((ae - 1.0) * 100);
+        const sign = pct >= 0 ? '+' : '';
+        const adj = ae >= 1.3 ? 'elite' : ae >= 1.1 ? 'above market' : ae >= 0.9 ? 'market-neutral' : 'below market';
+        return `${nameStr}${sign}${pct}% vs expected (${adj})`;
+    }
+    function sfDesc() {
+        if (!Number.isFinite(sfVal)) return 'No data for this surface/distance';
+        const adj = sfVal >= 20 ? 'Strong fit' : sfVal >= 12 ? 'Decent fit' : sfVal >= 6 ? 'Moderate fit' : 'Weak fit';
+        const place = Number.isFinite(sfPlace) ? ` / ${sfPlace.toFixed(0)}% place` : '';
+        const n = Number.isFinite(sfStarts) ? ` (n=${Math.round(sfStarts)})` : '';
+        return `${adj}: ${sfVal.toFixed(1)}% win${place}${n}`;
+    }
+
+    // Verdict: one sentence explaining the mark.
+    function verdictSentence() {
+        if (!mark) return 'Not selected by auto-pick at this Risk level.';
+        const markOrder = ['◎', '〇', '▲', '△'];
+        const strength = markOrder.indexOf(mark);
+        const oddsPct = b.mix.odds;
+        // Pick the most explanatory factor based on current risk mix and field rank.
+        let topFactors = [];
+        if (oddsPct >= 0.6 && oddsRank !== null && oddsRank <= 2) topFactors.push('market position');
+        if (formRank !== null && formRank === 1) topFactors.push('best recent form in the field');
+        if (jRank !== null && jRank === 1) topFactors.push('top jockey in the field');
+        if (sfRank !== null && sfRank === 1) topFactors.push('best sire fit for conditions');
+        if (topFactors.length === 0) {
+            topFactors.push(oddsPct >= 0.5 ? 'market position' : 'combined form score');
+        }
+        const reason = topFactors.slice(0, 2).join(' + ');
+        const prefix = ['Leads on', 'Second on', 'Competitive via', 'Minor edge on'][strength] || 'Selected for';
+        return `Got ${mark} — ${prefix} ${reason}.`;
+    }
+
+    // Bottom context line about what Risk is doing.
+    function riskNote() {
+        const oddsPct = Math.round(b.mix.odds * 100);
+        const formPct = Math.round(b.mix.form * 100);
+        if (oddsPct >= 70) return `Risk ${b.risk} (${getRiskLabel(b.risk)}) — market is ${oddsPct}% of the score. This is primarily a public-money call.`;
+        if (oddsPct <= 30) return `Risk ${b.risk} (${getRiskLabel(b.risk)}) — form & pedigree drive ${formPct}% of the score. Market is largely ignored.`;
+        return `Risk ${b.risk} (${getRiskLabel(b.risk)}) — balanced blend: ${oddsPct}% odds, ${formPct}% form/pedigree.`;
+    }
+
+    function factorRow(emoji, label, desc, rank, positive) {
+        const bar = rank !== null ? miniBar(rank, total) : '';
+        const rankStr = rank !== null ? `${rank}/${total}` : '—';
+        const cls = positive === true ? 'sx-pos' : positive === false ? 'sx-neg' : 'sx-neu';
+        return `<div class="sx-factor">
+            <span class="sx-factor-emoji">${emoji}</span>
+            <div class="sx-factor-body">
+                <span class="sx-factor-label">${label}</span>
+                <span class="sx-factor-desc ${cls}">${desc}</span>
             </div>
-            ${branch.lines.map(l => `<div class="sx-line"><span class="sx-line-label">${l.label}</span><span class="sx-line-value">${fmt(l.value)}</span></div>`).join('')}
-            <div class="sx-line sx-line-subtotal">
-                <span class="sx-line-label">Subtotal ${fmt(branch.subtotal)} × ${Math.round(mixPct * 100)}%</span>
-                <span class="sx-line-value">${fmt(branch.mixed)}</span>
+            <div class="sx-factor-rank">
+                <span class="sx-factor-bar">${bar}</span>
+                <span class="sx-factor-pos">${rankStr}</span>
             </div>
-        </div>
-    `;
+        </div>`;
+    }
+
+    function sent(rank) { return sentiment(rank, total); }
+    const oddsP  = sent(oddsRank) === 'sx-pos' ? true : sent(oddsRank) === 'sx-neg' ? false : null;
+    const formP  = sent(formRank) === 'sx-pos' ? true : sent(formRank) === 'sx-neg' ? false : null;
+    const jP     = Number.isFinite(jAE) ? (jAE >= 1.1 ? true : jAE < 0.9 ? false : null) : null;
+    const tP     = Number.isFinite(tAE) ? (tAE >= 1.1 ? true : tAE < 0.9 ? false : null) : null;
+    const sfP    = Number.isFinite(sfVal) ? (sfVal >= 12 ? true : sfVal < 6 ? false : null) : null;
 
     const maidenBadge = b.raceClass?.isDebut
         ? '<span class="sx-maiden-badge">DEBUT</span>'
         : (b.raceClass?.isMaiden ? '<span class="sx-maiden-badge">MAIDEN</span>' : '');
+    const markBadge = mark ? `<span class="sx-mark-badge">${mark}</span>` : '';
+
     pop.innerHTML = `
         <div class="sx-head">
-            <div class="sx-title">Auto-Pick Breakdown ${maidenBadge}</div>
-            <div class="sx-horse">${horseName}</div>
+            ${markBadge}<div class="sx-horse">${horseName}</div>${maidenBadge}
             <button class="sx-close" onclick="closeScoreExplain()" title="Close">✕</button>
         </div>
-        <div class="sx-risk">Risk ${b.risk} (${getRiskLabel(b.risk)}) — mix ${Math.round(b.mix.odds*100)}% odds + ${Math.round(b.mix.form*100)}% form + ${Math.round(b.mix.ped*100)}% pedigree</div>
-        ${sectionHtml('ODDS', b.odds, b.mix.odds)}
-        ${sectionHtml('FORM', b.form, b.mix.form)}
-        ${sectionHtml('PEDIGREE', b.pedigree, b.mix.ped)}
-        <div class="sx-section">
-            <div class="sx-line"><span class="sx-line-label">Tiebreaker −(Fav ${b.tiebreaker.favRank} × 0.0001)</span><span class="sx-line-value">${fmt(b.tiebreaker.value)}</span></div>
+        <div class="sx-verdict">${verdictSentence()}</div>
+        <div class="sx-factors">
+            ${factorRow('💴', 'Odds', oddsDesc(), oddsRank, oddsP)}
+            ${factorRow('📈', 'Recent Form', formDesc(), formRank, formP)}
+            ${factorRow('🏇', 'Jockey', aeDesc(jAE, row.Jockey || null), jRank, jP)}
+            ${factorRow('🎯', 'Trainer', aeDesc(tAE, row.Trainer || null), tRank, tP)}
+            ${factorRow('🧬', 'Sire Fit', sfDesc(), sfRank, sfP)}
         </div>
-        <div class="sx-total">
-            <span class="sx-total-label">TOTAL</span>
-            <span class="sx-total-value">${b.total.toFixed(2)}</span>
-        </div>
+        <div class="sx-risk-note">${riskNote()}</div>
     `;
 
     // Anchor: place to the right of the trigger if there's room, else left, else below.
