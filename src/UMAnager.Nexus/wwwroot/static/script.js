@@ -1898,9 +1898,17 @@ function renderScoreExplain(row, anchor) {
     const raceId = scoreExplainState.raceId;
     const horseId = scoreExplainState.horseId;
 
-    const mark = (globalMarks || {})[`${raceId}_${horseId}`] || null;
     const allEntries = globalRaceEntries[raceId] || [];
     const total = allEntries.length || 1;
+
+    // Derive the mark the auto-pick engine would assign — ranked by score, not globalMarks.
+    // The user may have manually overridden marks; the popover always explains the engine's view.
+    const autoPickMarks = ['◎', '〇', '▲', '△'];
+    const scored = (allEntries.length ? allEntries : [row])
+        .map(e => ({ id: String(e.Horse_ID).split('.')[0], score: calculatePowerScore(e, risk) }))
+        .sort((a, c) => c.score - a.score);
+    const autoRank = scored.findIndex(s => s.id === String(horseId)) + 1;
+    const mark = autoRank >= 1 && autoRank <= 4 ? autoPickMarks[autoRank - 1] : null;
 
     // Rank this horse among the field for a given metric (1 = best).
     function fieldRank(extractor, higherIsBetter) {
