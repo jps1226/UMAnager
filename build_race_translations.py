@@ -93,44 +93,55 @@ location_lookup = {
     '函': 'Hakodate',
 }
 
-# Suffixes to KEEP in Japanese (or minimal romanization)
-suffix_patterns = [
-    '特別', '記念', '杯', 'ステークス', '賞',
-    'ハンデキャップ', 'ダッシュ', 'チャンピオンシップ',
-    'トロフィー', 'クラシック', 'オープン',
-]
+# Suffix translations (Japanese → Romanized/English)
+suffix_translations = {
+    '特別': 'Tokubetsu',
+    '記念': 'Kinen',
+    '杯': 'Hai',
+    'ステークス': 'Stakes',
+    '賞': 'Sho',
+    'ハンデキャップ': 'Handicap',
+    'ダッシュ': 'Dash',
+    'チャンピオンシップ': 'Championship',
+    'トロフィー': 'Trophy',
+    'クラシック': 'Classic',
+    'オープン': 'Open',
+    'カップ': 'Cup',
+}
 
 def translate_race_name(name):
     """
-    Translate a race name: romanize location prefix, keep suffix in Japanese.
+    Translate a race name: romanize location prefix AND suffix.
     Returns the original name if no clear pattern found.
     """
-    # If already translated (has Latin chars and Japanese), skip
-    if any(ord(c) < 128 for c in name if c not in '０１２３４５６７８９') and any(ord(c) > 128 for c in name):
-        # Mixed - likely already has some translation, check if it's a full match already
-        pass
-
     # Try to find location + suffix pattern
     for location, romaji in location_lookup.items():
         if location in name:
-            # Found a location - try to build translation
-            # Extract the part before and after
+            # Found a location - extract parts
             idx = name.index(location)
             before = name[:idx]
-            matched = location
             after = name[idx + len(location):]
 
-            # Check if what remains looks like a suffix or class designation
-            has_suffix = any(suffix in after for suffix in suffix_patterns)
+            # Check if what remains has a translatable suffix
+            translated_suffix = None
+            suffix_in_after = None
+            for suffix, trans in suffix_translations.items():
+                if suffix in after:
+                    translated_suffix = trans
+                    suffix_in_after = suffix
+                    break
 
             # Only translate if:
-            # 1. Location is at start or after some context
+            # 1. Location is at reasonable position
             # 2. Has a recognizable suffix after
             # 3. The "before" part isn't too long or complex
-            if len(before) < 30 and (has_suffix or len(after) < 15):
-                # Build translation: [before] Romaji [after]
-                # Keep Japanese suffixes and class designations as-is
-                trans = (before + romaji + after).strip()
+            if len(before) < 30 and translated_suffix:
+                # Build translation: [before] Romaji [space] [suffix translation] [remainder]
+                remainder = after.replace(suffix_in_after, '', 1).strip()
+                parts = [before.strip(), romaji, translated_suffix]
+                if remainder:
+                    parts.append(remainder)
+                trans = ' '.join([p for p in parts if p])
 
                 # Don't translate if result is too similar to original or too weird
                 if trans != name and len(trans) > 3:
