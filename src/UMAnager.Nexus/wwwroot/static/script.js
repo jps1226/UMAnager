@@ -3181,7 +3181,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
             const lockClass = isLocked ? " is-locked" : "";
             const clearStyle = countRaceMarks(r_id) > 0 ? "display: inline-block;" : "display: none;";
 
-            const localName = localizeRaceName(race.info.race_name);
+            const localName = localizeRaceName(race.info.race_name) || localizeRaceClass(race.info.race_class);
             const winBadgesHtml = buildRaceWinBadgesHtml(race);
             const historyBtnHtml = dateTimeline === 'past' && !raceHasHistoryData(race)
                 ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Fetch finish positions and result data for this race">📜 Update History</button>`
@@ -5404,7 +5404,7 @@ function buildRacecourseCheatHtml(targetDate) {
             track,
             raceNum,
             time: String(info.time || 'TBA'),
-            raceName: localizeRaceName(info.race_name),
+            raceName: localizeRaceName(info.race_name) || localizeRaceClass(info.race_class),
             sortKey: sortKey ? sortKey.getTime() : Number.MAX_SAFE_INTEGER,
             winBadgesHtml: timeline === 'past' ? buildRaceWinBadgesHtml(raceObj) : '',
             orepro: oreproRaceMap.get(r_id) || null,
@@ -7333,6 +7333,15 @@ function applySidebarSettings() {
 }
 
 // --- RACE NAME LOCALIZER ---
+
+// Returns a generic English label for races where NameJa is blank (JRA unnamed non-stakes).
+// JRA never stores a display label for these; the class is the only identity.
+function localizeRaceClass(rc) {
+    if (!rc) return '';
+    const m = { debut: 'Debut', maiden: 'Maiden', '1win': '1-Win Class', '2win': '2-Win Class', '3win': '3-Win Class', open: 'Open' };
+    return m[rc] || '';
+}
+
 function localizeRaceName(name) {
     if (!name) return "";
     let cleanName = name;
@@ -7523,7 +7532,7 @@ function refreshRaceHeaderMeta(raceId) {
     const race = findRaceById(raceId);
     if (!race) return;
     const info = race.info || {};
-    const localName = localizeRaceName(info.race_name);
+    const localName = localizeRaceName(info.race_name) || localizeRaceClass(info.race_class);
     const winBadgesHtml = buildRaceWinBadgesHtml(race);
     meta.innerHTML = `${raceStatusEmoji(race)} ${info.time} | ${trackName(info.place)} R${info.race_number}: ${localName} ${winBadgesHtml}`;
 }
