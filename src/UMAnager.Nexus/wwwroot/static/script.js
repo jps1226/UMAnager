@@ -1344,8 +1344,26 @@ function buildTableBody(r_id, entries) {
                 ${createMarkBtn(r_id, h_id, '△', key)}
                 ${createMarkBtn(r_id, h_id, 'X', key)}
             </td>`,
-            BK: `<td${fallbackCellAttrs('BK')}>${row.BK || ""}</td>`,
-            PP: `<td${fallbackCellAttrs('PP')}>${row.PP || ""}</td>`,
+            BK: (() => {
+                const bkNum = parseInt(row.BK, 10);
+                const bkCls = (Number.isFinite(bkNum) && bkNum >= 1 && bkNum <= 8) ? `bk-color-${bkNum}` : '';
+                const fb = fallbackCellAttrs('BK');
+                if (fb && bkCls) {
+                    return `<td${fb.replace('class="', `class="${bkCls} `)}>${row.BK || ""}</td>`;
+                }
+                const cls = bkCls ? ` class="${bkCls}"` : '';
+                return `<td${cls}${fb}>${row.BK || ""}</td>`;
+            })(),
+            PP: (() => {
+                const bkNum = parseInt(row.BK, 10);
+                const bkCls = (Number.isFinite(bkNum) && bkNum >= 1 && bkNum <= 8) ? `bk-color-${bkNum}` : '';
+                const fb = fallbackCellAttrs('PP');
+                if (fb && bkCls) {
+                    return `<td${fb.replace('class="', `class="${bkCls} `)}>${row.PP || ""}</td>`;
+                }
+                const cls = bkCls ? ` class="${bkCls}"` : '';
+                return `<td${cls}${fb}>${row.PP || ""}</td>`;
+            })(),
             Horse: `<td style="font-weight: bold;">${horseStr} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></td>`,
             Record: `<td>${row.Record || ""}</td>`,
             Last3: (() => {
@@ -1415,7 +1433,29 @@ function buildTableBody(r_id, entries) {
             })(),
             Dam: `<td>${damStr}</td>`,
             BMS: `<td>${bmsStr}</td>`,
-            Odds: `<td data-cell="odds"${fallbackCellAttrs('Odds')}>${row.Odds || ""}</td>`,
+            Odds: (() => {
+                const finishN = Number(row.Finish);
+                const favN = Number(row.Fav);
+                let upsetCls = '';
+                if (Number.isFinite(finishN) && finishN > 0 && Number.isFinite(favN) && favN > 0) {
+                    const delta = finishN - favN;  // negative = beat market (upset by winning above rank); positive = underperformed
+                    if (delta <= -5) upsetCls = 'upset-strong';
+                    else if (delta <= -2) upsetCls = 'upset-mild';
+                    else if (delta >= 5) upsetCls = 'chalk-fail-strong';
+                    else if (delta >= 2) upsetCls = 'chalk-fail-mild';
+                }
+                const fb = fallbackCellAttrs('Odds');
+                let openTag;
+                if (fb && upsetCls) {
+                    openTag = `<td data-cell="odds"${fb.replace('class="', `class="${upsetCls} `)}`;
+                } else if (upsetCls) {
+                    openTag = `<td data-cell="odds" class="${upsetCls}"`;
+                } else {
+                    openTag = `<td data-cell="odds"${fb}`;
+                }
+                const tip = upsetCls ? ` title="Finish ${finishN} vs market rank ${favN} (Δ${(finishN - favN > 0 ? '+' : '')}${finishN - favN})"` : '';
+                return `${openTag}${tip}>${row.Odds || ""}</td>`;
+            })(),
             Fav: `<td data-cell="fav"${fallbackCellAttrs('Fav')}>${row.Fav || ""}</td>`,
             Finish: (() => { const f = Number(row.Finish); const shown = (Number.isFinite(f) && f > 0) ? f : ''; return `<td data-cell="finish" class="finish-pos finish-pos-${shown}">${shown}</td>`; })()
         };
@@ -1427,7 +1467,9 @@ function buildTableBody(r_id, entries) {
             // pedigree/form columns by key without depending on column order.
             return cellHtml.replace(/^<td/, `<td data-col="${col}"`);
         }).join("");
-        rowsHtml += `<tr id="row-${r_id}-${h_id}" class="${trClass}">${orderedCells}</tr>`;
+        const finishNum = Number(row.Finish);
+        const finishAttr = (Number.isFinite(finishNum) && finishNum >= 1 && finishNum <= 3) ? ` data-finish="${finishNum}"` : '';
+        rowsHtml += `<tr id="row-${r_id}-${h_id}" class="${trClass}"${finishAttr}>${orderedCells}</tr>`;
     });
     return rowsHtml;
 }
@@ -6859,6 +6901,7 @@ async function updateSidebarSettings() {
 }
 
 function applyRaceTableLayoutSettings() {
+    const cleanPast = appConfig.ui?.cleanPastRaceCards ?? true;
     Object.keys(globalRaceEntries).forEach(r_id => {
         if (!raceSorts[r_id]) {
             raceSorts[r_id] = { col: 'Default', asc: true };
@@ -6869,6 +6912,15 @@ function applyRaceTableLayoutSettings() {
 
         const tbody = document.getElementById(`tbody-${r_id}`);
         if (tbody) tbody.innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
+
+        // Toggle .past-race on the table so the "Clean Past Race Cards" setting takes
+        // effect immediately (the class is set inline at render time, so without this
+        // the user had to refresh).
+        const table = tbody?.parentElement;
+        if (table && table.tagName === 'TABLE') {
+            const isPast = (globalRaceInfo[r_id]?._timeline === 'past');
+            table.classList.toggle('past-race', isPast && cleanPast);
+        }
 
         refreshRaceHeaderSortLabels(r_id);
     });

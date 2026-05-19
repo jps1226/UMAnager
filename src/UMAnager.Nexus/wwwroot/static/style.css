@@ -2162,3 +2162,27 @@ input[type=range]::-webkit-slider-runnable-track {
     /* Settings modal: full-screen on phones. */
     .settings-modal-content { width: 96vw; max-width: 96vw; max-height: 92vh; padding: 14px; }
 }
+
+/* ── Phase 19c: Upset coloring on past-race odds cells ──
+   delta = finish_pos − fav_rank.
+   Negative = horse beat its market rank (upset winner / over-performer) → green.
+   Positive = horse finished worse than its market rank (chalk fail) → red. */
+td[data-cell="odds"].upset-strong      { background: rgba(72, 187, 120, 0.28) !important; color: #d6ffe6 !important; font-weight: 700; }
+td[data-cell="odds"].upset-mild        { background: rgba(72, 187, 120, 0.14) !important; color: #c4ecd0 !important; }
+td[data-cell="odds"].chalk-fail-mild   { background: rgba(220, 80, 80, 0.14) !important; color: #f1c4c4 !important; }
+td[data-cell="odds"].chalk-fail-strong { background: rgba(220, 80, 80, 0.28) !important; color: #ffd6d6 !important; font-weight: 700; }
+
+/* ── Phase 19b: Top-3 finish row marker — quiet left-edge stripe only ── */
+tr[data-finish="1"] > td:first-child { border-left: 3px solid #d4af37; }  /* gold */
+tr[data-finish="2"] > td:first-child { border-left: 3px solid #aaaab4; }  /* silver */
+tr[data-finish="3"] > td:first-child { border-left: 3px solid #b0713c; }  /* bronze */
+
+/* ── Phase 19a: JRA bracket colours on main race-card BK + PP cells ── */
+td.bk-color-1 { background: #f8f9fa !important; color: #000 !important; font-weight: 700; text-align: center; }
+td.bk-color-2 { background: #212529 !important; color: #fff !important; font-weight: 700; text-align: center; }
+td.bk-color-3 { background: #d26363 !important; color: #fff !important; font-weight: 700; text-align: center; }
+td.bk-color-4 { background: #5970b0 !important; color: #fff !important; font-weight: 700; text-align: center; }
+td.bk-color-5 { background: #b8b053 !important; color: #000 !important; font-weight: 700; text-align: center; }
+td.bk-color-6 { background: #72af68 !important; color: #fff !important; font-weight: 700; text-align: center; }
+td.bk-color-7 { background: #efa65e !important; color: #000 !important; font-weight: 700; text-align: center; }
+td.bk-color-8 { background: #dc809a !important; color: #000 !important; font-weight: 700; text-align: center; }
