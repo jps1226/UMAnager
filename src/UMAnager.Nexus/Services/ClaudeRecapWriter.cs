@@ -173,10 +173,16 @@ public sealed class ClaudeRecapWriter
                 ));
             }
 
+            // Fetch Discord webhook URL so the cron routine doesn't need DB access.
+            var webhookRow = await db.AppSettings.AsNoTracking()
+                .FirstOrDefaultAsync(s => s.Key == SettingsService.Keys.DiscordWebhookUrl, ct);
+            var webhookUrl = webhookRow?.Value;
+
             var payload = new ClaudeRecapPayload(
-                Date:           dateKey,
-                GeneratedAtUtc: DateTime.UtcNow,
-                Processed:      false,
+                Date:              dateKey,
+                GeneratedAtUtc:    DateTime.UtcNow,
+                Processed:         false,
+                DiscordWebhookUrl: webhookUrl,
                 Summary: new RecapSummary(
                     RacesTotal:   recap.RacesTotal,
                     RacesMarked:  recap.RacesMarked,
@@ -221,6 +227,7 @@ public sealed record ClaudeRecapPayload(
     string Date,
     DateTime GeneratedAtUtc,
     bool Processed,
+    string? DiscordWebhookUrl,
     RecapSummary Summary,
     List<RecapRacePayload> Races);
 
