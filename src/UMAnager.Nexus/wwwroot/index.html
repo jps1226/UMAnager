@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260519-2">
+    <link rel="stylesheet" href="/static/style.css?v=20260519-6">
 </head>
 <body>
 
@@ -130,6 +130,17 @@
         </div>
     </details>
 
+    <details id="weekend-watchlist-group" class="sidebar-group" open>
+        <summary>🏆 Weekend Watchlist</summary>
+        <div class="sidebar-group-content">
+            <div class="ww-section-header">⚙ Engine Picks · Top 5</div>
+            <div id="sidebar-engine-picks" class="weekend-watchlist-content"></div>
+            <div class="ww-section-divider"></div>
+            <div class="ww-section-header">👁 Watchlist Running</div>
+            <div id="sidebar-weekend-watchlist" class="weekend-watchlist-content"></div>
+        </div>
+    </details>
+
     <details id="auto-pick-group" class="sidebar-group" open>
             <summary>⚙️ Auto-Pick Strategy</summary>
             <div class="sidebar-group-content strategy-panel-content">
@@ -215,15 +226,6 @@
             </div>
         </div>
     </div>
-    <div id="weekend-watchlist-panel" class="weekend-watchlist-panel">
-        <div class="weekend-watchlist-header" onclick="toggleWeekendWatchlist()">
-            <span class="weekend-watchlist-title">🏆 Weekend Watchlist</span>
-            <span id="weekend-watchlist-chevron" class="weekend-watchlist-chevron">▲</span>
-        </div>
-        <div id="weekend-watchlist-body" class="weekend-watchlist-body">
-            <div id="sidebar-weekend-watchlist" class="weekend-watchlist-content"></div>
-        </div>
-    </div>
     <div id="live-view-container" class="voting-main-shell" style="display:none;">
         <div class="voting-main-head">
             <h3 id="voting-main-title">Voting Workspace</h3>
@@ -265,12 +267,24 @@
                     <h4 class="settings-section-title settings-section-title-first">Default Sidebar Sections</h4>
                     <div class="settings-option-list">
                         <label class="settings-option-row">
+                            <input type="checkbox" id="setting-calendarGroup" onchange="updateSidebarSettings()">
+                            <span>🏁 Race Calendar</span>
+                        </label>
+                        <label class="settings-option-row">
                             <input type="checkbox" id="setting-pedigreeLists" onchange="updateSidebarSettings()">
                             <span>🎯 Pedigree Lists</span>
                         </label>
                         <label class="settings-option-row">
+                            <input type="checkbox" id="setting-weekendWatchlist" onchange="updateSidebarSettings()">
+                            <span>🏆 Weekend Watchlist</span>
+                        </label>
+                        <label class="settings-option-row">
                             <input type="checkbox" id="setting-autoPickStrategy" onchange="updateSidebarSettings()">
                             <span>⚙️ Auto-Pick Strategy</span>
+                        </label>
+                        <label class="settings-option-row dev-only">
+                            <input type="checkbox" id="setting-advancedTools" onchange="updateSidebarSettings()">
+                            <span>🛠️ Advanced Tools (dev)</span>
                         </label>
                     </div>
                 </div>
@@ -547,6 +561,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260519-2"></script>
+<script src="/static/script.js?v=20260519-8"></script>
 </body>
 </html>

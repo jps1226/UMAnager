@@ -344,32 +344,100 @@ async function refreshPhaseBadge() {
 refreshPhaseBadge();
 setInterval(refreshPhaseBadge, 30000);
 
+function renderEnginePicks() {
+    const container = document.getElementById('sidebar-engine-picks');
+    if (!container) return;
+
+    const activeDate = currentActiveDate;
+    if (!activeDate) {
+        container.innerHTML = '<div class="ww-empty">No date selected.</div>';
+        return;
+    }
+
+    const risk = getCurrentAutoPickRisk();
+    const cands = [];
+    Object.keys(globalRaceInfo).forEach(r_id => {
+        const info = globalRaceInfo[r_id];
+        if (info.clean_date !== activeDate) return;
+        const timeline = info._timeline || 'upcoming';
+        (globalRaceEntries[r_id] || []).forEach(entry => {
+            const score = calculatePowerScore(entry, risk);
+            if (!Number.isFinite(score)) return;
+            cands.push({
+                r_id,
+                date: info.clean_date,
+                sortTime: info.sort_time || '',
+                label: `${trackName(info.place)} R${info.race_number}`,
+                entry,
+                score,
+                timeline,
+            });
+        });
+    });
+
+    if (cands.length === 0) {
+        container.innerHTML = `<div class="ww-empty">No races on ${activeDate}.</div>`;
+        return;
+    }
+
+    cands.sort((a, b) => b.score - a.score);
+    const top = cands.slice(0, 5);
+    const isPastDate = top[0].timeline === 'past';
+
+    const RANK_BADGES = ['①', '②', '③', '④', '⑤'];
+    container.innerHTML = top.map((m, idx) => {
+        const odds = m.entry.Odds ? `×${parseFloat(m.entry.Odds).toFixed(1)}` : '—';
+        const pp = m.entry.PP ? ` #${m.entry.PP}` : '';
+        const finish = Number(m.entry.Finish);
+        const finishTag = (isPastDate && Number.isFinite(finish) && finish > 0)
+            ? ` · fin ${finish}`
+            : '';
+        const callClass = (isPastDate && Number.isFinite(finish))
+            ? (finish === 1 ? ' ww-call-win' : finish <= 3 ? ' ww-call-place' : '')
+            : '';
+        return `<div class="ww-item ww-engine-pick${callClass}" onclick="jumpToHorse('${m.date}', '${m.r_id}', '${m.entry.Horse_ID}', '${m.timeline}')" title="Engine score: ${m.score.toFixed(2)}">
+            <span class="ww-badge">${RANK_BADGES[idx]}</span>
+            <span class="ww-name">${m.entry.Horse || m.entry.Horse_ID}</span>
+            <span class="ww-meta">${m.label}${pp} · ${odds}${finishTag}</span>
+        </div>`;
+    }).join('');
+}
+
 function renderWeekendWatchlist() {
     const container = document.getElementById('sidebar-weekend-watchlist');
     if (!container) return;
 
     const tracked = getTrackedSets();
-    const allTracked = new Set([...tracked.favorites, ...tracked.watchlist]);
+    // Only the Watchlist drives this panel: Favorites are breeding horses (sires/dams/BMS)
+    // and won't normally appear as runners. Pedigree-tracked highlighting handles that
+    // case at the row-coloring layer.
+    const watched = tracked.watchlist;
 
-    if (allTracked.size === 0) {
-        container.innerHTML = '<div class="ww-empty">Add horses to Favorites or Watchlist to see them here.</div>';
+    if (watched.size === 0) {
+        container.innerHTML = '<div class="ww-empty">Add horses to your Watchlist to see them here.</div>';
+        return;
+    }
+
+    const activeDate = currentActiveDate;
+    if (!activeDate) {
+        container.innerHTML = '<div class="ww-empty">No date selected.</div>';
         return;
     }
 
     const matches = [];
     Object.keys(globalRaceInfo).forEach(r_id => {
         const info = globalRaceInfo[r_id];
-        if (info._timeline !== 'upcoming') return;
+        if (info.clean_date !== activeDate) return;
         (globalRaceEntries[r_id] || []).forEach(entry => {
             const id = String(entry.Horse_ID || '').split('.')[0].trim();
-            if (!allTracked.has(id)) return;
+            if (!watched.has(id)) return;
             matches.push({
                 r_id,
                 date: info.clean_date,
                 sortTime: info.sort_time || '',
                 label: `${trackName(info.place)} R${info.race_number}`,
                 entry,
-                isFav: tracked.favorites.has(id),
+                timeline: info._timeline || 'upcoming',
             });
         });
     });
@@ -377,18 +445,21 @@ function renderWeekendWatchlist() {
     matches.sort((a, b) => a.sortTime < b.sortTime ? -1 : a.sortTime > b.sortTime ? 1 : 0);
 
     if (matches.length === 0) {
-        container.innerHTML = '<div class="ww-empty">No tracked horses in upcoming races.</div>';
+        container.innerHTML = `<div class="ww-empty">No watchlist horses running on ${activeDate}.</div>`;
         return;
     }
 
     container.innerHTML = matches.map(m => {
-        const badge = m.isFav ? '⭐' : '👁';
         const odds = m.entry.Odds ? `×${parseFloat(m.entry.Odds).toFixed(1)}` : '—';
         const pp = m.entry.PP ? ` #${m.entry.PP}` : '';
-        return `<div class="ww-item" onclick="jumpToHorse('${m.date}', '${m.r_id}', '${m.entry.Horse_ID}', 'upcoming')">
-            <span class="ww-badge">${badge}</span>
+        const finish = Number(m.entry.Finish);
+        const finishTag = (m.timeline === 'past' && Number.isFinite(finish) && finish > 0)
+            ? ` · fin ${finish}`
+            : '';
+        return `<div class="ww-item${m.timeline === 'past' ? ' ww-past' : ''}" onclick="jumpToHorse('${m.date}', '${m.r_id}', '${m.entry.Horse_ID}', '${m.timeline}')">
+            <span class="ww-badge">👁</span>
             <span class="ww-name">${m.entry.Horse || m.entry.Horse_ID}</span>
-            <span class="ww-meta">${m.label}${pp} · ${odds}</span>
+            <span class="ww-meta">${m.label}${pp} · ${odds}${finishTag}</span>
         </div>`;
     }).join('');
 }
@@ -417,6 +488,9 @@ async function refreshDataAndUI() {
     const listRes = await fetch('/api/lists');
     listsData = await listRes.json();
     renderLists();
+    // loadRaces() called these before listsData was populated, so re-render now.
+    renderWeekendWatchlist();
+    renderEnginePicks();
     updateRaceHighlighting();
     
     // 4. Restore scroll position seamlessly
@@ -429,6 +503,7 @@ async function refreshListsOnly() {
     listsData = await listRes.json();
     renderLists();
     renderWeekendWatchlist();
+    renderEnginePicks();
 
     // Recalculate highlighting and scores based on new listsData
     updateRaceHighlighting();
@@ -651,6 +726,7 @@ async function init() {
     document.getElementById('risk-slider').addEventListener('input', updateAllRiskBadges);
     document.getElementById('risk-slider').addEventListener('input', updateAutoBetHighlighting);
     document.getElementById('risk-slider').addEventListener('input', refreshScoreExplainIfOpen);
+    document.getElementById('risk-slider').addEventListener('input', renderEnginePicks);
     
     // NEW: Load saved slider state from config
     const savedRisk = appConfig.ui?.riskSlider || 50;
@@ -3052,6 +3128,7 @@ async function loadRaces() {
     }
 
     renderWeekendWatchlist();
+    renderEnginePicks();
 
     const hasUpcoming = Object.keys(globalAllRacesByDate.upcoming || {}).length > 0;
     const upcomingDates = Object.keys(globalAllRacesByDate.upcoming || {}).sort();
@@ -3111,6 +3188,8 @@ function switchMainTab(date) {
     updateLiveViewPopoutAvailability();
     updateWinningVotesFocusButton();
     renderRaceCalendar();
+    renderWeekendWatchlist();
+    renderEnginePicks();
     if (currentMainView === 'voting') {
         renderLiveViewPanel();
     }
@@ -6756,8 +6835,11 @@ function showSettingsModal() {
     if (!appConfig.backend) appConfig.backend = {};
     const currentEngine = String(appConfig.backend?.dataEngine || 'nk').toLowerCase();
     document.getElementById('setting-dataEngine').value = currentEngine === 'jv' ? 'jv' : 'nk';
+    document.getElementById('setting-calendarGroup').checked = appConfig.sidebarTabs?.calendarGroup ?? true;
     document.getElementById('setting-pedigreeLists').checked = appConfig.sidebarTabs?.pedigreeLists ?? true;
+    document.getElementById('setting-weekendWatchlist').checked = appConfig.sidebarTabs?.weekendWatchlist ?? true;
     document.getElementById('setting-autoPickStrategy').checked = appConfig.sidebarTabs?.autoPickStrategy ?? true;
+    document.getElementById('setting-advancedTools').checked = appConfig.sidebarTabs?.advancedTools ?? false;
     document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
     document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
     document.getElementById('setting-autoFetchPastResults').checked = isAutoFetchPastResultsEnabled();
@@ -6826,8 +6908,11 @@ async function updateSidebarSettings() {
     const previousDataEngine = String(appConfig.backend?.dataEngine || 'nk').toLowerCase();
     // Update config from checkbox values
     appConfig.sidebarTabs = {
+        calendarGroup: document.getElementById('setting-calendarGroup').checked,
         pedigreeLists: document.getElementById('setting-pedigreeLists').checked,
-        autoPickStrategy: document.getElementById('setting-autoPickStrategy').checked
+        weekendWatchlist: document.getElementById('setting-weekendWatchlist').checked,
+        autoPickStrategy: document.getElementById('setting-autoPickStrategy').checked,
+        advancedTools: document.getElementById('setting-advancedTools').checked
     };
     const parseFWInput = (id, def) => { const n = parseFloat(document.getElementById(id).value); return isNaN(n) ? def : n; };
     const parseClampedPercent = (id, def) => {
@@ -6886,6 +6971,7 @@ async function updateSidebarSettings() {
     updateAllRiskBadges();
     updateAutoBetHighlighting();
     applyRaceTableLayoutSettings();
+    renderEnginePicks();
 
     if (!previousAutoFetchPastResults && isAutoFetchPastResultsEnabled()) {
         await refreshDataAndUI();
@@ -7017,10 +7103,16 @@ async function toggleRaceColumnVisibility(colKey, visible) {
 }
 
 function applySidebarSettings() {
-    const pedigreeListsGroup = document.getElementById('pedigree-lists-group');
-    const autoPickGroup = document.getElementById('auto-pick-group');
-    if (pedigreeListsGroup) pedigreeListsGroup.open = appConfig.sidebarTabs?.pedigreeLists ?? true;
-    if (autoPickGroup) autoPickGroup.open = appConfig.sidebarTabs?.autoPickStrategy ?? true;
+    const tabs = appConfig.sidebarTabs || {};
+    const apply = (elemId, key, defaultOpen) => {
+        const el = document.getElementById(elemId);
+        if (el) el.open = tabs[key] ?? defaultOpen;
+    };
+    apply('calendar-group',           'calendarGroup',     true);
+    apply('pedigree-lists-group',     'pedigreeLists',     true);
+    apply('weekend-watchlist-group',  'weekendWatchlist',  true);
+    apply('auto-pick-group',          'autoPickStrategy',  true);
+    apply('advanced-tools-group',     'advancedTools',     false);
 
     const consoleEl = document.getElementById('scrape-console');
     if (consoleEl) {

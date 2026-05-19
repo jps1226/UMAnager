@@ -1297,6 +1297,16 @@ th {
 .ww-name { font-weight: bold; color: #eee; white-space: nowrap; }
 .ww-meta { color: #666; white-space: nowrap; }
 .ww-empty { color: #555; font-size: 12px; padding: 4px 0; }
+.ww-section-header { font-size: 11px; color: #8ea0c6; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin: 4px 0 6px 0; }
+.ww-section-divider { height: 1px; background: #2a2a2a; margin: 10px 0; }
+.ww-engine-pick { border-color: #4a5a7a; background: rgba(89, 112, 176, 0.10); }
+.ww-engine-pick:hover { background: rgba(89, 112, 176, 0.20); }
+.ww-engine-pick .ww-badge { font-size: 14px; color: #d4af37; }
+.ww-past { opacity: 0.7; }
+.ww-past:hover { opacity: 1; }
+.ww-call-win   { border-color: #72af68 !important; box-shadow: inset 3px 0 0 #72af68; opacity: 1; }
+.ww-call-place { border-color: #b8b053 !important; box-shadow: inset 3px 0 0 #b8b053; opacity: 0.9; }
+.ww-subdivider { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin: 8px 0 4px 0; }
 
 /* --- PAST RACE CLEAN VIEW --- */
 /* When the setting is on, hide anachronistic columns (Record, J%, T%) on past race tables. */
