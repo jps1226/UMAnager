@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260519-6">
+    <link rel="stylesheet" href="/static/style.css?v=20260519-9">
 </head>
 <body>
 
@@ -22,18 +22,6 @@
     </div>
 
     <div class="sidebar-top-controls">
-        <div class="view-switcher view-switcher-sidebar">
-            <button id="main-view-races" onclick="switchMainView('races')" class="toolbar-btn toolbar-btn-muted is-active">🏠 Main</button>
-            <button id="main-view-voting" onclick="switchMainView('voting')" class="toolbar-btn toolbar-btn-muted">🗳️ Voting</button>
-        </div>
-        <div class="active-date-nav active-date-nav-sidebar">
-            <button type="button" id="active-date-prev" class="active-date-nav-btn" onclick="shiftActiveDate(-1)">◀</button>
-            <div class="active-date-display">
-                <div id="active-date-label" class="active-date-label">No day selected</div>
-                <div id="active-date-meta" class="active-date-meta">0 races</div>
-            </div>
-            <button type="button" id="active-date-next" class="active-date-nav-btn" onclick="shiftActiveDate(1)">▶</button>
-        </div>
         <div id="prefetch-status-banner" class="prefetch-status-banner" style="display:none;"></div>
     </div>
 
@@ -45,13 +33,6 @@
             <div id="voting-sidebar-display" class="voting-sidebar-display"></div>
         </div>
 
-        <details id="calendar-group" class="sidebar-group calendar-group" open>
-        <summary>🗓️ Race Calendar</summary>
-        <div class="sidebar-group-content">
-            <div id="race-calendar" class="race-calendar-panel race-calendar-sidebar"></div>
-        </div>
-    </details>
-    
     <!-- Mobile search bar relocates here from .main-toolbar-left on small viewports. -->
     <div id="mobile-search-slot"></div>
 
@@ -165,28 +146,71 @@
 <div class="main-content">
     <div class="top-sticky-bar">
         <div class="top-bar-clock-row">
-            <div class="clock-container">
-                <div class="clock-box">
-                    <div class="clock-label">JAPAN (JST)</div>
-                    <div class="clock-time" id="jst">--:--:--</div>
+            <div class="top-bar-left">
+                <div class="view-switcher view-switcher-topbar">
+                    <button id="main-view-races" onclick="switchMainView('races')" class="toolbar-btn toolbar-btn-muted is-active">🏠 Main</button>
+                    <button id="main-view-voting" onclick="switchMainView('voting')" class="toolbar-btn toolbar-btn-muted">🗳️ Voting</button>
                 </div>
-                
-                <div id="countdown-container" class="countdown-wrapper" style="display: none;">
-                    <div class="countdown-title">Next Race In</div>
-                    <div id="countdown-time" class="countdown-time">--:--:--</div>
-                    <div id="countdown-race" class="countdown-race">Loading...</div>
-                </div>
-
-                <div class="clock-box">
-                    <div class="clock-label">CENTRAL (CT)</div>
-                    <div class="clock-time" id="cst">--:--:--</div>
+                <div class="active-date-nav active-date-nav-topbar">
+                    <button type="button" id="active-date-prev" class="active-date-nav-btn" onclick="shiftActiveDate(-1)">◀</button>
+                    <div class="active-date-display">
+                        <div id="active-date-label" class="active-date-label">No day selected</div>
+                        <div id="active-date-meta" class="active-date-meta">0 races</div>
+                    </div>
+                    <button type="button" id="active-date-next" class="active-date-nav-btn" onclick="shiftActiveDate(1)">▶</button>
+                    <button type="button" id="active-date-calendar-btn" class="active-date-nav-btn active-date-calendar-btn" onclick="toggleCalendarPopover(event)" title="Open full calendar">📅</button>
                 </div>
             </div>
-            <div id="phase-badge" class="phase-badge phase-waiting">
-                <div class="phase-badge-label">⏸ Waiting</div>
-                <div id="phase-badge-sub" class="phase-badge-sub">Loading…</div>
+            <div class="top-bar-center">
+                <div class="clock-container">
+                    <div class="clock-box">
+                        <div class="clock-label">JAPAN (JST)</div>
+                        <div class="clock-time" id="jst">--:--:--</div>
+                    </div>
+
+                    <div id="countdown-container" class="countdown-wrapper" style="display: none;">
+                        <div class="countdown-title">Next Race In</div>
+                        <div id="countdown-time" class="countdown-time">--:--:--</div>
+                        <div id="countdown-race" class="countdown-race">Loading...</div>
+                    </div>
+
+                    <div class="clock-box">
+                        <div class="clock-label">CENTRAL (CT)</div>
+                        <div class="clock-time" id="cst">--:--:--</div>
+                    </div>
+                </div>
+                <div id="phase-badge" class="phase-badge phase-waiting">
+                    <div class="phase-badge-label">⏸ Waiting</div>
+                    <div id="phase-badge-sub" class="phase-badge-sub">Loading…</div>
+                </div>
+            </div>
+            <div class="top-bar-right">
+                <div id="quick-stats" class="quick-stats">
+                    <div class="quick-stat-block">
+                        <div class="quick-stat-label">Marks</div>
+                        <div id="qs-marks" class="quick-stat-value">—</div>
+                        <div id="qs-marks-detail" class="quick-stat-sub">no day</div>
+                    </div>
+                    <div class="quick-stat-block">
+                        <div class="quick-stat-label">Agreement</div>
+                        <div id="qs-agreement" class="quick-stat-value">—</div>
+                        <div id="qs-agreement-sub" class="quick-stat-sub">engine vs you</div>
+                        <div id="qs-agreement-best" class="quick-stat-sub quick-stat-best" title="Risk slider value that would best match your marks today"></div>
+                    </div>
+                    <div class="quick-stat-block">
+                        <div class="quick-stat-label">Day P/L</div>
+                        <div id="qs-pl" class="quick-stat-value">—</div>
+                        <div id="qs-pl-sub" class="quick-stat-sub">stake / net</div>
+                    </div>
+                </div>
             </div>
             <div id="scrape-console" class="console-box console-top-bar dev-only"></div>
+        </div>
+
+        <!-- Calendar popover, anchored to the 📅 button. Hosts the same element ID
+             #race-calendar that renderRaceCalendar() targets, relocated from the sidebar. -->
+        <div id="calendar-popover" class="calendar-popover" style="display:none;">
+            <div id="race-calendar" class="race-calendar-panel race-calendar-popover"></div>
         </div>
 
         <div class="main-toolbar">
@@ -266,10 +290,6 @@
                 <div class="settings-card">
                     <h4 class="settings-section-title settings-section-title-first">Default Sidebar Sections</h4>
                     <div class="settings-option-list">
-                        <label class="settings-option-row">
-                            <input type="checkbox" id="setting-calendarGroup" onchange="updateSidebarSettings()">
-                            <span>🏁 Race Calendar</span>
-                        </label>
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-pedigreeLists" onchange="updateSidebarSettings()">
                             <span>🎯 Pedigree Lists</span>
@@ -561,6 +581,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260519-8"></script>
+<script src="/static/script.js?v=20260519-13"></script>
 </body>
 </html>

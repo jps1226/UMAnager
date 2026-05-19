@@ -344,6 +344,161 @@ async function refreshPhaseBadge() {
 refreshPhaseBadge();
 setInterval(refreshPhaseBadge, 30000);
 
+function applyRiskSliderValue(value) {
+    const slider = document.getElementById('risk-slider');
+    if (!slider) return;
+    slider.value = String(value);
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+    slider.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function updateQuickStats() {
+    const qsMarks = document.getElementById('qs-marks');
+    const qsMarksDetail = document.getElementById('qs-marks-detail');
+    const qsAgreement = document.getElementById('qs-agreement');
+    const qsAgreementSub = document.getElementById('qs-agreement-sub');
+    const qsPL = document.getElementById('qs-pl');
+    const qsPLSub = document.getElementById('qs-pl-sub');
+    if (!qsMarks) return;
+
+    const activeDate = currentActiveDate;
+    if (!activeDate) {
+        qsMarks.textContent = '—';
+        qsMarksDetail.textContent = 'no day';
+        qsAgreement.textContent = '—';
+        qsAgreementSub.textContent = 'engine vs you';
+        qsPL.textContent = '—';
+        qsPLSub.textContent = 'stake / net';
+        return;
+    }
+
+    const dateRaceIds = Object.keys(globalRaceInfo).filter(
+        r_id => globalRaceInfo[r_id]?.clean_date === activeDate
+    );
+
+    // Marks count: sum of all non-X marks across the day's races.
+    // collectRaceMainMarks returns { symbol → horse_id }, so iterate keys.
+    const markSymbolCounts = { '◎': 0, '〇': 0, '▲': 0, '△': 0 };
+    let totalMarks = 0;
+    dateRaceIds.forEach(r_id => {
+        const marks = collectRaceMainMarks(r_id) || {};
+        Object.keys(marks).forEach(sym => {
+            if (markSymbolCounts.hasOwnProperty(sym)) {
+                markSymbolCounts[sym]++;
+                totalMarks++;
+            }
+        });
+    });
+    qsMarks.textContent = totalMarks.toString();
+    qsMarksDetail.textContent = `◎${markSymbolCounts['◎']} 〇${markSymbolCounts['〇']} ▲${markSymbolCounts['▲']} △${markSymbolCounts['△']}`;
+
+    // Agreement %: across races where the user marked anything, what fraction of
+    // their marked horses are in the engine's top-4 unconditional ranking.
+    // Build per-race {userHorseIds, allEntries} so we can sweep risk values cheaply.
+    const markedRaces = [];
+    dateRaceIds.forEach(r_id => {
+        const marks = collectRaceMainMarks(r_id) || {};
+        const userHorseIds = Object.values(marks).map(h => String(h).split('.')[0]);
+        if (!userHorseIds.length) return;
+        const entries = globalRaceEntries[r_id] || [];
+        if (!entries.length) return;
+        markedRaces.push({ userHorseIds, entries });
+    });
+
+    const computeAgreementAtRisk = (riskVal) => {
+        let total = 0;
+        let hits = 0;
+        markedRaces.forEach(({ userHorseIds, entries }) => {
+            const top4 = entries
+                .map(row => ({ h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, riskVal) }))
+                .sort((a, b) => b.power - a.power)
+                .slice(0, 4)
+                .map(e => e.h_id);
+            const engineSet = new Set(top4);
+            userHorseIds.forEach(h_id => {
+                total++;
+                if (engineSet.has(h_id)) hits++;
+            });
+        });
+        return { total, hits };
+    };
+
+    const currentRisk = getCurrentAutoPickRisk();
+    const current = computeAgreementAtRisk(currentRisk);
+
+    if (current.total === 0) {
+        qsAgreement.textContent = '—';
+        qsAgreementSub.textContent = 'no marks yet';
+        document.getElementById('qs-agreement-best').textContent = '';
+    } else {
+        const pct = Math.round((current.hits / current.total) * 100);
+        qsAgreement.textContent = `${pct}%`;
+        qsAgreementSub.textContent = `${current.hits}/${current.total} on engine top-4`;
+
+        // Sweep risk 0..100 in steps of 5; report the slider value that maximises hits.
+        // Tie-break by picking the value closest to the current slider position (least
+        // disruptive suggestion).
+        let bestHits = -1;
+        let bestRisk = currentRisk;
+        for (let r = 0; r <= 100; r += 5) {
+            const { hits } = computeAgreementAtRisk(r);
+            if (hits > bestHits || (hits === bestHits && Math.abs(r - currentRisk) < Math.abs(bestRisk - currentRisk))) {
+                bestHits = hits;
+                bestRisk = r;
+            }
+        }
+        const bestEl = document.getElementById('qs-agreement-best');
+        if (bestHits === current.hits) {
+            bestEl.textContent = `best: ${bestRisk} (current)`;
+            bestEl.onclick = null;
+            bestEl.classList.remove('quick-stat-best-clickable');
+        } else {
+            const bestPct = Math.round((bestHits / current.total) * 100);
+            bestEl.textContent = `best: ${bestRisk} → ${bestPct}% ↗`;
+            bestEl.title = `Click to set risk slider to ${bestRisk}`;
+            bestEl.onclick = () => applyRiskSliderValue(bestRisk);
+            bestEl.classList.add('quick-stat-best-clickable');
+        }
+    }
+
+    // Day P/L: sum across races whose results we have. Spend uses same model as
+    // buildRaceWinBadgesHtml — 1 Win + C(marks,2) Q + C(marks,3) T per race.
+    const legacyStake = parseFloat(globalOreProSettings?.bet_estimate_stake_yen) || 100;
+    const winStake = parseFloat(globalOreProSettings?.bet_stake_win_yen)      || legacyStake;
+    const qStake   = parseFloat(globalOreProSettings?.bet_stake_quinella_yen) || legacyStake;
+    const tStake   = parseFloat(globalOreProSettings?.bet_stake_trio_yen)     || legacyStake;
+    let wonTotal = 0;
+    let spentTotal = 0;
+    let racesGraded = 0;
+    dateRaceIds.forEach(r_id => {
+        const race = { info: globalRaceInfo[r_id], entries: globalRaceEntries[r_id] || [] };
+        const recap = evaluateRaceRecap(race);
+        if (!recap.hasCompleteTop3) return;
+        racesGraded++;
+        const payouts = lookupRacePayouts(race, recap.ppByRank);
+        const marksCount = Object.keys(collectRaceMainMarks(r_id) || {}).length;
+        if (marksCount === 0) return;  // user didn't bet this race
+        const qCombos = marksCount >= 2 ? marksCount * (marksCount - 1) / 2 : 0;
+        const tCombos = marksCount >= 3 ? marksCount * (marksCount - 1) * (marksCount - 2) / 6 : 0;
+        spentTotal += winStake + (qCombos * qStake) + (tCombos * tStake);
+        if (recap.honmeiHit)   wonTotal += payouts.win      * winStake / 100;
+        if (recap.quinellaHit) wonTotal += payouts.quinella * qStake   / 100;
+        if (recap.trioHit)     wonTotal += payouts.trio     * tStake   / 100;
+    });
+    if (racesGraded === 0 || spentTotal === 0) {
+        qsPL.textContent = '—';
+        qsPLSub.textContent = 'no results yet';
+        qsPL.classList.remove('quick-stat-pos', 'quick-stat-neg');
+    } else {
+        const net = Math.round(wonTotal - spentTotal);
+        const sign = net >= 0 ? '+' : '−';
+        qsPL.textContent = `${sign}¥${Math.abs(net).toLocaleString()}`;
+        qsPLSub.textContent = `¥${Math.round(spentTotal).toLocaleString()} staked`;
+        qsPL.classList.toggle('quick-stat-pos', net >= 0);
+        qsPL.classList.toggle('quick-stat-neg', net < 0);
+    }
+}
+
 function renderEnginePicks() {
     const container = document.getElementById('sidebar-engine-picks');
     if (!container) return;
@@ -491,6 +646,7 @@ async function refreshDataAndUI() {
     // loadRaces() called these before listsData was populated, so re-render now.
     renderWeekendWatchlist();
     renderEnginePicks();
+    updateQuickStats();
     updateRaceHighlighting();
     
     // 4. Restore scroll position seamlessly
@@ -504,6 +660,7 @@ async function refreshListsOnly() {
     renderLists();
     renderWeekendWatchlist();
     renderEnginePicks();
+    updateQuickStats();
 
     // Recalculate highlighting and scores based on new listsData
     updateRaceHighlighting();
@@ -727,6 +884,7 @@ async function init() {
     document.getElementById('risk-slider').addEventListener('input', updateAutoBetHighlighting);
     document.getElementById('risk-slider').addEventListener('input', refreshScoreExplainIfOpen);
     document.getElementById('risk-slider').addEventListener('input', renderEnginePicks);
+    document.getElementById('risk-slider').addEventListener('input', updateQuickStats);
     
     // NEW: Load saved slider state from config
     const savedRisk = appConfig.ui?.riskSlider || 50;
@@ -2758,6 +2916,34 @@ function shiftActiveDate(step) {
     switchMainTab(dates[nextIndex]);
 }
 
+function toggleCalendarPopover(event) {
+    if (event) event.stopPropagation();
+    const popover = document.getElementById('calendar-popover');
+    if (!popover) return;
+    const isOpen = popover.style.display !== 'none';
+    popover.style.display = isOpen ? 'none' : 'block';
+    if (!isOpen) {
+        // Re-render so the popover always reflects the latest calendar state.
+        renderRaceCalendar();
+        // Close on first outside click after opening.
+        setTimeout(() => {
+            document.addEventListener('click', closeCalendarPopoverOnOutside, { once: true });
+        }, 0);
+    }
+}
+
+function closeCalendarPopoverOnOutside(event) {
+    const popover = document.getElementById('calendar-popover');
+    const btn = document.getElementById('active-date-calendar-btn');
+    if (!popover) return;
+    if (popover.contains(event.target) || (btn && btn.contains(event.target))) {
+        // Re-arm: stay open, but listen again for the next outside click.
+        document.addEventListener('click', closeCalendarPopoverOnOutside, { once: true });
+        return;
+    }
+    popover.style.display = 'none';
+}
+
 function findNearestAvailableDate(targetDate, dates) {
     if (!targetDate || !Array.isArray(dates) || dates.length === 0) return null;
     if (dates.includes(targetDate)) return targetDate;
@@ -3129,6 +3315,7 @@ async function loadRaces() {
 
     renderWeekendWatchlist();
     renderEnginePicks();
+    updateQuickStats();
 
     const hasUpcoming = Object.keys(globalAllRacesByDate.upcoming || {}).length > 0;
     const upcomingDates = Object.keys(globalAllRacesByDate.upcoming || {}).sort();
@@ -3190,6 +3377,7 @@ function switchMainTab(date) {
     renderRaceCalendar();
     renderWeekendWatchlist();
     renderEnginePicks();
+    updateQuickStats();
     if (currentMainView === 'voting') {
         renderLiveViewPanel();
     }
@@ -3414,6 +3602,7 @@ async function toggleMark(r_id, h_id, symbol) {
     updateRiskBadge(r_id);
     updateAutoBetHighlighting();
     updateWinningVotesFocusButton();
+    updateQuickStats();
     if (winningVotesFocusEnabled) applyWinningVotesFocus();
 }
 
@@ -6835,7 +7024,6 @@ function showSettingsModal() {
     if (!appConfig.backend) appConfig.backend = {};
     const currentEngine = String(appConfig.backend?.dataEngine || 'nk').toLowerCase();
     document.getElementById('setting-dataEngine').value = currentEngine === 'jv' ? 'jv' : 'nk';
-    document.getElementById('setting-calendarGroup').checked = appConfig.sidebarTabs?.calendarGroup ?? true;
     document.getElementById('setting-pedigreeLists').checked = appConfig.sidebarTabs?.pedigreeLists ?? true;
     document.getElementById('setting-weekendWatchlist').checked = appConfig.sidebarTabs?.weekendWatchlist ?? true;
     document.getElementById('setting-autoPickStrategy').checked = appConfig.sidebarTabs?.autoPickStrategy ?? true;
@@ -6908,7 +7096,6 @@ async function updateSidebarSettings() {
     const previousDataEngine = String(appConfig.backend?.dataEngine || 'nk').toLowerCase();
     // Update config from checkbox values
     appConfig.sidebarTabs = {
-        calendarGroup: document.getElementById('setting-calendarGroup').checked,
         pedigreeLists: document.getElementById('setting-pedigreeLists').checked,
         weekendWatchlist: document.getElementById('setting-weekendWatchlist').checked,
         autoPickStrategy: document.getElementById('setting-autoPickStrategy').checked,
@@ -6972,6 +7159,7 @@ async function updateSidebarSettings() {
     updateAutoBetHighlighting();
     applyRaceTableLayoutSettings();
     renderEnginePicks();
+    updateQuickStats();
 
     if (!previousAutoFetchPastResults && isAutoFetchPastResultsEnabled()) {
         await refreshDataAndUI();
@@ -7108,7 +7296,6 @@ function applySidebarSettings() {
         const el = document.getElementById(elemId);
         if (el) el.open = tabs[key] ?? defaultOpen;
     };
-    apply('calendar-group',           'calendarGroup',     true);
     apply('pedigree-lists-group',     'pedigreeLists',     true);
     apply('weekend-watchlist-group',  'weekendWatchlist',  true);
     apply('auto-pick-group',          'autoPickStrategy',  true);
