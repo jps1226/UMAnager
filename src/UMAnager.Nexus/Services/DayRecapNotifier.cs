@@ -29,6 +29,7 @@ public sealed class DayRecapNotifier
     private readonly AppStateService _state;
     private readonly SettingsService _settings;
     private readonly IDiscordNotifier _discord;
+    private readonly ClaudeRecapWriter _claudeRecap;
     private readonly ILogger<DayRecapNotifier> _logger;
 
     public DayRecapNotifier(
@@ -36,12 +37,14 @@ public sealed class DayRecapNotifier
         AppStateService state,
         SettingsService settings,
         IDiscordNotifier discord,
+        ClaudeRecapWriter claudeRecap,
         ILogger<DayRecapNotifier> logger)
     {
         _dbFactory = dbFactory;
         _state = state;
         _settings = settings;
         _discord = discord;
+        _claudeRecap = claudeRecap;
         _logger = logger;
     }
 
@@ -129,6 +132,9 @@ public sealed class DayRecapNotifier
             {
                 _logger.LogWarning(ex, "[DayRecap] Discord send failed for {Date}", dateKey);
             }
+
+            // Phase 22: write recap_data.json for the Claude routine to pick up.
+            await _claudeRecap.WriteAsync(dateKey, dayRaceIds, marks, recap, ct);
         }
 
         await SaveSentDatesAsync(sentDates);

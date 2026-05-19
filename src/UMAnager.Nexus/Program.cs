@@ -50,6 +50,7 @@ builder.Services.AddSingleton<LiveBroadcastService>();
 builder.Services.AddHttpClient(nameof(DiscordNotifier));
 builder.Services.AddSingleton<IDiscordNotifier, DiscordNotifier>();
 builder.Services.AddScoped<BetWinNotifier>();
+builder.Services.AddScoped<ClaudeRecapWriter>();
 builder.Services.AddScoped<DayRecapNotifier>();
 builder.Services.AddSingleton<OreProVoteApplyService>();
 builder.Services.AddSingleton<LiveOrchestrator>();
