@@ -940,6 +940,16 @@
 }
 .hover-link-btn:hover { background: #1dd1a1; color: black; border-color: #1dd1a1; }
 
+/* Invisible bridge below the menu — fills the gap so the mouse never leaves hover zone */
+.hover-menu::before {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: -20px;
+    right: -20px;
+    height: 20px;
+}
+
 /* The little triangle pointing down at the text */
 .hover-menu::after {
     content: "";
@@ -950,6 +960,7 @@
     border-width: 5px;
     border-style: solid;
     border-color: #444 transparent transparent transparent;
+    pointer-events: none;
 }
 
 /* The magic 500ms delay before it appears */
@@ -1206,6 +1217,93 @@ th {
     color: #ccc;
     font-weight: bold;
 }
+
+/* --- PHASE BADGE --- */
+.phase-badge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 20px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    min-width: 120px;
+    text-align: center;
+    border: 1px solid transparent;
+    transition: background 0.4s, border-color 0.4s, color 0.4s;
+}
+.phase-badge-label {
+    font-size: 14px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+}
+.phase-badge-sub {
+    font-size: 10px;
+    color: #888;
+    margin-top: 4px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.phase-waiting {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.1);
+    color: #777;
+}
+.phase-upcoming {
+    background: rgba(255, 165, 0, 0.09);
+    border-color: rgba(255, 165, 0, 0.3);
+    color: #ffa500;
+}
+.phase-live {
+    background: rgba(0, 200, 80, 0.09);
+    border-color: rgba(0, 200, 80, 0.35);
+    color: #00c850;
+    animation: phase-live-pulse 2s ease-in-out infinite;
+}
+@keyframes phase-live-pulse {
+    0%, 100% { border-color: rgba(0, 200, 80, 0.35); box-shadow: none; }
+    50%       { border-color: rgba(0, 200, 80, 0.75); box-shadow: 0 0 8px rgba(0, 200, 80, 0.25); }
+}
+
+/* --- WEEKEND WATCHLIST PANEL --- */
+.weekend-watchlist-panel {
+    flex-shrink: 0;
+    border-top: 1px solid #2a2a2a;
+    background: #0e1117;
+}
+.weekend-watchlist-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 40px;
+    cursor: pointer;
+    user-select: none;
+    color: #aaa;
+}
+.weekend-watchlist-header:hover { background: rgba(255,255,255,0.03); }
+.weekend-watchlist-title { font-size: 12px; font-weight: bold; letter-spacing: 0.5px; text-transform: uppercase; }
+.weekend-watchlist-chevron { font-size: 10px; color: #555; }
+.weekend-watchlist-body { padding: 0 40px 12px 40px; }
+.weekend-watchlist-content { display: flex; flex-wrap: wrap; gap: 6px; }
+.ww-item {
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(255,255,255,0.04); border: 1px solid #2a2a2a;
+    border-radius: 6px; padding: 5px 10px;
+    cursor: pointer; font-size: 12px;
+    transition: background 0.15s;
+}
+.ww-item:hover { background: rgba(255,255,255,0.08); }
+.ww-badge { font-size: 11px; flex-shrink: 0; }
+.ww-name { font-weight: bold; color: #eee; white-space: nowrap; }
+.ww-meta { color: #666; white-space: nowrap; }
+.ww-empty { color: #555; font-size: 12px; padding: 4px 0; }
+
+/* --- PAST RACE CLEAN VIEW --- */
+/* When the setting is on, hide anachronistic columns (Record, J%, T%) on past race tables. */
+table.past-race [data-col="Record"],
+table.past-race [data-col="J%"],
+table.past-race [data-col="T%"],
+table.past-race [data-col="SF"] { display: none; }
 
 /* --- SORTABLE HEADERS --- */
 th.sortable {
@@ -1479,9 +1577,72 @@ td.jt-rate-none   { color: #444; }
     border-radius: 4px;
     cursor: pointer;
 }
-.close-btn { 
-    background: transparent; border: none; color: #aaa; 
-    font-size: 18px; cursor: pointer; padding: 0; 
+/* --- Formula card sub-components --- */
+.settings-formula-explainer {
+    background: #1a1f2e;
+    border: 1px solid #2a3050;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    font-size: 12px;
+    color: #bbb;
+    line-height: 1.6;
+}
+.settings-formula-explainer p { margin: 0 0 5px 0; }
+.settings-formula-explainer p:last-child { margin-bottom: 0; }
+.settings-formula-explainer b { color: #ddd; }
+.settings-risk-visual {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 5px 0 6px 8px;
+    padding-left: 10px;
+    border-left: 2px solid #3a4060;
+    font-family: monospace;
+    font-size: 11px;
+    color: #888;
+}
+.settings-formula-branch-header {
+    grid-column: 1 / -1;
+    font-size: 12px;
+    font-weight: 600;
+    color: #7fbbff;
+    padding: 8px 0 2px 0;
+    border-top: 1px solid #2a3050;
+    margin-top: 2px;
+    letter-spacing: 0.2px;
+}
+.settings-formula-branch-header:first-child { border-top: none; margin-top: 0; }
+.settings-formula-branch-sub {
+    font-weight: 400;
+    color: #555;
+    font-size: 11px;
+    margin-left: 5px;
+}
+.settings-formula-stakes-header {
+    grid-column: 1 / -1;
+    font-size: 12px;
+    font-weight: 600;
+    color: #aaa;
+    padding: 8px 0 2px 0;
+    border-top: 1px solid #2a3050;
+    margin-top: 2px;
+}
+.settings-formula-label-block {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    align-self: start;
+    padding: 2px 0;
+}
+.settings-formula-label-name { font-size: 13px; color: #ddd; }
+.settings-formula-label-desc { font-size: 11px; color: #666; line-height: 1.5; }
+.settings-formula-label-desc b { color: #888; }
+.settings-formula-grid { align-items: start; }
+/* --- end formula card --- */
+.close-btn {
+    background: transparent; border: none; color: #aaa;
+    font-size: 18px; cursor: pointer; padding: 0;
 }
 .close-btn:hover { color: #ff4b4b; }
 /* --- OREPRO CHEAT SHEET --- */
@@ -1788,6 +1949,12 @@ input[type=range]::-webkit-slider-runnable-track {
 .suggestion-item { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid #333; font-size: 13px; display: flex; flex-direction: column; }
 .suggestion-item:last-child { border-bottom: none; }
 .suggestion-item:hover, .suggestion-item.active { background: #333; color: #1dd1a1; }
+
+/* --- PEDIGREE LIST ADD SEARCH --- */
+.list-add-search-wrap { position: relative; margin-bottom: 10px; }
+.list-add-search-wrap input { width: 100%; box-sizing: border-box; padding: 6px 10px; border-radius: 4px; border: 1px solid #555; background: #1a1c23; color: white; font-size: 13px; outline: none; transition: border-color 0.2s; }
+.list-add-search-wrap input:focus { border-color: #1dd1a1; }
+.list-add-search-wrap .suggestions-box { width: 100%; }
 
 /* --- SETTINGS: RACE COLUMN LAYOUT --- */
 .setting-columns-wrap {

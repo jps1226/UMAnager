@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260518-4">
+    <link rel="stylesheet" href="/static/style.css?v=20260518-14">
 </head>
 <body>
 
@@ -52,61 +52,52 @@
         </div>
     </details>
     
-    <details id="race-database-group" class="sidebar-group" open>
-        <summary>🔄 Race Database</summary>
+    <!-- Mobile search bar relocates here from .main-toolbar-left on small viewports. -->
+    <div id="mobile-search-slot"></div>
+
+    <details id="advanced-tools-group" class="sidebar-group dev-only">
+        <summary>⚙️ Advanced Tools</summary>
         <div class="sidebar-group-content">
-            <!-- Phase 13 follow-up: on mobile, the .search-container is moved into this slot via JS.
-                 On desktop it sits in .main-toolbar-left. Slot is empty until the move happens. -->
-            <div id="mobile-search-slot"></div>
+            <button class="btn-full btn-micro" onclick="createDataBackup()">💾 Backup Data Folder</button>
+            <button class="btn-full btn-micro" onclick="restoreLatestBackup()">♻️ Restore Latest Backup</button>
 
-            <button class="btn-full btn-primary-prominent" onclick="triggerScrape('new')" id="btn-new-race">🔍 Fetch Upcoming Races</button>
+            <div class="tool-block">
+                <label class="tool-block-label">Import Results For Day</label>
+                <input type="date" id="import-day-date" class="tool-input-compact">
+                <button class="btn-full btn-micro btn-no-margin" onclick="importDayResultsFromCalendar()">📅 Import Day Results</button>
+            </div>
 
-            <details class="advanced-tools-panel dev-only">
-                <summary class="advanced-tools-summary">⚙️ Advanced Tools</summary>
-                <div class="advanced-tools-body">
-                    <button class="btn-full btn-micro" onclick="createDataBackup()">💾 Backup Data Folder</button>
-                    <button class="btn-full btn-micro" onclick="restoreLatestBackup()">♻️ Restore Latest Backup</button>
+            <div class="tool-block">
+                <label class="tool-block-label">Delete Selected Day Data</label>
+                <input type="date" id="delete-day-date" class="tool-input-compact">
+                <select id="delete-day-scope" class="tool-input-compact">
+                    <option value="marks">Delete Marks Only</option>
+                    <option value="entries">Delete Horse Entries Only</option>
+                    <option value="all">Delete All Day Data</option>
+                </select>
+                <button class="btn-full btn-danger btn-micro btn-no-margin" onclick="deleteDayData()">🧹 Delete This Day</button>
+            </div>
 
-                    <div class="tool-block">
-                        <label class="tool-block-label">Import Results For Day</label>
-                        <input type="date" id="import-day-date" class="tool-input-compact">
-                        <button class="btn-full btn-micro btn-no-margin" onclick="importDayResultsFromCalendar()">📅 Import Day Results</button>
-                    </div>
-
-                    <div class="tool-block">
-                        <label class="tool-block-label">Delete Selected Day Data</label>
-                        <input type="date" id="delete-day-date" class="tool-input-compact">
-                        <select id="delete-day-scope" class="tool-input-compact">
-                            <option value="marks">Delete Marks Only</option>
-                            <option value="entries">Delete Horse Entries Only</option>
-                            <option value="all">Delete All Day Data</option>
-                        </select>
-                        <button class="btn-full btn-danger btn-micro btn-no-margin" onclick="deleteDayData()">🧹 Delete This Day</button>
-                    </div>
-
-                    <div class="tool-block jvlink-tool-block">
-                        <label class="tool-block-label">JV-Link Operations</label>
-                        <div class="jvlink-btn-grid">
-                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadWeekendRaces()" title="Fetch upcoming weekend race cards">📅 Load Weekend Races</button>
-                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadMasterDataIncremental()" title="Update horse master from checkpoint">🔄 Master Data Update</button>
-                        </div>
-                        <div class="jvlink-btn-grid">
-                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkRefreshRaceCards()" title="Re-download TOKU stream and update race cards (run after betting opens for odds)">🏇 Refresh Race Cards</button>
-                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkParseRecords()" title="Parse any unprocessed records in raw_staging into the database">⚙️ Parse Records</button>
-                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkFetchCurrentOdds()" title="Fetch live odds via JVRTOpen (run after betting opens)">💴 Fetch Live Odds</button>
-                        </div>
-                        <div class="jvlink-btn-grid">
-                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadBloodline()" title="One-time: pull HN (breeding-horse master) records via BLDN spec. Populates raw_staging.">🩸 Load Bloodline (BLDN)</button>
-                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkBackfillHnNames()" title="Parse HN records from raw_staging and fill breeding_horses.NameEn (romaji names for pedigree ancestors)">🌐 Backfill EN Names</button>
-                            <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkIngestJockeysTrainers()" title="Phase 8: parse staged KS/CH records into jockeys/trainers + re-parse staged SE records to fill JockeyCode/TrainerCode on race_entries + refresh rolling stats.">🏇 Ingest Jockeys + Trainers</button>
-                            <button class="btn-full btn-micro" onclick="runJvlinkRefreshJtStats()" title="Recompute rolling 90d jockey + 180d trainer Win%/Place%/AE. Auto-runs after each results tick; this is for manual recompute.">↻ Refresh J/T Stats</button>
-                        </div>
-                        <div id="jvlink-test-status" class="jvlink-test-status">Ready.</div>
-                        <pre id="jvlink-test-output" class="jvlink-test-output">{}</pre>
-                    </div>
+            <div class="tool-block jvlink-tool-block">
+                <label class="tool-block-label">JV-Link Operations</label>
+                <div class="jvlink-btn-grid">
+                    <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadWeekendRaces()" title="Fetch upcoming weekend race cards">📅 Load Weekend Races</button>
+                    <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadMasterDataIncremental()" title="Update horse master from checkpoint">🔄 Master Data Update</button>
                 </div>
-            </details>
-            
+                <div class="jvlink-btn-grid">
+                    <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkRefreshRaceCards()" title="Re-download TOKU stream and update race cards (run after betting opens for odds)">🏇 Refresh Race Cards</button>
+                    <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkParseRecords()" title="Parse any unprocessed records in raw_staging into the database">⚙️ Parse Records</button>
+                    <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkFetchCurrentOdds()" title="Fetch live odds via JVRTOpen (run after betting opens)">💴 Fetch Live Odds</button>
+                </div>
+                <div class="jvlink-btn-grid">
+                    <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkLoadBloodline()" title="One-time: pull HN (breeding-horse master) records via BLDN spec. Populates raw_staging.">🩸 Load Bloodline (BLDN)</button>
+                    <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkBackfillHnNames()" title="Parse HN records from raw_staging and fill breeding_horses.NameEn (romaji names for pedigree ancestors)">🌐 Backfill EN Names</button>
+                    <button class="btn-full btn-micro btn-prominent" onclick="runJvlinkIngestJockeysTrainers()" title="Phase 8: parse staged KS/CH records into jockeys/trainers + re-parse staged SE records to fill JockeyCode/TrainerCode on race_entries + refresh rolling stats.">🏇 Ingest Jockeys + Trainers</button>
+                    <button class="btn-full btn-micro" onclick="runJvlinkRefreshJtStats()" title="Recompute rolling 90d jockey + 180d trainer Win%/Place%/AE. Auto-runs after each results tick; this is for manual recompute.">↻ Refresh J/T Stats</button>
+                </div>
+                <div id="jvlink-test-status" class="jvlink-test-status">Ready.</div>
+                <pre id="jvlink-test-output" class="jvlink-test-output">{}</pre>
+            </div>
         </div>
     </details>
 
@@ -118,9 +109,11 @@
                 <option value="favorites">⭐ Favorites</option>
                 <option value="watchlist">👁️ Watchlist</option>
             </select>
-            <div class="inline-input-row">
-                <input type="text" id="snipe-url" placeholder="https://db.netkeiba.com/...">
-                <button onclick="snipeHorse()">Add</button>
+            <div class="list-add-search-wrap">
+                <input type="text" id="list-add-search" placeholder="Search horses..."
+                       oninput="handleListAddSearch(event)" onkeydown="handleListAddKey(event)"
+                       autocomplete="off">
+                <div id="list-add-suggestions" class="suggestions-box"></div>
             </div>
             
             <div class="tab-bar tab-bar-spaced">
@@ -151,11 +144,6 @@
             </div>
         </details>
         
-    <details id="weekend-watchlist-group" class="sidebar-group" open>
-            <summary>🏆 Weekend Watchlist</summary>
-            <div class="sidebar-group-content" id="sidebar-weekend-watchlist">
-                </div>
-        </details>
     </div>
 
     <div class="sidebar-footer">
@@ -183,6 +171,10 @@
                     <div class="clock-time" id="cst">--:--:--</div>
                 </div>
             </div>
+            <div id="phase-badge" class="phase-badge phase-waiting">
+                <div class="phase-badge-label">⏸ Waiting</div>
+                <div id="phase-badge-sub" class="phase-badge-sub">Loading…</div>
+            </div>
             <div id="scrape-console" class="console-box console-top-bar dev-only"></div>
         </div>
 
@@ -193,7 +185,7 @@
                     <div id="search-suggestions" class="suggestions-box"></div>
                 </div>
 
-                <button id="btn-live-view-popout" onclick="showExportModal()" class="toolbar-btn toolbar-btn-primary">🪟 Live View Popout</button>
+                <button id="btn-live-view-popout" onclick="showExportModal()" class="toolbar-btn toolbar-btn-primary" style="display:none;">🪟 Live View Popout</button>
                 <button id="btn-tv-mode" onclick="window.open('/tv.html', '_blank', 'noopener')" class="toolbar-btn toolbar-btn-primary">📺 TV Mode</button>
                 <button id="btn-winning-votes-focus" onclick="toggleWinningVotesFocus()" class="toolbar-btn toolbar-btn-muted" style="display:none;">🏁 Hit 0% (0/0)</button>
                 <button onclick="collapseVotedRaces()" class="toolbar-btn toolbar-btn-muted">✅ Collapse Voted</button>
@@ -221,6 +213,15 @@
                 <div class="skel-race shimmer"></div>
                 <div class="skel-race shimmer"></div>
             </div>
+        </div>
+    </div>
+    <div id="weekend-watchlist-panel" class="weekend-watchlist-panel">
+        <div class="weekend-watchlist-header" onclick="toggleWeekendWatchlist()">
+            <span class="weekend-watchlist-title">🏆 Weekend Watchlist</span>
+            <span id="weekend-watchlist-chevron" class="weekend-watchlist-chevron">▲</span>
+        </div>
+        <div id="weekend-watchlist-body" class="weekend-watchlist-body">
+            <div id="sidebar-weekend-watchlist" class="weekend-watchlist-content"></div>
         </div>
     </div>
     <div id="live-view-container" class="voting-main-shell" style="display:none;">
@@ -264,20 +265,12 @@
                     <h4 class="settings-section-title settings-section-title-first">Default Sidebar Sections</h4>
                     <div class="settings-option-list">
                         <label class="settings-option-row">
-                            <input type="checkbox" id="setting-raceDatabase" onchange="updateSidebarSettings()">
-                            <span>🔄 Race Database</span>
-                        </label>
-                        <label class="settings-option-row">
                             <input type="checkbox" id="setting-pedigreeLists" onchange="updateSidebarSettings()">
                             <span>🎯 Pedigree Lists</span>
                         </label>
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-autoPickStrategy" onchange="updateSidebarSettings()">
                             <span>⚙️ Auto-Pick Strategy</span>
-                        </label>
-                        <label class="settings-option-row">
-                            <input type="checkbox" id="setting-weekendWatchlist" onchange="updateSidebarSettings()">
-                            <span>🏆 Weekend Watchlist</span>
                         </label>
                     </div>
                 </div>
@@ -313,6 +306,10 @@
                             <span>🔒 Auto-Lock Past Race Votes</span>
                         </label>
                         <label class="settings-option-row">
+                            <input type="checkbox" id="setting-cleanPastRaceCards" onchange="updateSidebarSettings()">
+                            <span>🧹 Clean Past Race Cards <small style="color:#666;">(hide Record &amp; %s)</small></span>
+                        </label>
+                        <label class="settings-option-row">
                             <input type="checkbox" id="setting-devMode" onchange="updateSidebarSettings()">
                             <span>🛠️ Developer Mode <span style="opacity:0.6;font-size:11px;">(shows Advanced Tools, scrape console, debug toggles)</span></span>
                         </label>
@@ -345,43 +342,111 @@
 
                 <div class="settings-card settings-card-full">
                     <h4 class="settings-section-title settings-section-title-tight">⚗️ Auto-Pick Formula</h4>
-                    <div class="settings-helper-text">Tune the scoring engine weights. Changes affect new auto-picks and the Bet Safety indicator.</div>
+
+                    <div class="settings-formula-explainer">
+                        <p>Every horse gets a <b>total score</b> built from three branches. The <b>Risk Slider</b> blends them:</p>
+                        <div class="settings-risk-visual">
+                            <span>Risk 0  →  100% Odds  +  0% Form  +  0% Pedigree  (follow the favourite)</span>
+                            <span>Risk 50 →   50% Odds  + 50% Form  + 50% Pedigree</span>
+                            <span>Risk 100 →   0% Odds  + 100% Form + 100% Pedigree  (ignore the market entirely)</span>
+                        </div>
+                        <p>The weights below control how much each <em>sub-signal</em> contributes within its branch — they don't change the blend ratio, they change how loud each voice is before the blend happens. The <b>ⓘ popover</b> on any horse row shows the exact per-branch breakdown for that runner.</p>
+                    </div>
+
                     <div class="settings-formula-grid">
-                        <label title="Max points a horse can earn from odds (formula: oddsCap ÷ odds). Higher = odds have bigger absolute impact.">Odds Cap</label>
+
+                        <!-- ── Odds Branch ── -->
+                        <div class="settings-formula-branch-header">
+                            📊 Odds Branch <span class="settings-formula-branch-sub">active at low Risk — the market's collective intelligence</span>
+                        </div>
+
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Odds Cap</span>
+                            <span class="settings-formula-label-desc">Score = Cap ÷ odds. A 1.0 horse earns the full Cap; a 2.5 horse earns Cap ÷ 2.5; a 10.0 longshot earns Cap ÷ 10. <b>Default 100</b> keeps the Odds branch on the same point scale as Form, so neither dominates unfairly at Risk 50. Raise it to make favourites even stickier at low Risk.</span>
+                        </div>
                         <input type="number" id="fw-oddsCap" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
 
-                        <label title="Max points from win rate (wins÷starts × scale). Higher = race record matters more.">Win Rate Scale</label>
+                        <!-- ── Form Branch ── -->
+                        <div class="settings-formula-branch-header">
+                            📈 Form Branch <span class="settings-formula-branch-sub">scales in at higher Risk — who has actually been running well</span>
+                        </div>
+
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Career Win Rate Scale</span>
+                            <span class="settings-formula-label-desc">Career (wins ÷ starts) × this scale. A 25% winner scores 25 pts; a 50% winner scores 50. <b>Default 100</b> matches the Odds Cap so both branches carry equal headroom — the Risk slider then tilts the blend, not an imbalanced scale.</span>
+                        </div>
                         <input type="number" id="fw-formMultiplier" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
 
-                        <label title="Points awarded per start below the breakeven count. Set to 0 to disable the freshness bonus entirely.">Freshness Bonus</label>
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Freshness Bonus (pts / start)</span>
+                            <span class="settings-formula-label-desc">Added for every start <em>below</em> Breakeven; subtracted for every start <em>above</em> it. Compensates for the JRA market systematically under-pricing lightly-raced horses who haven't accumulated enough public form. <b>Default 3</b> — at Breakeven 10, a true debut horse earns +30, a 20-start campaigner loses −30. Set to 0 to turn off.</span>
+                        </div>
                         <input type="number" id="fw-freshnessBonus" min="-20" max="20" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
 
-                        <label title="Starts count where freshness is neutral (neither bonus nor penalty). Horses with fewer starts get the bonus; more get a penalty.">Freshness Breakeven</label>
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Freshness Breakeven (starts)</span>
+                            <span class="settings-formula-label-desc">The starts count where the freshness adjustment is exactly zero — neither bonus nor penalty. Horses below this are "lightly raced"; above are "seasoned." <b>Default 10</b> is roughly two seasons of light campaigning. Raise it if JRA's maiden/young-horse market feels efficient in your experience.</span>
+                        </div>
                         <input type="number" id="fw-freshnessBreakeven" min="0" max="50" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
 
-                        <label title="Multiplier on pedigree score from tracked bloodlines. Higher = pedigree matters more at higher risk settings.">Pedigree Scale</label>
-                        <input type="number" id="fw-pedigreeMultiplier" min="0" max="500" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
-
-                        <label title="Scale on recency-weighted form score from the last 3 finishes (weights 0.5/0.3/0.2, top-5 only). Higher = recent results matter more.">Recent Form Scale</label>
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Recent Form Scale</span>
+                            <span class="settings-formula-label-desc">Multiplier on the last-3 recency score. Finishes are weighted 0.5 / 0.3 / 0.2 (most-recent first); each position converts via f(pos) = 1/pos for top-5, zero outside. A horse that ran 1st–1st–2nd scores ≈ 0.90 raw → 72 pts at default. <b>Default 80</b> — slightly below Win Rate Scale because 3 races is noisier than a full career, but still the strongest single predictor we have.</span>
+                        </div>
                         <input type="number" id="fw-formWeight" min="0" max="500" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
 
-                        <label title="Phase 9 sire-fit weight. Adds sire's historical win% on this race's surface + distance bucket as a low-weight tiebreaker. Skipped when the sire has <10 progeny starts in the bucket.">Sire Fit Weight</label>
-                        <input type="number" id="fw-sireFitWeight" min="0" max="200" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
-
-                        <label title="Phase 8 jockey weight. Applied to (A/E − 1.0) where A/E is jockey's actual wins ÷ market-expected wins over the last 90 days. >1.0 = beats market, <1.0 = drag. Min 30 starts to count.">Jockey Weight</label>
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Jockey Weight</span>
+                            <span class="settings-formula-label-desc">Applied to <b>(A/E − 1.0)</b>, where A/E = jockey's actual wins ÷ market-expected wins over the last 90 days. A/E 1.0 is perfectly market-neutral (zero contribution). A/E 1.30 adds +12 pts; A/E 0.70 subtracts −12. Below 30 starts the cell shows — and contributes nothing. <b>Default 40</b> — jockeys are the strongest human factor; a truly elite rider consistently beats market expectation at JRA.</span>
+                        </div>
                         <input type="number" id="fw-jockeyWeight" min="0" max="200" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
 
-                        <label title="Phase 8 trainer weight. Same A/E logic as jockey, rolling 180-day window. Min 20 starts to count.">Trainer Weight</label>
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Trainer Weight</span>
+                            <span class="settings-formula-label-desc">Same A/E logic as Jockey, rolling 180-day window (trainers need more samples). Below 20 starts contributes nothing. <b>Default 20</b> — half of Jockey. Trainers influence conditioning and race selection, but on a given race day the jockey's skill in-run is more directly causal. The longer window also means the signal is "staler" by nature.</span>
+                        </div>
                         <input type="number" id="fw-trainerWeight" min="0" max="200" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
 
-                        <label title="Yen stake on a single ◎ Win ticket. Match your real OrePro Win-leg stake (often higher than the per-combo Q/T stakes).">Win Stake (¥)</label>
+                        <!-- ── Pedigree Branch ── -->
+                        <div class="settings-formula-branch-header">
+                            🧬 Pedigree Branch <span class="settings-formula-branch-sub">scales in at higher Risk — bloodline fit for conditions</span>
+                        </div>
+
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Pedigree Scale</span>
+                            <span class="settings-formula-label-desc">Multiplier on your tracked-bloodline score — points from horses whose Sire, Dam, or BMS appears in your FAV / Watchlist pedigree lists. <b>Default 30</b> — deliberately modest. Pedigree is a weak per-race predictor compared to form; it's best used as a tiebreaker between otherwise equal horses, not as a primary signal. Raise it only if you find your pedigree lists are tightly curated.</span>
+                        </div>
+                        <input type="number" id="fw-pedigreeMultiplier" min="0" max="500" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
+
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Sire Fit Weight</span>
+                            <span class="settings-formula-label-desc">The sire's historical win% on <em>this exact race's surface + distance bucket</em> (Sprint ≤1400 / Mile / Middle / Long), scaled here. A sire at 20% win rate on turf/mile adds 0.20 × weight pts. Requires ≥10 progeny starts in the bucket — below that, nothing is added. <b>Default 10</b> — pure tiebreaker. Surface-fit is a real but small edge; keeping the weight low prevents one freak sire from dominating.</span>
+                        </div>
+                        <input type="number" id="fw-sireFitWeight" min="0" max="200" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
+
+                        <!-- ── Bet Sizing ── -->
+                        <div class="settings-formula-stakes-header">
+                            💴 Bet Sizing <span class="settings-formula-branch-sub">used for the Voting tab payout estimates — match your real OrePro stakes</span>
+                        </div>
+
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Win Stake (¥)</span>
+                            <span class="settings-formula-label-desc">¥ on the single ◎ Win ticket. Often higher than the per-combo Q/T stakes since you're buying one ticket, not a box.</span>
+                        </div>
                         <input type="number" id="setting-betStakeWin" min="100" max="1000000" step="100" onblur="saveBetStake('win', this.value)" class="settings-number-input">
 
-                        <label title="Yen stake per combination in a Quinella Box. Total Q Box spend = this × C(marks, 2). Default ¥100.">Q Stake (¥/combo)</label>
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Quinella Stake (¥ / combo)</span>
+                            <span class="settings-formula-label-desc">¥ per combination in the Q Box. Total Q spend = this × C(marks, 2) — e.g. 4 marks = 6 combos.</span>
+                        </div>
                         <input type="number" id="setting-betStakeQuinella" min="100" max="1000000" step="100" onblur="saveBetStake('quinella', this.value)" class="settings-number-input">
 
-                        <label title="Yen stake per combination in a Trio Box. Total T Box spend = this × C(marks, 3). Default ¥100.">T Stake (¥/combo)</label>
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Trio Stake (¥ / combo)</span>
+                            <span class="settings-formula-label-desc">¥ per combination in the T Box. Total T spend = this × C(marks, 3) — e.g. 4 marks = 4 combos.</span>
+                        </div>
                         <input type="number" id="setting-betStakeTrio" min="100" max="1000000" step="100" onblur="saveBetStake('trio', this.value)" class="settings-number-input">
+
                     </div>
                     <button onclick="resetFormulaWeights()" class="settings-reset-btn">↺ Reset to Defaults</button>
                 </div>
@@ -455,6 +520,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260518-7"></script>
+<script src="/static/script.js?v=20260518-16"></script>
 </body>
 </html>

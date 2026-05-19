@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using UMAnager.Nexus.Data;
 
 namespace UMAnager.Nexus.Controllers;
@@ -57,17 +58,23 @@ public sealed class RacesController : ControllerBase
     private readonly Services.SettingsService _settings;
     private readonly Services.SirePerformanceService _sirePerf;
     private readonly Services.JockeyTrainerStatsService _jtStats;
+    private readonly IMemoryCache _cache;
+
+    // Fixed key — one slot holds the most-recent serialized response + its ETag.
+    private const string RacesCacheKey = "races-v1-response";
 
     public RacesController(
         IDbContextFactory<AppDbContext> dbFactory,
         Services.SettingsService settings,
         Services.SirePerformanceService sirePerf,
-        Services.JockeyTrainerStatsService jtStats)
+        Services.JockeyTrainerStatsService jtStats,
+        IMemoryCache cache)
     {
         _dbFactory = dbFactory;
         _settings = settings;
         _sirePerf = sirePerf;
         _jtStats = jtStats;
+        _cache = cache;
     }
 
     [HttpGet]
@@ -105,13 +112,24 @@ public sealed class RacesController : ControllerBase
                 .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                 .FirstOrDefaultAsync();
             var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-            var etag = $"\"races-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{jtTicks}\"";
+            // v2: bump schema version suffix whenever the response shape changes (new fields,
+            // renamed fields, etc.) so browsers never serve a stale 304 cache body.
+            var etag = $"\"races-v2-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{jtTicks}\"";
             Response.Headers["Cache-Control"] = "no-cache"; // re-validate every time, but allow 304
             Response.Headers["ETag"] = etag;
             var ifNoneMatch = Request.Headers["If-None-Match"].ToString();
             if (!string.IsNullOrEmpty(ifNoneMatch) && ifNoneMatch == etag)
             {
                 return StatusCode(StatusCodes.Status304NotModified);
+            }
+
+            // Phase 14 follow-up: warm response cache. ETag is a content fingerprint, so
+            // when the ETag matches the cached entry we can skip all 8+ heavy queries and
+            // return the pre-serialized bytes directly. Cache miss: fall through to full load.
+            if (_cache.TryGetValue(RacesCacheKey, out (string Tag, byte[] Bytes) cached)
+                && cached.Tag == etag)
+            {
+                return File(cached.Bytes, "application/json; charset=utf-8");
             }
 
             var raceIds = races.Select(r => r.RaceId).ToHashSet();
@@ -189,7 +207,7 @@ public sealed class RacesController : ControllerBase
                 .Where(r => r.Starts >= MinSireStarts)
                 .ToDictionary(
                     r => (r.SireId, r.Surface ?? "", r.Bucket ?? ""),
-                    r => r.WinPct);
+                    r => (r.WinPct, r.PlacePct, r.Starts));
 
             // Phase 8: jockey/trainer rolling stats. Indexed by code for O(1) lookup per entry.
             // MinJockeyStarts=30 (90d), MinTrainerStarts=20 (180d) floor — below these, stats
@@ -262,11 +280,17 @@ public sealed class RacesController : ControllerBase
                         // Phase 9: sire-fit % for THIS race's (surface, bucket). null when
                         // the sire's sample in the bucket is below MinSireStarts.
                         decimal? sireFitPct = null;
+                        decimal? sirePlaceFitPct = null;
+                        int? sireFitStarts = null;
                         var sireId = horse?.SireId;
                         if (!string.IsNullOrEmpty(sireId) && !string.IsNullOrEmpty(raceSurface) && !string.IsNullOrEmpty(raceBucket))
                         {
-                            if (sirePerfLookup.TryGetValue((sireId, raceSurface, raceBucket), out var pct))
-                                sireFitPct = pct;
+                            if (sirePerfLookup.TryGetValue((sireId, raceSurface, raceBucket), out var sp))
+                            {
+                                sireFitPct = sp.WinPct;
+                                sirePlaceFitPct = sp.PlacePct;
+                                sireFitStarts = sp.Starts;
+                            }
                         }
 
                         // Phase 8: jockey/trainer rolling stats. Surface raw rates + A/E. The
@@ -295,6 +319,8 @@ public sealed class RacesController : ControllerBase
                             Sire = ResolveAncestorName(horse?.SireId),
                             Sire_ID = horse?.SireId ?? "",
                             Sire_Fit = sireFitPct,
+                            Sire_Place_Fit = sirePlaceFitPct,
+                            Sire_Starts = sireFitStarts,
                             Dam = ResolveAncestorName(horse?.DamId),
                             Dam_ID = horse?.DamId ?? "",
                             BMS = ResolveAncestorName(horse?.BmsId),
@@ -343,13 +369,19 @@ public sealed class RacesController : ControllerBase
                 list.AddRange(kv.Value);
             }
 
-            return Ok(new
+            var responsePayload = new
             {
                 upcoming_races_by_date = upcomingByDate.ToDictionary(k => k.Key, v => v.Value.ToArray()),
                 past_races_by_date     = pastByDate.ToDictionary(k => k.Key, v => v.Value.ToArray()),
                 races_by_date          = combinedByDate.ToDictionary(k => k.Key, v => v.Value.ToArray()),
                 top_picks              = Array.Empty<object>()
-            });
+            };
+            var responseBytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
+                responsePayload,
+                new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = null });
+            _cache.Set(RacesCacheKey, (etag, responseBytes),
+                new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(4) });
+            return File(responseBytes, "application/json; charset=utf-8");
         }
         catch (Exception ex)
         {

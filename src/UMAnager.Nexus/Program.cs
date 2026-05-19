@@ -18,6 +18,7 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 
 builder.WebHost.UseStaticWebAssets();
 
+builder.Services.AddMemoryCache();
 builder.Services.AddControllers()
     .AddJsonOptions(o => o.JsonSerializerOptions.PropertyNamingPolicy = null);
 

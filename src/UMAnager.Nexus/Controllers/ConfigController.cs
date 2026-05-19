@@ -34,6 +34,7 @@ public sealed class ConfigController : ControllerBase
             devMode                 = false,
             highlightAutoBets       = false,
             highlightFallbackBridge = false,
+            cleanPastRaceCards      = true,
             tvModeSplitPercent      = 50,
             tvModePanelsFlipped     = false,
             raceTableColumns = new[]
@@ -63,10 +64,8 @@ public sealed class ConfigController : ControllerBase
         },
         sidebarTabs = new
         {
-            raceDatabase    = true,
             pedigreeLists   = true,
             autoPickStrategy = true,
-            weekendWatchlist = true,
         },
         backend = new { dataEngine = "jv" },
     };

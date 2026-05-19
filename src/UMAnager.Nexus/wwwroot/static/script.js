@@ -19,7 +19,8 @@ let currentMainView = 'races';
 let sidebarRaceCollapseState = {};
 let lastPrefetchAwarenessKey = "";
 let globalPrefetchUpdates = null; // { updatesByDate: {...}, hasUpdates: bool, ... } from /api/prefetch-check
-let raceSorts = {}; // NEW: Remembers which column is sorted for each race
+let raceSorts = {}; // Per-race sort state — always kept in sync with globalSort.
+let globalSort = { col: 'Default', asc: true }; // Single source of truth; all races mirror this.
 let winningVotesFocusEnabled = false;
 let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
@@ -300,6 +301,107 @@ function updateClock() {
 
 setInterval(updateClock, 1000); updateClock();
 
+// --- PHASE BADGE ---
+async function refreshPhaseBadge() {
+    try {
+        const res = await fetch('/api/orchestrator/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        const badge = document.getElementById('phase-badge');
+        const sub   = document.getElementById('phase-badge-sub');
+        if (!badge || !sub) return;
+
+        const phase = data.phase || 'WAITING_FOR_RACES';
+        badge.classList.remove('phase-waiting', 'phase-upcoming', 'phase-live');
+        const labelEl = badge.querySelector('.phase-badge-label');
+
+        if (phase === 'LIVE_OPERATIONS') {
+            badge.classList.add('phase-live');
+            labelEl.textContent = '🔴 LIVE';
+        } else if (phase === 'RACES_POPULATED') {
+            badge.classList.add('phase-upcoming');
+            labelEl.textContent = '📅 Upcoming';
+        } else {
+            badge.classList.add('phase-waiting');
+            labelEl.textContent = '⏸ Waiting';
+        }
+
+        if (data.next_tick_eta_utc) {
+            const eta = new Date(data.next_tick_eta_utc);
+            const diffMs = eta - Date.now();
+            if (diffMs > 0) {
+                const mins = Math.floor(diffMs / 60000);
+                const secs = Math.floor((diffMs % 60000) / 1000);
+                sub.textContent = `Next tick: ${mins}m ${secs}s`;
+            } else {
+                sub.textContent = 'Tick imminent';
+            }
+        } else {
+            sub.textContent = phase === 'WAITING_FOR_RACES' ? 'No upcoming races' : '';
+        }
+    } catch { /* silently ignore network errors */ }
+}
+refreshPhaseBadge();
+setInterval(refreshPhaseBadge, 30000);
+
+function renderWeekendWatchlist() {
+    const container = document.getElementById('sidebar-weekend-watchlist');
+    if (!container) return;
+
+    const tracked = getTrackedSets();
+    const allTracked = new Set([...tracked.favorites, ...tracked.watchlist]);
+
+    if (allTracked.size === 0) {
+        container.innerHTML = '<div class="ww-empty">Add horses to Favorites or Watchlist to see them here.</div>';
+        return;
+    }
+
+    const matches = [];
+    Object.keys(globalRaceInfo).forEach(r_id => {
+        const info = globalRaceInfo[r_id];
+        if (info._timeline !== 'upcoming') return;
+        (globalRaceEntries[r_id] || []).forEach(entry => {
+            const id = String(entry.Horse_ID || '').split('.')[0].trim();
+            if (!allTracked.has(id)) return;
+            matches.push({
+                r_id,
+                date: info.clean_date,
+                sortTime: info.sort_time || '',
+                label: `${trackName(info.place)} R${info.race_number}`,
+                entry,
+                isFav: tracked.favorites.has(id),
+            });
+        });
+    });
+
+    matches.sort((a, b) => a.sortTime < b.sortTime ? -1 : a.sortTime > b.sortTime ? 1 : 0);
+
+    if (matches.length === 0) {
+        container.innerHTML = '<div class="ww-empty">No tracked horses in upcoming races.</div>';
+        return;
+    }
+
+    container.innerHTML = matches.map(m => {
+        const badge = m.isFav ? '⭐' : '👁';
+        const odds = m.entry.Odds ? `×${parseFloat(m.entry.Odds).toFixed(1)}` : '—';
+        const pp = m.entry.PP ? ` #${m.entry.PP}` : '';
+        return `<div class="ww-item" onclick="jumpToHorse('${m.date}', '${m.r_id}', '${m.entry.Horse_ID}', 'upcoming')">
+            <span class="ww-badge">${badge}</span>
+            <span class="ww-name">${m.entry.Horse || m.entry.Horse_ID}</span>
+            <span class="ww-meta">${m.label}${pp} · ${odds}</span>
+        </div>`;
+    }).join('');
+}
+
+function toggleWeekendWatchlist() {
+    const body = document.getElementById('weekend-watchlist-body');
+    const chevron = document.getElementById('weekend-watchlist-chevron');
+    if (!body) return;
+    const collapsed = body.style.display === 'none';
+    body.style.display = collapsed ? '' : 'none';
+    if (chevron) chevron.textContent = collapsed ? '▲' : '▼';
+}
+
 // ==========================================
 // --- LIST MANAGEMENT & UI REFRESH SUITE ---
 // ==========================================
@@ -326,7 +428,8 @@ async function refreshListsOnly() {
     const listRes = await fetch('/api/lists');
     listsData = await listRes.json();
     renderLists();
-    
+    renderWeekendWatchlist();
+
     // Recalculate highlighting and scores based on new listsData
     updateRaceHighlighting();
     
@@ -767,20 +870,84 @@ async function removeHorse(listType, idToRemove) {
     await refreshListsOnly();
 }
 
-async function snipeHorse() {
-    const url = document.getElementById('snipe-url').value;
-    const type = document.getElementById('snipe-type').value;
-    if (!url) return;
-    
-    const res = await fetch('/api/snipe', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({url: url, list_type: type})
+let listAddDebounceTimer = null;
+let currentListAddSelection = -1;
+
+function handleListAddSearch(e) {
+    if (listAddDebounceTimer) clearTimeout(listAddDebounceTimer);
+    listAddDebounceTimer = setTimeout(performListAddSearch, 150);
+}
+
+function performListAddSearch() {
+    const val = document.getElementById('list-add-search').value.toLowerCase().trim();
+    const box = document.getElementById('list-add-suggestions');
+    currentListAddSelection = -1;
+
+    if (!val) { box.style.display = 'none'; return; }
+
+    // Dedupe by h_id — each horse appears once per race entry in searchableHorses
+    const seen = new Set();
+    const matches = [];
+    for (const h of searchableHorses) {
+        if (seen.has(h.h_id)) continue;
+        if (h.name.toLowerCase().includes(val)) {
+            seen.add(h.h_id);
+            matches.push(h);
+        }
+    }
+
+    if (matches.length === 0) {
+        box.innerHTML = '<div class="suggestion-item" style="color:#888;">No matches</div>';
+        box.style.display = 'block';
+        return;
+    }
+
+    let html = '';
+    matches.slice(0, 10).forEach((m, idx) => {
+        const nameEnc = encodeURIComponent(m.name || '');
+        html += `<div class="suggestion-item" id="list-sugg-${idx}"
+                      onclick="selectListAddHorse('${m.h_id}', '${nameEnc}')">
+            <strong>${escapeHtml(m.name)}</strong>
+        </div>`;
     });
-    const data = await res.json();
-    document.getElementById('snipe-url').value = ""; // Clear the input box
-    
-    if(data.status === "success") await refreshDataAndUI();
-    else alert(data.message);
+    box.innerHTML = html;
+    box.style.display = 'block';
+}
+
+function handleListAddKey(e) {
+    const box = document.getElementById('list-add-suggestions');
+    if (box.style.display === 'none') return;
+    const items = box.querySelectorAll('.suggestion-item');
+    if (items.length === 0 || items[0].innerText.includes('No matches')) return;
+
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        currentListAddSelection = (currentListAddSelection + 1) % items.length;
+        updateListAddSelection(items);
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        currentListAddSelection = (currentListAddSelection - 1 + items.length) % items.length;
+        updateListAddSelection(items);
+    } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const idx = currentListAddSelection > -1 ? currentListAddSelection : 0;
+        items[idx].click();
+    }
+}
+
+function updateListAddSelection(items) {
+    items.forEach((item, idx) => {
+        if (idx === currentListAddSelection) item.classList.add('active');
+        else item.classList.remove('active');
+    });
+}
+
+async function selectListAddHorse(h_id, nameEnc) {
+    document.getElementById('list-add-suggestions').style.display = 'none';
+    document.getElementById('list-add-search').value = '';
+    currentListAddSelection = -1;
+    const listType = document.getElementById('snipe-type').value;
+    await quickAddFromHover(h_id, listType, nameEnc);
 }
 
 // Creates a wrapper with a 500ms delay hover menu
@@ -1099,16 +1266,18 @@ function setSort(r_id, col) {
     const meta = RACE_COLUMN_META[col];
     const initialAsc = meta?.initialAsc ?? true;
 
-    // Toggle direction or set new column
-    if (!raceSorts[r_id]) raceSorts[r_id] = { col: col, asc: initialAsc };
-    else if (raceSorts[r_id].col === col) raceSorts[r_id].asc = !raceSorts[r_id].asc;
-    else { raceSorts[r_id].col = col; raceSorts[r_id].asc = initialAsc; }
+    // Direction is computed against the global state so every race toggles in lockstep.
+    const newAsc = (globalSort.col === col) ? !globalSort.asc : initialAsc;
+    globalSort = { col, asc: newAsc };
 
-    applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
-
-    // Instantly replace just the table body and headers for THIS race (Zero flashing!)
-    document.getElementById(`tbody-${r_id}`).innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
-    refreshRaceHeaderSortLabels(r_id);
+    // Propagate to every loaded race card in one pass.
+    Object.keys(globalRaceEntries).forEach(rid => {
+        raceSorts[rid] = { col, asc: newAsc };
+        applySortLogic(rid, col, newAsc);
+        const tbody = document.getElementById(`tbody-${rid}`);
+        if (tbody) tbody.innerHTML = buildTableBody(rid, globalRaceEntries[rid]);
+        refreshRaceHeaderSortLabels(rid);
+    });
     updateAutoBetHighlighting();
 }
 
@@ -1238,7 +1407,10 @@ function buildTableBody(r_id, entries) {
                 if (sf >= 15) cls += ' sire-fit-strong';
                 else if (sf >= 9) cls += ' sire-fit-mid';
                 else cls += ' sire-fit-weak';
-                const tip = `Sire win% for this surface + distance bucket`;
+                const pf = (row.Sire_Place_Fit === null || row.Sire_Place_Fit === undefined) ? null : parseFloat(row.Sire_Place_Fit);
+                const pfLabel = pf !== null && Number.isFinite(pf) ? ` / ${pf.toFixed(0)}% place` : '';
+                const nLabel = row.Sire_Starts ? ` (n=${row.Sire_Starts})` : '';
+                const tip = `Sire win%: ${sf.toFixed(1)}%${pfLabel}${nLabel}`;
                 return `<td class="${cls}" title="${tip}">${sf.toFixed(0)}%</td>`;
             })(),
             Dam: `<td>${damStr}</td>`,
@@ -2509,7 +2681,8 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
             globalRaceClass[r_id] = raceClassFlags(race?.info?.race_class);
 
             if (!raceSorts[r_id]) {
-                raceSorts[r_id] = { col: 'Default', asc: true };
+                // Inherit whatever the operator already has active globally.
+                raceSorts[r_id] = { col: globalSort.col, asc: globalSort.asc };
             }
 
             applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
@@ -2581,7 +2754,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
                     <span id="risk-badge-${r_id}" class="risk-badge" style="display:none;" onclick="event.stopPropagation()"></span>
                 </h3>
                 <div id="content-${r_id}" class="race-content ${collapsedClass}">
-                    <table>
+                    <table class="${dateTimeline === 'past' && (appConfig.ui?.cleanPastRaceCards ?? true) ? 'past-race' : ''}">
                         <thead id="thead-${r_id}">${buildTableHeaderRow(r_id)}</thead>
                         <tbody id="tbody-${r_id}">${rowsHtml}</tbody>
                     </table>
@@ -2701,35 +2874,7 @@ async function loadRaces() {
         }
     }
 
-    const tpContainer = document.getElementById('sidebar-weekend-watchlist');
-    if (tpContainer) {
-        if (data.top_picks && data.top_picks.length > 0) {
-            let tpHTML = `<div class="horse-list-container" style="max-height: none;">`;
-            data.top_picks.forEach(p => {
-                const r_id = p[5];
-                const horseName = p[3];
-                const raceData = searchableHorses.find(h => h.r_id === r_id && h.name === horseName);
-
-                if (raceData) {
-                    tpHTML += `
-                    <div class="horse-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
-                        <span style="color: #fafafa; font-weight: bold; font-size: 14px; cursor: pointer;" onclick="jumpToHorse('${raceData.date}', '${raceData.r_id}', '${raceData.h_id}', '${raceData.timeline || "upcoming"}')" title="Click to view in race">${p[4]} ${horseName}</span>
-                        <span style="font-size: 11px; color: #888;">${p[0]} | W/S: ${p[1]} | Odds: ${p[2]}</span>
-                    </div>`;
-                } else {
-                    tpHTML += `
-                    <div class="horse-item" style="flex-direction: column; align-items: flex-start; gap: 4px;">
-                        <span style="color: #888; font-weight: bold; font-size: 14px;">${p[4]} ${horseName}</span>
-                        <span style="font-size: 11px; color: #888;">${p[0]} | W/S: ${p[1]} | Odds: ${p[2]}</span>
-                    </div>`;
-                }
-            });
-            tpHTML += `</div>`;
-            tpContainer.innerHTML = tpHTML;
-        } else {
-            tpContainer.innerHTML = "<div style='color:#888; font-size:12px; text-align:center; margin-top:10px;'>Run Auto-Pick to generate top picks.</div>";
-        }
-    }
+    renderWeekendWatchlist();
 
     const hasUpcoming = Object.keys(globalAllRacesByDate.upcoming || {}).length > 0;
     const upcomingDates = Object.keys(globalAllRacesByDate.upcoming || {}).sort();
@@ -2893,6 +3038,12 @@ async function clearRaceBets(event, r_id) {
         alert('This race is locked. Unlock bets first.');
         return;
     }
+
+    const info = globalRaceInfo[r_id];
+    const label = info
+        ? `${trackName(info.place)} R${info.race_number}`
+        : r_id;
+    if (!confirm(`Clear all bets for ${label}?\n\nThis cannot be undone.`)) return;
 
     const cleared = clearStoredMarksForRace(r_id);
     if (!cleared) return;
@@ -5927,6 +6078,8 @@ function switchMainView(view) {
     const isVoting = currentMainView === 'voting';
     schedules.style.display = isVoting ? 'none' : 'block';
     liveView.style.display = isVoting ? 'flex' : 'none';
+    const watchlistPanel = document.getElementById('weekend-watchlist-panel');
+    if (watchlistPanel) watchlistPanel.style.display = isVoting ? 'none' : '';
     racesBtn.classList.toggle('is-active', !isVoting);
     votingBtn.classList.toggle('is-active', isVoting);
     document.body.classList.toggle('voting-mode', isVoting);
@@ -6426,10 +6579,8 @@ function showSettingsModal() {
     if (!appConfig.backend) appConfig.backend = {};
     const currentEngine = String(appConfig.backend?.dataEngine || 'nk').toLowerCase();
     document.getElementById('setting-dataEngine').value = currentEngine === 'jv' ? 'jv' : 'nk';
-    document.getElementById('setting-raceDatabase').checked = appConfig.sidebarTabs?.raceDatabase ?? true;
     document.getElementById('setting-pedigreeLists').checked = appConfig.sidebarTabs?.pedigreeLists ?? true;
     document.getElementById('setting-autoPickStrategy').checked = appConfig.sidebarTabs?.autoPickStrategy ?? true;
-    document.getElementById('setting-weekendWatchlist').checked = appConfig.sidebarTabs?.weekendWatchlist ?? true;
     document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
     document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
     document.getElementById('setting-autoFetchPastResults').checked = isAutoFetchPastResultsEnabled();
@@ -6437,6 +6588,7 @@ function showSettingsModal() {
     document.getElementById('setting-devMode').checked = isDevModeEnabled();
     document.getElementById('setting-debugConsole').checked = isDebugConsoleEnabled();
     document.getElementById('setting-autoLockPastVotes').checked = isAutoLockPastVotesEnabled();
+    document.getElementById('setting-cleanPastRaceCards').checked = appConfig.ui?.cleanPastRaceCards ?? true;
     document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
     document.getElementById('setting-highlightFallbackBridge').checked = isFallbackBridgeHighlightEnabled();
     document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
@@ -6484,10 +6636,8 @@ async function updateSidebarSettings() {
     const previousDataEngine = String(appConfig.backend?.dataEngine || 'nk').toLowerCase();
     // Update config from checkbox values
     appConfig.sidebarTabs = {
-        raceDatabase: document.getElementById('setting-raceDatabase').checked,
         pedigreeLists: document.getElementById('setting-pedigreeLists').checked,
-        autoPickStrategy: document.getElementById('setting-autoPickStrategy').checked,
-        weekendWatchlist: document.getElementById('setting-weekendWatchlist').checked
+        autoPickStrategy: document.getElementById('setting-autoPickStrategy').checked
     };
     const parseFWInput = (id, def) => { const n = parseFloat(document.getElementById(id).value); return isNaN(n) ? def : n; };
     const parseClampedPercent = (id, def) => {
@@ -6504,6 +6654,7 @@ async function updateSidebarSettings() {
         devMode: document.getElementById('setting-devMode').checked,
         debugConsole: document.getElementById('setting-debugConsole').checked,
         autoLockPastVotes: document.getElementById('setting-autoLockPastVotes').checked,
+        cleanPastRaceCards: document.getElementById('setting-cleanPastRaceCards').checked,
         showConsole: document.getElementById('setting-showConsole').checked,
         highlightAutoBets: document.getElementById('setting-highlightAutoBets').checked,
         highlightFallbackBridge: document.getElementById('setting-highlightFallbackBridge').checked,
@@ -6666,15 +6817,10 @@ async function toggleRaceColumnVisibility(colKey, visible) {
 }
 
 function applySidebarSettings() {
-    const raceDatabaseGroup = document.getElementById('race-database-group');
     const pedigreeListsGroup = document.getElementById('pedigree-lists-group');
     const autoPickGroup = document.getElementById('auto-pick-group');
-    const weekendWatchlistGroup = document.getElementById('weekend-watchlist-group');
-
-    if (raceDatabaseGroup) raceDatabaseGroup.open = appConfig.sidebarTabs?.raceDatabase ?? true;
     if (pedigreeListsGroup) pedigreeListsGroup.open = appConfig.sidebarTabs?.pedigreeLists ?? true;
     if (autoPickGroup) autoPickGroup.open = appConfig.sidebarTabs?.autoPickStrategy ?? true;
-    if (weekendWatchlistGroup) weekendWatchlistGroup.open = appConfig.sidebarTabs?.weekendWatchlist ?? true;
 
     const consoleEl = document.getElementById('scrape-console');
     if (consoleEl) {
@@ -6829,12 +6975,18 @@ function jumpToHorse(date, r_id, h_id, timeline = null) {
 // --- JUMP TO RACE FEATURE ---
 // ==========================================
 
-// Hide search dropdown if the user clicks anywhere else on the screen
+// Hide search dropdowns if the user clicks anywhere else on the screen
 document.addEventListener('click', function(e) {
     const box = document.getElementById('search-suggestions');
     const input = document.getElementById('horse-search');
     if (box && input && e.target !== box && e.target !== input) {
         box.style.display = 'none';
+    }
+
+    const listBox = document.getElementById('list-add-suggestions');
+    const listInput = document.getElementById('list-add-search');
+    if (listBox && listInput && !listBox.contains(e.target) && e.target !== listInput) {
+        listBox.style.display = 'none';
     }
 });
 
