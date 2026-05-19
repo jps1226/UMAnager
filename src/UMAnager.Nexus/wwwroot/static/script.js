@@ -7348,7 +7348,12 @@ function localizeRaceName(name) {
         return raceNameDict.classNames[name];
     }
 
-    // 3. Fall back to romanized string translations (original logic for romanized inputs)
+    // 3. Try special/regional races (priority 3) — expanded Phase 21 dictionary
+    if (raceNameDict.specialRaces && raceNameDict.specialRaces[name]) {
+        return raceNameDict.specialRaces[name];
+    }
+
+    // 4. Fall back to romanized string translations (original logic for romanized inputs)
     // Translate Ages (e.g., "4 Toshi Ijou" -> "4yo+", "3 Toshi" -> "3yo")
     cleanName = cleanName.replace(/(\d+)\s*Toshi\s*Ijou/ig, "$1yo+");
     cleanName = cleanName.replace(/(\d+)\s*Toshi/ig, "$1yo");
