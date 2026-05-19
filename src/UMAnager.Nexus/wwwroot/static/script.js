@@ -6596,7 +6596,7 @@ function showSettingsModal() {
         ? Number(appConfig.ui?.tvModeSplitPercent)
         : 50;
     document.getElementById('setting-tvModePanelsFlipped').checked = !!appConfig.ui?.tvModePanelsFlipped;
-    // Populate formula weight inputs
+    // Populate formula weight sliders
     const fw = getFormulaWeights();
     document.getElementById('fw-oddsCap').value            = fw.oddsCap;
     document.getElementById('fw-formMultiplier').value     = fw.formMultiplier;
@@ -6607,6 +6607,7 @@ function showSettingsModal() {
     document.getElementById('fw-sireFitWeight').value      = fw.sireFitWeight;
     document.getElementById('fw-jockeyWeight').value       = fw.jockeyWeight;
     document.getElementById('fw-trainerWeight').value      = fw.trainerWeight;
+    syncAllFwSliders();
     renderRaceColumnSettings();
     loadOrchestratorSettings();
 
@@ -6615,6 +6616,17 @@ function showSettingsModal() {
 
 function closeSettingsModal() {
     document.getElementById('settings-modal').style.display = 'none';
+}
+
+function syncFwSlider(el) {
+    const valEl = document.getElementById(el.id + '-val');
+    if (valEl) valEl.textContent = el.value;
+}
+
+function syncAllFwSliders() {
+    ['fw-oddsCap','fw-formMultiplier','fw-freshnessBonus','fw-freshnessBreakeven',
+     'fw-pedigreeMultiplier','fw-formWeight','fw-sireFitWeight','fw-jockeyWeight','fw-trainerWeight']
+    .forEach(id => { const el = document.getElementById(id); if (el) syncFwSlider(el); });
 }
 
 function resetFormulaWeights() {
@@ -6627,6 +6639,7 @@ function resetFormulaWeights() {
     document.getElementById('fw-sireFitWeight').value      = 10;
     document.getElementById('fw-jockeyWeight').value       = 40;
     document.getElementById('fw-trainerWeight').value      = 20;
+    syncAllFwSliders();
     updateSidebarSettings();
 }
 

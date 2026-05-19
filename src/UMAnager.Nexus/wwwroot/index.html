@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260518-14">
+    <link rel="stylesheet" href="/static/style.css?v=20260518-15">
 </head>
 <body>
 
@@ -364,7 +364,10 @@
                             <span class="settings-formula-label-name">Odds Cap</span>
                             <span class="settings-formula-label-desc">Score = Cap ÷ odds. A 1.0 horse earns the full Cap; a 2.5 horse earns Cap ÷ 2.5; a 10.0 longshot earns Cap ÷ 10. <b>Default 100</b> keeps the Odds branch on the same point scale as Form, so neither dominates unfairly at Risk 50. Raise it to make favourites even stickier at low Risk.</span>
                         </div>
-                        <input type="number" id="fw-oddsCap" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
+                        <div class="fw-slider-wrap">
+                            <input type="range" id="fw-oddsCap" min="0" max="1000" step="10" oninput="syncFwSlider(this)" onchange="updateSidebarSettings()" class="settings-fw-slider">
+                            <span class="fw-slider-val" id="fw-oddsCap-val">100</span>
+                        </div>
 
                         <!-- ── Form Branch ── -->
                         <div class="settings-formula-branch-header">
@@ -375,37 +378,55 @@
                             <span class="settings-formula-label-name">Career Win Rate Scale</span>
                             <span class="settings-formula-label-desc">Career (wins ÷ starts) × this scale. A 25% winner scores 25 pts; a 50% winner scores 50. <b>Default 100</b> matches the Odds Cap so both branches carry equal headroom — the Risk slider then tilts the blend, not an imbalanced scale.</span>
                         </div>
-                        <input type="number" id="fw-formMultiplier" min="0" max="1000" step="10" onchange="updateSidebarSettings()" class="settings-number-input">
+                        <div class="fw-slider-wrap">
+                            <input type="range" id="fw-formMultiplier" min="0" max="1000" step="10" oninput="syncFwSlider(this)" onchange="updateSidebarSettings()" class="settings-fw-slider">
+                            <span class="fw-slider-val" id="fw-formMultiplier-val">100</span>
+                        </div>
 
                         <div class="settings-formula-label-block">
                             <span class="settings-formula-label-name">Freshness Bonus (pts / start)</span>
                             <span class="settings-formula-label-desc">Added for every start <em>below</em> Breakeven; subtracted for every start <em>above</em> it. Compensates for the JRA market systematically under-pricing lightly-raced horses who haven't accumulated enough public form. <b>Default 3</b> — at Breakeven 10, a true debut horse earns +30, a 20-start campaigner loses −30. Set to 0 to turn off.</span>
                         </div>
-                        <input type="number" id="fw-freshnessBonus" min="-20" max="20" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
+                        <div class="fw-slider-wrap">
+                            <input type="range" id="fw-freshnessBonus" min="-20" max="20" step="1" oninput="syncFwSlider(this)" onchange="updateSidebarSettings()" class="settings-fw-slider">
+                            <span class="fw-slider-val" id="fw-freshnessBonus-val">3</span>
+                        </div>
 
                         <div class="settings-formula-label-block">
                             <span class="settings-formula-label-name">Freshness Breakeven (starts)</span>
                             <span class="settings-formula-label-desc">The starts count where the freshness adjustment is exactly zero — neither bonus nor penalty. Horses below this are "lightly raced"; above are "seasoned." <b>Default 10</b> is roughly two seasons of light campaigning. Raise it if JRA's maiden/young-horse market feels efficient in your experience.</span>
                         </div>
-                        <input type="number" id="fw-freshnessBreakeven" min="0" max="50" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
+                        <div class="fw-slider-wrap">
+                            <input type="range" id="fw-freshnessBreakeven" min="0" max="50" step="1" oninput="syncFwSlider(this)" onchange="updateSidebarSettings()" class="settings-fw-slider">
+                            <span class="fw-slider-val" id="fw-freshnessBreakeven-val">10</span>
+                        </div>
 
                         <div class="settings-formula-label-block">
                             <span class="settings-formula-label-name">Recent Form Scale</span>
                             <span class="settings-formula-label-desc">Multiplier on the last-3 recency score. Finishes are weighted 0.5 / 0.3 / 0.2 (most-recent first); each position converts via f(pos) = 1/pos for top-5, zero outside. A horse that ran 1st–1st–2nd scores ≈ 0.90 raw → 72 pts at default. <b>Default 80</b> — slightly below Win Rate Scale because 3 races is noisier than a full career, but still the strongest single predictor we have.</span>
                         </div>
-                        <input type="number" id="fw-formWeight" min="0" max="500" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
+                        <div class="fw-slider-wrap">
+                            <input type="range" id="fw-formWeight" min="0" max="500" step="5" oninput="syncFwSlider(this)" onchange="updateSidebarSettings()" class="settings-fw-slider">
+                            <span class="fw-slider-val" id="fw-formWeight-val">80</span>
+                        </div>
 
                         <div class="settings-formula-label-block">
                             <span class="settings-formula-label-name">Jockey Weight</span>
                             <span class="settings-formula-label-desc">Applied to <b>(A/E − 1.0)</b>, where A/E = jockey's actual wins ÷ market-expected wins over the last 90 days. A/E 1.0 is perfectly market-neutral (zero contribution). A/E 1.30 adds +12 pts; A/E 0.70 subtracts −12. Below 30 starts the cell shows — and contributes nothing. <b>Default 40</b> — jockeys are the strongest human factor; a truly elite rider consistently beats market expectation at JRA.</span>
                         </div>
-                        <input type="number" id="fw-jockeyWeight" min="0" max="200" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
+                        <div class="fw-slider-wrap">
+                            <input type="range" id="fw-jockeyWeight" min="0" max="200" step="5" oninput="syncFwSlider(this)" onchange="updateSidebarSettings()" class="settings-fw-slider">
+                            <span class="fw-slider-val" id="fw-jockeyWeight-val">40</span>
+                        </div>
 
                         <div class="settings-formula-label-block">
                             <span class="settings-formula-label-name">Trainer Weight</span>
                             <span class="settings-formula-label-desc">Same A/E logic as Jockey, rolling 180-day window (trainers need more samples). Below 20 starts contributes nothing. <b>Default 20</b> — half of Jockey. Trainers influence conditioning and race selection, but on a given race day the jockey's skill in-run is more directly causal. The longer window also means the signal is "staler" by nature.</span>
                         </div>
-                        <input type="number" id="fw-trainerWeight" min="0" max="200" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
+                        <div class="fw-slider-wrap">
+                            <input type="range" id="fw-trainerWeight" min="0" max="200" step="5" oninput="syncFwSlider(this)" onchange="updateSidebarSettings()" class="settings-fw-slider">
+                            <span class="fw-slider-val" id="fw-trainerWeight-val">20</span>
+                        </div>
 
                         <!-- ── Pedigree Branch ── -->
                         <div class="settings-formula-branch-header">
@@ -416,13 +437,19 @@
                             <span class="settings-formula-label-name">Pedigree Scale</span>
                             <span class="settings-formula-label-desc">Multiplier on your tracked-bloodline score — points from horses whose Sire, Dam, or BMS appears in your FAV / Watchlist pedigree lists. <b>Default 30</b> — deliberately modest. Pedigree is a weak per-race predictor compared to form; it's best used as a tiebreaker between otherwise equal horses, not as a primary signal. Raise it only if you find your pedigree lists are tightly curated.</span>
                         </div>
-                        <input type="number" id="fw-pedigreeMultiplier" min="0" max="500" step="5" onchange="updateSidebarSettings()" class="settings-number-input">
+                        <div class="fw-slider-wrap">
+                            <input type="range" id="fw-pedigreeMultiplier" min="0" max="500" step="5" oninput="syncFwSlider(this)" onchange="updateSidebarSettings()" class="settings-fw-slider">
+                            <span class="fw-slider-val" id="fw-pedigreeMultiplier-val">30</span>
+                        </div>
 
                         <div class="settings-formula-label-block">
                             <span class="settings-formula-label-name">Sire Fit Weight</span>
                             <span class="settings-formula-label-desc">The sire's historical win% on <em>this exact race's surface + distance bucket</em> (Sprint ≤1400 / Mile / Middle / Long), scaled here. A sire at 20% win rate on turf/mile adds 0.20 × weight pts. Requires ≥10 progeny starts in the bucket — below that, nothing is added. <b>Default 10</b> — pure tiebreaker. Surface-fit is a real but small edge; keeping the weight low prevents one freak sire from dominating.</span>
                         </div>
-                        <input type="number" id="fw-sireFitWeight" min="0" max="200" step="1" onchange="updateSidebarSettings()" class="settings-number-input">
+                        <div class="fw-slider-wrap">
+                            <input type="range" id="fw-sireFitWeight" min="0" max="200" step="1" oninput="syncFwSlider(this)" onchange="updateSidebarSettings()" class="settings-fw-slider">
+                            <span class="fw-slider-val" id="fw-sireFitWeight-val">10</span>
+                        </div>
 
                         <!-- ── Bet Sizing ── -->
                         <div class="settings-formula-stakes-header">
@@ -520,6 +547,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260518-16"></script>
+<script src="/static/script.js?v=20260518-17"></script>
 </body>
 </html>

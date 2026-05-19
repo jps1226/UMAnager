@@ -1639,6 +1639,27 @@ td.jt-rate-none   { color: #444; }
 .settings-formula-label-desc { font-size: 11px; color: #666; line-height: 1.5; }
 .settings-formula-label-desc b { color: #888; }
 .settings-formula-grid { align-items: start; }
+/* --- Formula weight sliders --- */
+.fw-slider-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    align-self: center;
+}
+.settings-fw-slider {
+    width: 150px;
+    accent-color: #1dd1a1;
+    cursor: pointer;
+    height: 4px;
+}
+.fw-slider-val {
+    font-family: 'Consolas', 'Menlo', monospace;
+    font-size: 12px;
+    color: #1dd1a1;
+    min-width: 30px;
+    text-align: right;
+    font-weight: bold;
+}
 /* --- end formula card --- */
 .close-btn {
     background: transparent; border: none; color: #aaa;
