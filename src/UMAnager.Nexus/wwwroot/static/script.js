@@ -2373,18 +2373,31 @@ function updateAllRiskBadges() {
     Object.keys(globalRaceEntries).forEach(r_id => updateRiskBadge(r_id));
 }
 
+// Returns the engine's unconditional top-4 picks for a race, ignoring any existing marks.
+// Used by updateAutoBetHighlighting so the highlight always shows the engine's opinion
+// even when the user has manually overridden some or all marks.
+function getUnconditionalAutoBetRankingsForRace(r_id) {
+    const entries = globalRaceEntries[r_id];
+    if (!entries || entries.length === 0) return [];
+    const symbols = ['◎', '〇', '▲', '△'];
+    const currentRisk = getCurrentAutoPickRisk();
+    return entries
+        .map(row => ({ h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, currentRisk) }))
+        .sort((a, b) => b.power - a.power)
+        .slice(0, symbols.length)
+        .map((e, i) => ({ h_id: e.h_id, symbol: symbols[i] }));
+}
+
 function updateAutoBetHighlighting() {
     document.querySelectorAll('.mark-btn.auto-bet-preview').forEach(btn => btn.classList.remove('auto-bet-preview'));
 
     if (!isAutoBetHighlightingEnabled()) return;
 
     Object.keys(globalRaceEntries).forEach(r_id => {
-        const assignments = getAutoBetPreviewAssignmentsForRace(r_id);
+        const assignments = getUnconditionalAutoBetRankingsForRace(r_id);
         assignments.forEach(({ h_id, symbol }) => {
             const btn = document.getElementById(`btn_${r_id}_${h_id}_${symbol}`);
-            if (btn) {
-                btn.classList.add('auto-bet-preview');
-            }
+            if (btn) btn.classList.add('auto-bet-preview');
         });
     });
 }
