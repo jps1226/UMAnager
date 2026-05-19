@@ -26,6 +26,7 @@ let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 let appConfig = {}; // NEW: Stores app configuration
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
+let raceNameDict = { stakes: {}, classNames: {} }; // Phase 21: Race name translation dictionary
 
 const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Last3", "J%", "T%", "Sire", "SF", "Dam", "BMS", "Odds", "Fav", "Finish"];
 
@@ -863,12 +864,21 @@ async function init() {
     globalMarks = marksPayload.marks;
     globalRaceMeta = marksPayload.raceMeta;
     globalMarksVersion = marksPayload.version;
-    
+
     // NEW: Load config file
     const configRes = await fetch('/api/config');
     appConfig = await configRes.json();
     applyDevModeBodyClass();
     relocateSearchBar();
+
+    // Phase 21: Load race name translation dictionary
+    try {
+        const dictRes = await fetch('/static/race_name_dict.json');
+        raceNameDict = await dictRes.json();
+    } catch (e) {
+        console.warn('Failed to load race_name_dict.json:', e);
+        raceNameDict = { stakes: {}, classNames: {} };
+    }
 
     // Load OrePro per-race apply state so the Apply button can reflect history.
     await loadOreProApplyState();
@@ -7327,19 +7337,31 @@ function localizeRaceName(name) {
     if (!name) return "";
     let cleanName = name;
 
-    // 1. Translate Ages (e.g., "4 Toshi Ijou" -> "4yo+", "3 Toshi" -> "3yo")
+    // Phase 21: Check translation dictionary first (for Japanese kanji names)
+    // 1. Try stakes races (priority 1)
+    if (raceNameDict.stakes && raceNameDict.stakes[name]) {
+        return raceNameDict.stakes[name];
+    }
+
+    // 2. Try class names (priority 2)
+    if (raceNameDict.classNames && raceNameDict.classNames[name]) {
+        return raceNameDict.classNames[name];
+    }
+
+    // 3. Fall back to romanized string translations (original logic for romanized inputs)
+    // Translate Ages (e.g., "4 Toshi Ijou" -> "4yo+", "3 Toshi" -> "3yo")
     cleanName = cleanName.replace(/(\d+)\s*Toshi\s*Ijou/ig, "$1yo+");
     cleanName = cleanName.replace(/(\d+)\s*Toshi/ig, "$1yo");
 
-    // 2. Translate Classes
+    // Translate Classes
     cleanName = cleanName.replace(/Mishouri/ig, "Maiden");
     cleanName = cleanName.replace(/Shinba/ig, "Newcomer");
     cleanName = cleanName.replace(/1 Kachi Kurasu/ig, "ALW (1 Win)");
     cleanName = cleanName.replace(/2 Kachi Kurasu/ig, "ALW (2 Wins)");
     cleanName = cleanName.replace(/3 Kachi Kurasu/ig, "ALW (3 Wins)");
     cleanName = cleanName.replace(/Hanshin Supuringu J/ig, "Hanshin Spring Jump");
-    
-    // 3. Optional: Jump Races
+
+    // Jump Races
     cleanName = cleanName.replace(/Shougai/ig, "Jump");
 
     return cleanName;

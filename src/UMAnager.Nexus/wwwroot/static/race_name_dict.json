@@ -1,0 +1,98 @@
+{
+  "version": "1.0",
+  "description": "JRA Race Name Translation Dictionary — stakes, listed, and class races.",
+  "lastUpdated": "2026-05-19",
+
+  "stakes": {
+    "旧天皇賞春": "Emperor's Cup (Spring)",
+    "天皇賞春": "Emperor's Cup (Spring)",
+    "旧天皇賞秋": "Emperor's Cup (Autumn)",
+    "天皇賞秋": "Emperor's Cup (Autumn)",
+    "皐月賞": "Satsuki Sho (2000 Guineas)",
+    "東京優駿": "Tokyo Yushun (Derby)",
+    "優駿牝馬": "Yushun Himba (Oaks)",
+    "菊花賞": "Kikka Sho (St. Leger)",
+    "阪神大賞典": "Hanshin Daishoten",
+    "マイルチャンピオンシップ": "Mile Championship",
+    "チャンピオンズカップ": "Champions Cup",
+    "安田記念": "Yasuda Kinen",
+    "ジャパンカップ": "Japan Cup",
+    "ジャパンカップダート": "Japan Cup Dirt",
+    "朝日杯フューチュリティステークス": "Asahi Cup Futurity",
+    "朝日杯セントライト記念": "Asahi Cup Saint Lite",
+    "セントウルステークス": "Saint-ول Stakes",
+    "京都大賞典": "Kyoto Daishoten",
+    "大阪杯": "Osaka Hai",
+    "中山グランドジャンプ": "Nakayama Grand Jump",
+    "中山牝馬ステークス": "Nakayama Filly Stakes",
+    "宝塚記念": "Takarazuka Kinen",
+    "毎日杯": "Mainichi Cup",
+    "毎日王冠": "Mainichi Okan",
+    "秋華賞": "Shuka Sho (French Oaks)",
+    "エリザベス女王杯": "Queen Elizabeth II Cup",
+    "マーメイドステークス": "Mermaid Stakes",
+    "紫苑ステークス": "Shion Stakes",
+    "福島記念": "Fukushima Kinen",
+    "スプリンターズステークス": "Sprinters Stakes",
+    "神戸新聞杯": "Kobe Shimbun Cup",
+    "ラジオたんぱ杯2歳ステークス": "Radio Tanpa Cup (2yo)",
+    "京都2歳ステークス": "Kyoto 2yo Stakes",
+    "東京2歳ステークス": "Tokyo 2yo Stakes",
+    "中日新聞杯": "Chunichi Shimbun Cup",
+    "産経大阪杯": "Sankei Osaka Cup",
+    "七夕賞": "Tanabata Sho",
+    "新潟大賞典": "Niigata Daishoten",
+    "新潟記念": "Niigata Kinen",
+    "高松宮記念": "Takamatsu no Miya Kinen",
+    "ダイヤモンドステークス": "Diamond Stakes",
+    "富士ステークス": "Fuji Stakes",
+    "日経新春杯": "Nikkei Shinsun Cup",
+    "クイーンステークス": "Queen Stakes",
+    "フェブラリーステークス": "February Stakes",
+    "文京ステークス": "Bunkyo Stakes",
+    "東京ダートオープン": "Tokyo Dirt Open"
+  },
+
+  "classNames": {
+    "新馬": "Debut (Newcomer)",
+    "未出走": "Unraced",
+    "未勝利": "Maiden",
+    "1勝クラス": "1-Win Class",
+    "2勝クラス": "2-Win Class",
+    "3勝クラス": "3-Win Class",
+    "500万下": "500万 (Legacy 1-Win)",
+    "1000万下": "1000万 (Legacy 2-Win)",
+    "1600万下": "1600万 (Legacy 3-Win)",
+    "オープン": "Open",
+    "OP": "Open",
+    "障害": "Jump (Steeplechase)",
+    "障害未勝利": "Jump Maiden",
+    "障害1勝": "Jump 1-Win",
+    "障害2勝": "Jump 2-Win",
+    "障害3勝": "Jump 3-Win"
+  },
+
+  "trackAbbrev": {
+    "01": "札幌 (Sapporo)",
+    "02": "函館 (Hakodate)",
+    "03": "福島 (Fukushima)",
+    "04": "新潟 (Niigata)",
+    "05": "東京 (Tokyo)",
+    "06": "中山 (Nakayama)",
+    "07": "京都 (Kyoto)",
+    "08": "阪神 (Hanshin)",
+    "09": "小倉 (Kokura)"
+  },
+
+  "surfaceAbbrev": {
+    "turf": "芝 (Turf)",
+    "dirt": "ダート (Dirt)",
+    "jump": "障害 (Jump)"
+  },
+
+  "notes": {
+    "priorityOrder": "Frontend prefers translated stake name, then classname, then NameJa from DB, then placeholder",
+    "encoding": "UTF-8, all Japanese strings should be matched case-sensitively against parsed RA NameJa field",
+    "maintenance": "Add new stakes annually (usually announce in January for full-year schedule)"
+  }
+}
