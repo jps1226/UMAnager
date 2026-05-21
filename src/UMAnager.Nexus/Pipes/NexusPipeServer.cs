@@ -182,6 +182,20 @@ public sealed class NexusPipeServer : BackgroundService
                             }
                         }
 
+                        // After TOKU stream completes, parse newly-staged RA + SE records so
+                        // upcoming races appear in the UI. DIFN streams don't need this because
+                        // UM records get parsed on demand; TOKU is the only path for RA/SE.
+                        if (eventType == "STREAM_TOKU_COMPLETE" && recordCount > 0)
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                using var scope = _scopeFactory.CreateScope();
+                                var svc = scope.ServiceProvider.GetRequiredService<Services.Parsing.DifnRecordParsingService>();
+                                await svc.ParseAllRecordsAsync(CancellationToken.None);
+                                _logger.LogInformation("[Nexus] TOKU auto-parse complete.");
+                            });
+                        }
+
                         // After odds stream completes, immediately apply O1 records to race_entries
                         // and broadcast the touched races to any connected SignalR clients.
                         if (eventType == "STREAM_ODDS_COMPLETE" && recordCount > 0)
