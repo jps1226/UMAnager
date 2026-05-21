@@ -36,9 +36,16 @@ public sealed class DiscordNotifier : IDiscordNotifier
     public Task NotifyPhaseChangedAsync(AppPhase from, AppPhase to, CancellationToken ct = default)
         => SendAsync($":arrows_clockwise: **Phase**: `{from}` → `{to}`", ct);
 
+    private static readonly Dictionary<string, string> TrackNames = new()
+    {
+        ["01"] = "Sapporo", ["02"] = "Hakodate", ["03"] = "Fukushima", ["04"] = "Niigata",
+        ["05"] = "Tokyo",   ["06"] = "Nakayama",  ["07"] = "Chukyo",    ["08"] = "Kyoto",
+        ["09"] = "Hanshin", ["10"] = "Kokura",
+    };
+
     public Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default)
     {
-        var trackList = string.Join(", ", tracks);
+        var trackList = string.Join(", ", tracks.Select(t => TrackNames.GetValueOrDefault(t, t)));
         return SendAsync($":checkered_flag: **Race plan loaded** for `{raceDate}`: {raceCount} races across {trackList}.", ct);
     }
 
