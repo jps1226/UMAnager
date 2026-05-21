@@ -45,7 +45,14 @@ public sealed class DiscordNotifier : IDiscordNotifier
 
     public Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default)
     {
-        var trackList = string.Join(", ", tracks.Select(t => TrackNames.GetValueOrDefault(t, t)));
+        var names = tracks.Select(t => TrackNames.GetValueOrDefault(t, t)).ToList();
+        var trackList = names.Count switch
+        {
+            0 => "?",
+            1 => names[0],
+            2 => $"{names[0]} and {names[1]}",
+            _ => string.Join(", ", names[..^1]) + ", and " + names[^1],
+        };
         return SendAsync($":checkered_flag: **Race plan loaded** for `{raceDate}`: {raceCount} races across {trackList}.", ct);
     }
 
