@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260519-9">
+    <link rel="stylesheet" href="/static/style.css?v=20260521-3">
 </head>
 <body>
 
@@ -85,21 +85,15 @@
     <details id="pedigree-lists-group" class="sidebar-group" open>
         <summary>🎯 Pedigree Lists</summary>
         <div class="sidebar-group-content">
-            <label class="sidebar-label">Add to list:</label>
-            <select id="snipe-type" class="sidebar-select-full">
-                <option value="favorites">⭐ Favorites</option>
-                <option value="watchlist">👁️ Watchlist</option>
-            </select>
+            <div class="tab-bar tab-bar-spaced">
+                <button class="tab-btn active" onclick="switchSidebarTab('fav')">Bloodlines</button>
+                <button class="tab-btn" onclick="switchSidebarTab('watch')">Watchlist</button>
+            </div>
             <div class="list-add-search-wrap">
-                <input type="text" id="list-add-search" placeholder="Search horses..."
+                <input type="text" id="list-add-search" placeholder="Search horses to add…"
                        oninput="handleListAddSearch(event)" onkeydown="handleListAddKey(event)"
                        autocomplete="off">
                 <div id="list-add-suggestions" class="suggestions-box"></div>
-            </div>
-            
-            <div class="tab-bar tab-bar-spaced">
-                <button class="tab-btn active" onclick="switchSidebarTab('fav')">Favorites</button>
-                <button class="tab-btn" onclick="switchSidebarTab('watch')">Watchlist</button>
             </div>
             
             <div id="side-tab-fav" class="tab-content active">
@@ -344,6 +338,10 @@
                             <span>🧹 Clean Past Race Cards <small style="color:#666;">(hide Record &amp; %s)</small></span>
                         </label>
                         <label class="settings-option-row">
+                            <input type="checkbox" id="setting-umamusumeMode" onchange="toggleUmamusumeMode(event)">
+                            <span>🎤 Uma Musume Mode <small style="color:#666;">(auto-add character horses to Bloodlines)</small></span>
+                        </label>
+                        <label class="settings-option-row">
                             <input type="checkbox" id="setting-devMode" onchange="updateSidebarSettings()">
                             <span>🛠️ Developer Mode <span style="opacity:0.6;font-size:11px;">(shows Advanced Tools, scrape console, debug toggles)</span></span>
                         </label>
@@ -581,6 +579,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260519-16"></script>
+<script src="/static/script.js?v=20260521-8"></script>
 </body>
 </html>

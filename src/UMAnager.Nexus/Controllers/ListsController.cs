@@ -7,7 +7,8 @@ using UMAnager.Nexus.Data;
 namespace UMAnager.Nexus.Controllers;
 
 /// <summary>
-/// Persists the operator's Favorites and Watchlist lists to user_horse_lists
+/// Persists the operator's Bloodlines (breeding-horse tracking, sires/dams/BMS)
+/// and Watchlist (active runners) lists to user_horse_lists
 /// (snake-case, raw SQL — table predates the EF schema). Frontend stores them as
 /// newline-separated strings of horse IDs (with optional space-separated metadata
 /// after the ID); we keep that shape on the wire and only persist the ID column.
@@ -21,7 +22,7 @@ public sealed class ListsController : ControllerBase
 
     public ListsController(IDbContextFactory<AppDbContext> dbFactory) => _dbFactory = dbFactory;
 
-    public sealed record ListsPayload(string? favorites, string? watchlist);
+    public sealed record ListsPayload(string? bloodlines, string? watchlist);
 
     [HttpGet]
     public async Task<IActionResult> Get(CancellationToken ct)
@@ -52,25 +53,25 @@ public sealed class ListsController : ControllerBase
             return string.IsNullOrEmpty(name) ? id : $"{id}#{name}";
         }
 
-        var favorites = string.Join("\n", rows.Where(r => r.ListType == "favorites").Select(r => Format(r.HorseId)));
+        var bloodlines = string.Join("\n", rows.Where(r => r.ListType == "bloodlines").Select(r => Format(r.HorseId)));
         var watchlist = string.Join("\n", rows.Where(r => r.ListType == "watchlist").Select(r => Format(r.HorseId)));
-        return Ok(new { favorites, watchlist });
+        return Ok(new { bloodlines, watchlist });
     }
 
     [HttpPost]
     public async Task<IActionResult> Post([FromBody] ListsPayload payload, CancellationToken ct)
     {
-        var fav = ParseLines(payload?.favorites);
+        var bld = ParseLines(payload?.bloodlines);
         var wat = ParseLines(payload?.watchlist);
 
         using var db = await _dbFactory.CreateDbContextAsync(ct);
         using var tx = await db.Database.BeginTransactionAsync(ct);
 
-        await SyncListAsync(db, "favorites", fav, ct);
+        await SyncListAsync(db, "bloodlines", bld, ct);
         await SyncListAsync(db, "watchlist", wat, ct);
 
         await tx.CommitAsync(ct);
-        return Ok(new { status = "ok", favorites = fav.Count, watchlist = wat.Count });
+        return Ok(new { status = "ok", bloodlines = bld.Count, watchlist = wat.Count });
     }
 
     private static List<string> ParseLines(string? text)

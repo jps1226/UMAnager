@@ -1,7 +1,7 @@
 let globalMarks = {};
 let globalRaceMeta = {};
 let globalMarksVersion = 2;
-let listsData = { favorites: "", watchlist: "" };
+let listsData = { bloodlines: "", watchlist: "" };
 let raceLocks = {}; // Per-race lock state for mark interactions
 let upcomingRaces = []; // NEW: Stores our parsed race times
 const BET_ESTIMATE_STORAGE_KEY = 'umanager-bet-estimate-cache-v1';
@@ -564,7 +564,7 @@ function renderWeekendWatchlist() {
     if (!container) return;
 
     const tracked = getTrackedSets();
-    // Only the Watchlist drives this panel: Favorites are breeding horses (sires/dams/BMS)
+    // Only the Watchlist drives this panel: Bloodlines are breeding horses (sires/dams/BMS)
     // and won't normally appear as runners. Pedigree-tracked highlighting handles that
     // case at the row-coloring layer.
     const watched = tracked.watchlist;
@@ -683,33 +683,33 @@ function parseListIds(text) {
 
 function getTrackedSets() {
     return {
-        favorites: parseListIds(listsData?.favorites || ""),
+        bloodlines: parseListIds(listsData?.bloodlines || ""),
         watchlist: parseListIds(listsData?.watchlist || "")
     };
 }
 
 function getTrackedStatus(horseId, trackedSets = null) {
-    /**Check if a horse is tracked and on which lists. Returns {fav: bool, watch: bool}*/
+    /**Check if a horse is tracked and on which lists. Returns {bld: bool, watch: bool}*/
     const sets = trackedSets || getTrackedSets();
     const cleanId = String(horseId).split('.')[0].trim();
     return {
-        fav: sets.favorites.has(cleanId),
+        bld: sets.bloodlines.has(cleanId),
         watch: sets.watchlist.has(cleanId)
     };
 }
 
 function calculateWeightedIntensity(horse, sire, dam, bms) {
     // Keep frontend highlight logic aligned with backend scoring rules.
-    let fav_weight = horse.fav ? SCORE_TRACKED_HORSE : (sire.fav ? SCORE_TRACKED_SIRE : 0.0);
-    fav_weight += (dam.fav ? SCORE_TRACKED_DAM : 0.0) + (bms.fav ? SCORE_TRACKED_BMS : 0.0);
+    let bld_weight = horse.bld ? SCORE_TRACKED_HORSE : (sire.bld ? SCORE_TRACKED_SIRE : 0.0);
+    bld_weight += (dam.bld ? SCORE_TRACKED_DAM : 0.0) + (bms.bld ? SCORE_TRACKED_BMS : 0.0);
 
     let watch_weight = horse.watch ? SCORE_WATCHLIST_HORSE : (sire.watch ? SCORE_WATCHLIST_SIRE : 0.0);
     watch_weight += (dam.watch ? SCORE_WATCHLIST_DAM : 0.0) + (bms.watch ? SCORE_WATCHLIST_BMS : 0.0);
 
-    fav_weight = Math.min(fav_weight, SCORE_MAX);
+    bld_weight = Math.min(bld_weight, SCORE_MAX);
     watch_weight = Math.min(watch_weight, SCORE_MAX);
 
-    return { fav_weight, watch_weight, max: Math.max(fav_weight, watch_weight) };
+    return { bld_weight, watch_weight, max: Math.max(bld_weight, watch_weight) };
 }
 
 function calculateFamilyTracking(horse_id, sire_id, dam_id, bms_id, trackedSets = null) {
@@ -732,7 +732,7 @@ function calculateFamilyTracking(horse_id, sire_id, dam_id, bms_id, trackedSets 
     }
     
     // Check if mixed (both fav and watch)
-    const isMixed = (weights.fav_weight > 0 && weights.watch_weight > 0);
+    const isMixed = (weights.bld_weight > 0 && weights.watch_weight > 0);
     
     return {horse, sire, dam, bms, intensity, isMixed, weights};
 }
@@ -758,7 +758,7 @@ function updateRaceHighlighting() {
             const weights = tracking.weights;
             
             // Use the weighted values to determine icon and status
-            const f_weight = weights.fav_weight;
+            const b_weight = weights.bld_weight;
             const w_weight = weights.watch_weight;
             
             // Update row data
@@ -766,10 +766,10 @@ function updateRaceHighlighting() {
             let score = 0;
             let status = "";
             
-            if (f_weight > 0) {
-                score = Math.min(f_weight, 1.0);
-                status = "FAV";
-                icon = f_weight >= ICON_THRESHOLD_3STAR ? "⭐⭐⭐" : (f_weight >= ICON_THRESHOLD_2STAR ? "⭐⭐" : "⭐");
+            if (b_weight > 0) {
+                score = Math.min(b_weight, 1.0);
+                status = "BLD";
+                icon = b_weight >= ICON_THRESHOLD_3STAR ? "⭐⭐⭐" : (b_weight >= ICON_THRESHOLD_2STAR ? "⭐⭐" : "⭐");
                 hasTracked = true;
             } else if (w_weight > 0) {
                 score = Math.min(w_weight, 1.0);
@@ -804,15 +804,15 @@ function updateRaceHighlighting() {
         const header = document.getElementById(`header-${r_id}`);
         if (header) {
             // Remove all intensity and status classes first
-            header.classList.remove('has-fav', 'has-watch', 'row-mixed', 'intensity-light', 'intensity-medium', 'intensity-strong', 'intensity-very-strong');
+            header.classList.remove('has-bld', 'has-watch', 'row-mixed', 'intensity-light', 'intensity-medium', 'intensity-strong', 'intensity-very-strong');
             
-            // Apply appropriate status class - WATCHLIST COLOR TAKES PRIORITY OVER FAVORITES
+            // Apply appropriate status class - WATCHLIST COLOR TAKES PRIORITY OVER BLOODLINES
             if (hasWatchlist) {
                 header.classList.add('has-watch');
             } else if (hasMixed) {
                 header.classList.add('row-mixed');
             } else if (hasTracked) {
-                header.classList.add('has-fav');
+                header.classList.add('has-bld');
             }
             
             // Apply max intensity class to header
@@ -833,7 +833,7 @@ function updateRaceHighlighting() {
 
 function updateAllHoverButtons() {
     /**Update all hover buttons to show Add or Remove based on current lists*/
-    const tracked_ids = parseListIds(listsData.favorites);
+    const tracked_ids = parseListIds(listsData.bloodlines);
     const watchlist_ids = parseListIds(listsData.watchlist);
     
     document.querySelectorAll('.hover-action-btn').forEach(btn => {
@@ -842,7 +842,7 @@ function updateAllHoverButtons() {
         
         if (!horseId || !listType) return;
         
-        const isTracked = (listType === 'favorites' && tracked_ids.has(horseId)) ||
+        const isTracked = (listType === 'bloodlines' && tracked_ids.has(horseId)) ||
                          (listType === 'watchlist' && watchlist_ids.has(horseId));
         
         if (isTracked) {
@@ -918,7 +918,7 @@ async function init() {
 
 // --- HORSE LIST UI LOGIC ---
 function renderLists() {
-    document.getElementById('list-fav').innerHTML = buildListHTML(listsData.favorites, 'favorites');
+    document.getElementById('list-fav').innerHTML = buildListHTML(listsData.bloodlines, 'bloodlines');
     document.getElementById('list-watch').innerHTML = buildListHTML(listsData.watchlist, 'watchlist');
 }
 
@@ -935,25 +935,44 @@ function buildListHTML(rawText, listType) {
         const id = (parts[0] || '').trim();
         if (!id) return;
 
-        const horseData = searchableHorses.find(h => h.h_id === id);
+        // Prefer an upcoming entry over a past one — a horse may appear in both
+        // (ran last week AND drawn for this weekend). The chip should reflect
+        // "currently entered", not "ran most recently".
+        const entries = searchableHorses.filter(h => h.h_id === id);
+        const horseData = entries.find(h => h.timeline === 'upcoming') || entries[0];
         const parsedName = parts.length >= 2 ? (parts.slice(1).join('#') || '').trim() : '';
         const name = parsedName || (horseData ? horseData.name : '') || id;
 
         const escapedName = escapeHtml(name);
         const escapedId = escapeHtml(id);
 
-        // Find this horse in searchableHorses to get date and race_id
+        // Bloodlines = breeding horses (sires/dams) — they're not expected to
+        // appear in race entries, so the upcoming/past/idle timeline styling
+        // doesn't apply. Render them as plain chips. Watchlist = active runners,
+        // gets the three-tier fade.
+        const isBloodlines = listType === 'bloodlines';
+
         if (horseData) {
+            const isPast = !isBloodlines && horseData.timeline === 'past';
+            const cls = isPast ? 'horse-item horse-item-past' : 'horse-item';
+            const title = isPast ? 'Last race — click to view' : 'Click to view in race';
+            html += `
+                <div class="${cls}">
+                    <span class="horse-item-name" style="cursor: pointer;" onclick="jumpToHorse('${horseData.date}', '${horseData.r_id}', '${horseData.h_id}', '${horseData.timeline || "upcoming"}')" title="${title}">${escapedName}</span>
+                    <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapeHtml(listType)}', '${escapedId}')">✖</button>
+                </div>`;
+        } else if (isBloodlines) {
+            // Breeding horse not in any loaded race — expected; plain chip.
             html += `
                 <div class="horse-item">
-                    <span class="horse-item-name" style="cursor: pointer;" onclick="jumpToHorse('${horseData.date}', '${horseData.r_id}', '${horseData.h_id}', '${horseData.timeline || "upcoming"}')" title="Click to view in race">${escapedName}</span>
+                    <span class="horse-item-name">${escapedName}</span>
                     <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapeHtml(listType)}', '${escapedId}')">✖</button>
                 </div>`;
         } else {
-            // Fallback if not found in searchableHorses
+            // Watchlist horse not in any loaded race — most faded state.
             html += `
-                <div class="horse-item">
-                    <span class="horse-item-name" style="color: #888;">${escapedName}</span>
+                <div class="horse-item horse-item-idle" title="Not entered in any loaded race">
+                    <span class="horse-item-name">${escapedName}</span>
                     <button class="btn-delete" title="Remove ${escapedName}" onclick="removeHorse('${escapeHtml(listType)}', '${escapedId}')">✖</button>
                 </div>`;
         }
@@ -1062,7 +1081,7 @@ async function quickAddFromHover(id, listType, nameEncoded) {
     await fetch('/api/lists', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
-            favorites: listsData.favorites,
+            bloodlines: listsData.bloodlines,
             watchlist: listsData.watchlist
         })
     });
@@ -1083,7 +1102,7 @@ async function removeHorseFromHover(id, listType) {
     await fetch('/api/lists', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
-            favorites: listsData.favorites,
+            bloodlines: listsData.bloodlines,
             watchlist: listsData.watchlist
         })
     });
@@ -1105,7 +1124,7 @@ async function removeHorse(listType, idToRemove) {
     await fetch('/api/lists', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
-            favorites: listsData.favorites,
+            bloodlines: listsData.bloodlines,
             watchlist: listsData.watchlist
         })
     });
@@ -1122,36 +1141,59 @@ function handleListAddSearch(e) {
     listAddDebounceTimer = setTimeout(performListAddSearch, 150);
 }
 
-function performListAddSearch() {
+async function performListAddSearch() {
     const val = document.getElementById('list-add-search').value.toLowerCase().trim();
     const box = document.getElementById('list-add-suggestions');
     currentListAddSelection = -1;
 
     if (!val) { box.style.display = 'none'; return; }
 
-    // Dedupe by h_id — each horse appears once per race entry in searchableHorses
+    // 1) Local matches from horses entered on currently loaded race cards.
     const seen = new Set();
     const matches = [];
     for (const h of searchableHorses) {
         if (seen.has(h.h_id)) continue;
         if (h.name.toLowerCase().includes(val)) {
             seen.add(h.h_id);
-            matches.push(h);
+            matches.push({ h_id: h.h_id, name: h.name, badge: '' });
         }
     }
 
+    // Render local hits immediately so the dropdown stays snappy.
+    renderListAddSuggestions(matches, box);
+
+    // 2) Backend search across the full horses + breeding_horses tables —
+    // catches horses not entered this week (e.g. Lebensstil between starts).
+    if (val.length < 2) return;
+    try {
+        const resp = await fetch(`/api/horses/search?q=${encodeURIComponent(val)}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const results = (data && data.results) || [];
+        for (const r of results) {
+            if (!r.id || seen.has(r.id)) continue;
+            seen.add(r.id);
+            matches.push({ h_id: r.id, name: r.name || r.id, badge: r.source === 'breeder' ? 'breeding' : 'not racing this week' });
+        }
+        renderListAddSuggestions(matches, box);
+    } catch (_) { /* ignore — local results already rendered */ }
+}
+
+function renderListAddSuggestions(matches, box) {
     if (matches.length === 0) {
         box.innerHTML = '<div class="suggestion-item" style="color:#888;">No matches</div>';
         box.style.display = 'block';
         return;
     }
-
     let html = '';
-    matches.slice(0, 10).forEach((m, idx) => {
+    matches.slice(0, 12).forEach((m, idx) => {
         const nameEnc = encodeURIComponent(m.name || '');
+        const badgeHtml = m.badge
+            ? ` <span style="color:#888; font-size:11px;">(${escapeHtml(m.badge)})</span>`
+            : '';
         html += `<div class="suggestion-item" id="list-sugg-${idx}"
                       onclick="selectListAddHorse('${m.h_id}', '${nameEnc}')">
-            <strong>${escapeHtml(m.name)}</strong>
+            <strong>${escapeHtml(m.name)}</strong>${badgeHtml}
         </div>`;
     });
     box.innerHTML = html;
@@ -1190,7 +1232,10 @@ async function selectListAddHorse(h_id, nameEnc) {
     document.getElementById('list-add-suggestions').style.display = 'none';
     document.getElementById('list-add-search').value = '';
     currentListAddSelection = -1;
-    const listType = document.getElementById('snipe-type').value;
+    // Active sidebar tab decides the destination list — #side-tab-watch has
+    // the `active` class when Watchlist is open, otherwise Bloodlines.
+    const watchActive = document.getElementById('side-tab-watch')?.classList.contains('active');
+    const listType = watchActive ? 'watchlist' : 'bloodlines';
     await quickAddFromHover(h_id, listType, nameEnc);
 }
 
@@ -1222,13 +1267,13 @@ function buildNameWithHover(id, name, listType, trackedStatus, intensity, isMixe
     
     // Apply tracking formatting if this horse is tracked
     let nameClass = "name-text";
-    if (trackedStatus && (trackedStatus.fav || trackedStatus.watch)) {
+    if (trackedStatus && (trackedStatus.bld || trackedStatus.watch)) {
         // Determine color based on which list(s) the family member is on
         let colorClass = "";
-        if (trackedStatus.fav && trackedStatus.watch) {
+        if (trackedStatus.bld && trackedStatus.watch) {
             colorClass = "tracked-mixed";
-        } else if (trackedStatus.fav) {
-            colorClass = "tracked-fav";
+        } else if (trackedStatus.bld) {
+            colorClass = "tracked-bld";
         } else { // watch
             colorClass = "tracked-watch";
         }
@@ -1537,14 +1582,14 @@ function buildTableBody(r_id, entries) {
             row.familyTracking = calculateFamilyTracking(row.Horse_ID, row.Sire_ID, row.Dam_ID, row.BMS_ID);
         }
         const tracking = row.familyTracking;
-        const weights = tracking?.weights || { fav_weight: 0, watch_weight: 0 };
+        const weights = tracking?.weights || { bld_weight: 0, watch_weight: 0 };
         
         // Determine base status class: mixed takes priority, then FAV/WATCH
         let rowStatusClass = "";
         if (tracking.isMixed) {
             rowStatusClass = "row-mixed";
-        } else if (weights.fav_weight > 0) {
-            rowStatusClass = "row-fav";
+        } else if (weights.bld_weight > 0) {
+            rowStatusClass = "row-bld";
         } else if (weights.watch_weight > 0) {
             rowStatusClass = "row-watch";
         }
@@ -1565,9 +1610,9 @@ function buildTableBody(r_id, entries) {
         const trClass = finalClasses.join(" ");
         
         const horseStr = buildNameWithHover(row.Horse_ID, row.Horse, 'watchlist', tracking.horse, tracking.intensity, tracking.isMixed);
-        const sireStr = buildNameWithHover(row.Sire_ID, row.Sire, 'favorites', tracking.sire, tracking.intensity, tracking.isMixed);
-        const damStr = buildNameWithHover(row.Dam_ID, row.Dam, 'favorites', tracking.dam, tracking.intensity, tracking.isMixed);
-        const bmsStr = buildNameWithHover(row.BMS_ID, row.BMS, 'favorites', tracking.bms, tracking.intensity, tracking.isMixed);
+        const sireStr = buildNameWithHover(row.Sire_ID, row.Sire, 'bloodlines', tracking.sire, tracking.intensity, tracking.isMixed);
+        const damStr = buildNameWithHover(row.Dam_ID, row.Dam, 'bloodlines', tracking.dam, tracking.intensity, tracking.isMixed);
+        const bmsStr = buildNameWithHover(row.BMS_ID, row.BMS, 'bloodlines', tracking.bms, tracking.intensity, tracking.isMixed);
 
         const fallbackSources = (row && typeof row._fallbackSources === 'object' && row._fallbackSources)
             ? row._fallbackSources
@@ -3136,7 +3181,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 
             applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
 
-            let hasFav = false;
+            let hasBld = false;
             let hasWatch = false;
             let hasMixed = false;
             let maxIntensity = 0;
@@ -3146,10 +3191,10 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
                 }
 
                 const tracking = row.familyTracking;
-                const weights = tracking?.weights || { fav_weight: 0, watch_weight: 0 };
+                const weights = tracking?.weights || { bld_weight: 0, watch_weight: 0 };
 
                 if (tracking.isMixed) hasMixed = true;
-                if (weights.fav_weight > 0) hasFav = true;
+                if (weights.bld_weight > 0) hasBld = true;
                 if (weights.watch_weight > 0) hasWatch = true;
                 if (tracking.intensity > maxIntensity) maxIntensity = tracking.intensity;
             });
@@ -3159,7 +3204,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
             let headerClass = "race-header";
             if (hasWatch) headerClass += " has-watch";
             else if (hasMixed) headerClass += " row-mixed";
-            else if (hasFav) headerClass += " has-fav";
+            else if (hasBld) headerClass += " has-bld";
 
             if (maxIntensity > 0) {
                 if (maxIntensity <= 0.33) headerClass += " intensity-light";
@@ -4232,7 +4277,7 @@ async function importLegacyBundle() {
         const imported = result.imported || {};
         const totalImported =
             (imported.config ? 1 : 0) +
-            Number(imported.favorites || 0) +
+            Number(imported.bloodlines || 0) +
             Number(imported.watchlist || 0) +
             Number(imported.marks || 0) +
             Number(imported.raceMeta || 0) +
@@ -4245,7 +4290,7 @@ async function importLegacyBundle() {
         alert(
             'Legacy import complete.\n\n' +
             `Config: ${imported.config ? 'imported' : 'skipped'}\n` +
-            `Favorites: ${imported.favorites || 0}\n` +
+            `Bloodlines: ${imported.bloodlines || 0}\n` +
             `Watchlist: ${imported.watchlist || 0}\n` +
             `Marks: ${imported.marks || 0}\n` +
             `Race meta: ${imported.raceMeta || 0}\n` +
@@ -7029,7 +7074,7 @@ function closeExportModal() {
 const OREPRO_URL = 'https://orepro.netkeiba.com/bet/race_list.html';
 
 // --- SETTINGS MODAL ---
-function showSettingsModal() {
+async function showSettingsModal() {
     // Populate checkboxes from current config
     if (!appConfig.backend) appConfig.backend = {};
     const currentEngine = String(appConfig.backend?.dataEngine || 'nk').toLowerCase();
@@ -7046,6 +7091,16 @@ function showSettingsModal() {
     document.getElementById('setting-debugConsole').checked = isDebugConsoleEnabled();
     document.getElementById('setting-autoLockPastVotes').checked = isAutoLockPastVotesEnabled();
     document.getElementById('setting-cleanPastRaceCards').checked = appConfig.ui?.cleanPastRaceCards ?? true;
+    // 🎤 Uma Musume mode — backend is source of truth (umamusume_added_ids in
+    // app_state). Awaited so the checkbox doesn't get stomped by a late-arriving
+    // callback if the user toggles immediately after opening the modal.
+    try {
+        const r = await fetch('/api/umamusume/characters');
+        if (r.ok) {
+            const d = await r.json();
+            document.getElementById('setting-umamusumeMode').checked = !!d.enabled;
+        }
+    } catch (_) { /* leave at last-known state */ }
     document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
     document.getElementById('setting-highlightFallbackBridge').checked = isFallbackBridgeHighlightEnabled();
     document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
@@ -7073,6 +7128,55 @@ function showSettingsModal() {
 
 function closeSettingsModal() {
     document.getElementById('settings-modal').style.display = 'none';
+}
+
+// 🎤 Uma Musume mode — toggle on/off via /api/umamusume/apply. ON resolves every
+// non-still-racing character to a breeding_horses or horses ID and inserts only
+// IDs that weren't already in Bloodlines (tracked in app_state.umamusume_added_ids
+// so OFF removes exactly those). Refreshes listsData + repaints the sidebar.
+async function toggleUmamusumeMode(event) {
+    const checkbox = event.target;
+    const enabling = checkbox.checked;
+    checkbox.disabled = true;
+    try {
+        const resp = await fetch('/api/umamusume/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: enabling })
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        // Reload bloodlines from server and repaint the sidebar + race table.
+        const listRes = await fetch('/api/lists');
+        listsData = await listRes.json();
+        renderLists();
+        updateRaceHighlighting();
+
+        if (enabling) {
+            const msg =
+                `🎤 Uma Musume mode ON\n\n` +
+                `Added: ${data.inserted} characters to Bloodlines\n` +
+                `Already present: ${data.already_present}\n` +
+                `Still racing (skipped): ${data.still_racing}\n` +
+                `Unresolved: ${data.unresolved}` +
+                (data.unresolved > 0
+                    ? `\n\nCouldn't match these names in your DB:\n  • ${data.unresolved_names.slice(0, 15).join('\n  • ')}` +
+                      (data.unresolved_names.length > 15 ? `\n  • …and ${data.unresolved_names.length - 15} more` : '')
+                    : '');
+            alert(msg);
+        } else {
+            alert(`🎤 Uma Musume mode OFF\n\nRemoved ${data.removed} characters from Bloodlines.\nAnything you manually added is untouched.`);
+        }
+        // Re-pin to the intended state in case any late-arriving callback
+        // (e.g. a stale settings-modal load) tries to overwrite the checkbox.
+        checkbox.checked = enabling;
+    } catch (err) {
+        alert(`Uma Musume mode failed: ${err.message}`);
+        checkbox.checked = !enabling; // roll back the visual toggle
+    } finally {
+        checkbox.disabled = false;
+    }
 }
 
 function syncFwSlider(el) {

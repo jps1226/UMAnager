@@ -12,4 +12,10 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="8.0.4" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Update="Resources\**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

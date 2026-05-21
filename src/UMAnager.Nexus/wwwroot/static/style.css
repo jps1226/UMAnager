@@ -882,7 +882,7 @@
 	table { width: 100%; border-collapse: collapse; margin-bottom: 40px; font-size: 14px; background: #1a1c23; border-radius: 8px; }
         th, td { padding: 10px; border: 1px solid #333; text-align: left; }
         th { background: #262730; color: #aaa; text-transform: uppercase; font-size: 12px; }
-        .row-fav { background-color: rgba(255, 215, 0, 0.15); }
+        .row-bld { background-color: rgba(255, 215, 0, 0.15); }
         .row-watch { background-color: rgba(100, 149, 237, 0.15); }
         
         /* --- MARKS --- */
@@ -923,6 +923,25 @@
 }
 .horse-item:hover {
     border-color: #555;
+}
+.horse-item-past {
+    background: #21222b;
+    border-color: #2e2f38;
+    opacity: 0.75;
+}
+.horse-item-past .horse-item-name {
+    color: #c4c4cc;
+    font-weight: 400;
+}
+.horse-item-idle {
+    background: #1a1b22;
+    border-color: #25262d;
+    border-style: dashed;
+    opacity: 0.45;
+}
+.horse-item-idle .horse-item-name {
+    color: #888;
+    font-style: italic;
 }
 .horse-item-name {
     font-weight: 500;
@@ -1027,7 +1046,7 @@
 
 /* --- TRACKED HORSE FORMATTING --- */
 /* Text formatting for tracked horses - bold and underlined with color */
-span.name-text.tracked-fav {
+span.name-text.tracked-bld {
     color: #ffd700 !important;
     font-weight: 700 !important;
     text-decoration: underline !important;
@@ -1044,20 +1063,20 @@ span.name-text.tracked-mixed {
 }
 
 /* Row highlighting with intensity levels */
-/* Favorites - base and intensity tiers */
-tr.row-fav {
+/* Bloodlines - base and intensity tiers */
+tr.row-bld {
     background-color: rgba(255, 215, 0, 0.05) !important;
 }
-tr.row-fav.intensity-light {
+tr.row-bld.intensity-light {
     background-color: rgba(255, 215, 0, 0.12) !important;
 }
-tr.row-fav.intensity-medium {
+tr.row-bld.intensity-medium {
     background-color: rgba(255, 215, 0, 0.20) !important;
 }
-tr.row-fav.intensity-strong {
+tr.row-bld.intensity-strong {
     background-color: rgba(255, 215, 0, 0.30) !important;
 }
-tr.row-fav.intensity-very-strong {
+tr.row-bld.intensity-very-strong {
     background-color: rgba(255, 215, 0, 0.40) !important;
 }
 
@@ -1078,7 +1097,7 @@ tr.row-watch.intensity-very-strong {
     background-color: rgba(100, 149, 237, 0.40) !important;
 }
 
-/* Mixed (Watched horse with favorite relatives) - green blend of blue + yellow */
+/* Mixed (Watched horse with tracked-bloodline relatives) - green blend of blue + yellow */
 tr.row-mixed {
     background-color: rgba(150, 180, 100, 0.05) !important;
 }
@@ -1130,7 +1149,7 @@ th {
     background-color: #2a2c36; /* Solid lighter grey (No RGBA!) */
 }
 /* When collapsed AND contains a tracked horse, light it up! */
-.race-header.collapsed.has-fav {
+.race-header.collapsed.has-bld {
     background-color: #332d00; 
     border-left: 4px solid #ffd700;
 }
@@ -1140,16 +1159,16 @@ th {
 }
 
 /* Race header intensity levels for collapsed state */
-.race-header.has-fav.intensity-light {
+.race-header.has-bld.intensity-light {
     background-color: rgb(55, 49, 22) !important;
 }
-.race-header.has-fav.intensity-medium {
+.race-header.has-bld.intensity-medium {
     background-color: rgb(77, 68, 24) !important;
 }
-.race-header.has-fav.intensity-strong {
+.race-header.has-bld.intensity-strong {
     background-color: rgb(108, 95, 25) !important;
 }
-.race-header.has-fav.intensity-very-strong {
+.race-header.has-bld.intensity-very-strong {
     background-color: rgb(141, 123, 28) !important;
 }
 
@@ -1166,7 +1185,7 @@ th {
     background-color: rgb(50, 78, 125) !important;
 }
 
-/* Mixed header intensities (watched + favorite relatives = green) */
+/* Mixed header intensities (watched + bloodline relatives = green) */
 .race-header.row-mixed.intensity-light {
     background-color: rgb(39, 48, 31) !important;
 }
