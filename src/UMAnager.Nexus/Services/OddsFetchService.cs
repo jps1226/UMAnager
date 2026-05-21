@@ -79,6 +79,34 @@ public sealed class OddsFetchService
         return await EnqueueAsync(raceIds, jstNow.ToString("yyyyMMdd"), ct);
     }
 
+    /// <summary>
+    /// Enqueues an odds fetch for every upcoming JST race date. Used by the RACES_POPULATED
+    /// phase tick so prelive odds are refreshed on the configured interval.
+    /// </summary>
+    public async Task<int> EnqueueForUpcomingDatesAsync(CancellationToken ct)
+    {
+        if (!_bridge.IsConnected) return 0;
+
+        var jstNow    = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, JstZone);
+        var jstToday  = DateTime.SpecifyKind(jstNow.Date, DateTimeKind.Utc);
+
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var upcomingDates = await db.Races
+            .Where(r => r.RaceDate >= jstToday)
+            .Select(r => r.RaceDate)
+            .Distinct()
+            .OrderBy(d => d)
+            .ToListAsync(ct);
+
+        var enqueued = 0;
+        foreach (var date in upcomingDates)
+        {
+            var (result, _, _) = await EnqueueForDateAsync(date.ToString("yyyyMMdd"), ct);
+            if (result == EnqueueResult.Enqueued) enqueued++;
+        }
+        return enqueued;
+    }
+
     private async Task<(EnqueueResult, int, string)> EnqueueAsync(List<string> raceIds, string label, CancellationToken ct)
     {
         if (raceIds.Count == 0)

@@ -107,6 +107,11 @@ public sealed class LiveOrchestrator : BackgroundService
             _logger.LogInformation("[Orchestrator] LIVE tick: odds={Odds}({Count} races), results={Results}.",
                 oddsResult, oddsCount, resultsResult);
         }
+        else if (!paused && _bridge.IsConnected && desired == AppPhase.RACES_POPULATED)
+        {
+            var datesEnqueued = await _odds.EnqueueForUpcomingDatesAsync(ct);
+            _logger.LogInformation("[Orchestrator] RACES_POPULATED tick: prelive odds enqueued for {Count} date(s).", datesEnqueued);
+        }
         else
         {
             _logger.LogDebug("[Orchestrator] {Phase} tick (paused={Paused}, connected={Connected}) — no fetch.",

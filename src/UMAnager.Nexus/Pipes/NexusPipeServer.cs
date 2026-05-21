@@ -210,6 +210,10 @@ public sealed class NexusPipeServer : BackgroundService
                                     var broadcaster = scope.ServiceProvider.GetRequiredService<LiveBroadcastService>();
                                     await broadcaster.BroadcastOddsAsync(result.TouchedRaceIds, CancellationToken.None);
                                 }
+
+                                // Notify Discord the first time odds reach ≥50% coverage on an
+                                // upcoming race date. Idempotent via app_state.odds_notified_dates.
+                                await NotifyOddsFirstAppearedAsync(scope);
                             });
                         }
 
@@ -369,6 +373,62 @@ public sealed class NexusPipeServer : BackgroundService
                 _logger.LogWarning(ex, "[Nexus] Partial-results follow-up failed.");
             }
         });
+    }
+
+    private static readonly TimeZoneInfo JstZone = TimeZoneInfo.FindSystemTimeZoneById("Tokyo Standard Time");
+
+    private async Task NotifyOddsFirstAppearedAsync(IServiceScope scope)
+    {
+        try
+        {
+            var jstTodayDt = DateTime.SpecifyKind(
+                TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, JstZone).Date, DateTimeKind.Utc);
+
+            await using var db = await _dbFactory.CreateDbContextAsync(CancellationToken.None);
+
+            // Find upcoming dates where ≥50% of entries now have odds.
+            var coverage = await db.RaceEntries
+                .Join(db.Races, e => e.RaceId, r => r.RaceId, (e, r) => new { e.Odds, r.RaceDate, r.TrackCode })
+                .Where(x => x.RaceDate >= jstTodayDt)
+                .GroupBy(x => x.RaceDate)
+                .Select(g => new { Date = g.Key, Total = g.Count(), WithOdds = g.Count(x => x.Odds != null) })
+                .Where(x => x.Total > 0 && x.WithOdds * 2 >= x.Total)
+                .ToListAsync(CancellationToken.None);
+
+            if (coverage.Count == 0) return;
+
+            var notifiedRaw = await _appState.GetStringAsync(AppStateService.Keys.OddsNotifiedDates) ?? "[]";
+            var notified    = JsonSerializer.Deserialize<List<string>>(notifiedRaw) ?? new();
+            var discord     = scope.ServiceProvider.GetRequiredService<IDiscordNotifier>();
+            var changed     = false;
+
+            foreach (var d in coverage)
+            {
+                var dateKey = d.Date.ToString("yyyy-MM-dd");
+                if (notified.Contains(dateKey)) continue;
+
+                var tracks = await db.Races
+                    .Where(r => r.RaceDate == d.Date)
+                    .Select(r => r.TrackCode)
+                    .Distinct().OrderBy(t => t)
+                    .ToListAsync(CancellationToken.None);
+
+                await discord.NotifyOddsAvailableAsync(
+                    dateKey, tracks.Where(t => t != null).Cast<string>());
+
+                notified.Add(dateKey);
+                changed = true;
+            }
+
+            if (changed)
+                await _appState.SetStringAsync(
+                    AppStateService.Keys.OddsNotifiedDates,
+                    JsonSerializer.Serialize(notified));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Nexus] Odds-arrival notification check failed.");
+        }
     }
 
     private async Task<int> FlushBatchAsync(List<RawStagingRecord> batch, long previousTotal, CancellationToken ct)

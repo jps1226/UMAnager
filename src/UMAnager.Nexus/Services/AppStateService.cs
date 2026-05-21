@@ -20,6 +20,9 @@ public sealed class AppStateService
 
         // Bool ("true"/"false") — manual pause flag for the live orchestrator loop.
         public const string LivePollPaused = "live_poll_paused";
+
+        // JSON array of "yyyy-MM-dd" strings — race dates for which "odds are live" has been sent.
+        public const string OddsNotifiedDates = "odds_notified_dates";
     }
 
     private readonly IDbContextFactory<AppDbContext> _contextFactory;

@@ -10,6 +10,7 @@ public interface IDiscordNotifier
     Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default);
     Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, CancellationToken ct = default);
+    Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default);
     Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default);
     Task NotifyTestAsync(CancellationToken ct = default);
@@ -54,6 +55,19 @@ public sealed class DiscordNotifier : IDiscordNotifier
             _ => string.Join(", ", names[..^1]) + ", and " + names[^1],
         };
         return SendAsync($":checkered_flag: **Race plan loaded** for `{raceDate}`: {raceCount} races across {trackList}.", ct);
+    }
+
+    public Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default)
+    {
+        var names = tracks.Select(t => TrackNames.GetValueOrDefault(t, t)).ToList();
+        var trackList = names.Count switch
+        {
+            0 => "?",
+            1 => names[0],
+            2 => $"{names[0]} and {names[1]}",
+            _ => string.Join(", ", names[..^1]) + ", and " + names[^1],
+        };
+        return SendAsync($":bar_chart: **Odds are live** for `{raceDate}` — {trackList}.", ct);
     }
 
     public Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default)
