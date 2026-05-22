@@ -24,6 +24,8 @@ let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 let appConfig = {}; // NEW: Stores app configuration
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
+let renderedDates = new Set(); // Lazy render tracking — cleared on each full re-render
+let _devFetchMs = 0;           // Fetch duration captured in loadRaces for dev timing split
 let raceNameDict = { stakes: {}, classNames: {} }; // Phase 21: Race name translation dictionary
 
 const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Last3", "J%", "T%", "Sire", "SF", "Dam", "BMS", "Odds", "Fav", "Finish"];
@@ -2988,10 +2990,139 @@ function selectCalendarDate(date) {
     switchMainTab(date);
 }
 
+// Render one date's race cards into its pre-existing tab shell.
+// Called immediately for the active date; called on demand for others via switchMainTab.
+function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
+    if (renderedDates.has(date)) return;
+    const tabEl = document.getElementById(`tab-${date}`);
+    if (!tabEl) return;
+    renderedDates.add(date);
+
+    const dateTimeline = globalDateTimelineByDate[date] || 'upcoming';
+    const races = globalRacesByDate[date] || [];
+    let html = '';
+
+    races.forEach(race => {
+        const r_id = race.info.race_id;
+
+        let shouldCollapse = false;
+        if (
+            dateTimeline === 'upcoming' &&
+            isFirstLoad &&
+            collapseBeforeTime &&
+            race.info.time !== "TBA" &&
+            race.info.sort_time
+        ) {
+            // Prefer the unambiguous +09:00 form; bare sort_time + AM/PM display time
+            // confuses parseRaceSortTime's CT-heuristic and shifts races ~14h.
+            const raceTime = parseRaceSortTime(race.info.sort_time_iso || race.info.sort_time, race.info);
+            if (raceTime && raceTime < collapseBeforeTime && r_id !== keepOpenRaceId) {
+                shouldCollapse = true;
+            }
+        }
+
+        const arrow = shouldCollapse ? "▶" : "▼";
+        const collapsedClass = shouldCollapse ? "collapsed" : "";
+
+        applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
+
+        let hasBld = false;
+        let hasWatch = false;
+        let hasMixed = false;
+        let maxIntensity = 0;
+        globalRaceEntries[r_id].forEach(row => {
+            if (!row.familyTracking) {
+                row.familyTracking = calculateFamilyTracking(row.Horse_ID, row.Sire_ID, row.Dam_ID, row.BMS_ID);
+            }
+
+            const tracking = row.familyTracking;
+            const weights = tracking?.weights || { bld_weight: 0, watch_weight: 0 };
+
+            if (tracking.isMixed) hasMixed = true;
+            if (weights.bld_weight > 0) hasBld = true;
+            if (weights.watch_weight > 0) hasWatch = true;
+            if (tracking.intensity > maxIntensity) maxIntensity = tracking.intensity;
+        });
+
+        const rowsHtml = buildTableBody(r_id, globalRaceEntries[r_id]);
+
+        let headerClass = "race-header";
+        if (hasWatch) headerClass += " has-watch";
+        else if (hasMixed) headerClass += " row-mixed";
+        else if (hasBld) headerClass += " has-bld";
+
+        if (maxIntensity > 0) {
+            if (maxIntensity <= 0.33) headerClass += " intensity-light";
+            else if (maxIntensity <= 0.50) headerClass += " intensity-medium";
+            else if (maxIntensity <= 0.66) headerClass += " intensity-strong";
+            else headerClass += " intensity-very-strong";
+        }
+
+        let usedCount = 0;
+        const mainSymbols = ["◎", "〇", "▲", "△"];
+        for (const [k, v] of Object.entries(globalMarks)) {
+            if (k.startsWith(`${r_id}_`) && mainSymbols.includes(v)) usedCount++;
+        }
+
+        const isLocked = isRaceLocked(r_id);
+        const autoStyle = (usedCount >= 4) ? "display: none;" : "display: inline-block;";
+        const reorderStyle = (usedCount >= 4 && !isLocked) ? "display: inline-block;" : "display: none;";
+        const lockLabel = isLocked ? "🔓 Unlock Bets" : "🔒 Lock Bets";
+        const lockClass = isLocked ? " is-locked" : "";
+        const clearStyle = countRaceMarks(r_id) > 0 ? "display: inline-block;" : "display: none;";
+
+        const localName = localizeRaceName(race.info.race_name) || localizeRaceClass(race.info.race_class);
+        const winBadgesHtml = buildRaceWinBadgesHtml(race);
+        const historyBtnHtml = dateTimeline === 'past' && !raceHasHistoryData(race)
+            ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Fetch finish positions and result data for this race">📜 Update History</button>`
+            : "";
+
+        html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
+            <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
+                <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> <span id="header-meta-${r_id}">${raceStatusEmoji(race)} ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName} ${winBadgesHtml}</span>
+
+                ${historyBtnHtml}
+
+                <button class="btn-autopick-safe auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20" ${isLocked ? 'disabled' : ''}>🛡️ Safe Bet</button>
+                <button class="btn-autopick auto-group-${r_id}" style="${autoStyle}; margin-left: 8px;" onclick="autoPick(event, '${r_id}', null)" title="Use Sidebar Slider" ${isLocked ? 'disabled' : ''}>🎲 Auto</button>
+                <button class="btn-autopick-lucky auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 75)" title="Force Risk to 75" ${isLocked ? 'disabled' : ''}>🍀 Lucky</button>
+                <button id="btn-clear-${r_id}" class="btn-clear-bets" style="${clearStyle}" onclick="clearRaceBets(event, '${r_id}')" title="Clear all marks in this race" ${isLocked ? 'disabled' : ''}>🧹 Clear Bets</button>
+                <button id="btn-lock-${r_id}" class="btn-lock-bets${lockClass}" onclick="toggleRaceLock(event, '${r_id}')" title="${isLocked ? 'Unlock to allow mark changes' : 'Lock to prevent any mark changes in this race'}">${lockLabel}</button>
+
+                <button id="btn-reorder-${r_id}" class="btn-reorder" style="${reorderStyle}" onclick="reorderPicks(event, '${r_id}')" title="Reorder Chosen Picks" ${isLocked ? 'disabled' : ''}>✨ Smart Sort</button>
+                <span id="risk-badge-${r_id}" class="risk-badge" style="display:none;" onclick="event.stopPropagation()"></span>
+            </h3>
+            <div id="content-${r_id}" class="race-content ${collapsedClass}">
+                <table class="${dateTimeline === 'past' && (appConfig.ui?.cleanPastRaceCards ?? true) ? 'past-race' : ''}">
+                    <thead id="thead-${r_id}">${buildTableHeaderRow(r_id)}</thead>
+                    <tbody id="tbody-${r_id}">${rowsHtml}</tbody>
+                </table>
+            </div>
+        </div>`;
+    });
+
+    tabEl.innerHTML = html;
+
+    if (isDevModeEnabled()) {
+        const el = document.getElementById('dev-paint-time');
+        if (el && !el.dataset.paintRecorded) {
+            el.dataset.paintRecorded = '1';
+            const totalMs = Math.round(performance.now());
+            el.textContent = `⚡ fetch:${_devFetchMs}ms total:${totalMs}ms`;
+            console.log(`[DevMode] First paint: fetch=${_devFetchMs}ms total=${totalMs}ms`);
+        }
+    }
+}
+
 function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = null, keepOpenRaceId = null) {
     const dates = Object.keys(globalRacesByDate).sort();
     const scheds = document.getElementById('schedules-container');
+    renderedDates.clear();
     scheds.innerHTML = "";
+
+    // Reset dev paint timing for this render cycle
+    const paintEl = document.getElementById('dev-paint-time');
+    if (paintEl) { paintEl.textContent = ''; delete paintEl.dataset.paintRecorded; }
 
     if (dates.length === 0) {
         currentActiveDate = null;
@@ -3010,134 +3141,31 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
     currentCalendarMonth = getMonthKey(activeDate) || currentCalendarMonth;
     renderRaceCalendar();
 
-    let firstCardPainted = false;
-    dates.forEach((date) => {
-        const isActive = date === activeDate;
+    // Cheap init for ALL dates: locks, index tags, sort state, race class.
+    // Runs fast (no HTML building) so global state is ready before any tab renders.
+    dates.forEach(date => {
         const dateTimeline = globalDateTimelineByDate[date] || 'upcoming';
-
-        let html = `<div id="tab-${date}" class="tab-content ${isActive ? 'active' : ''}">`;
-
-        globalRacesByDate[date].forEach(race => {
+        (globalRacesByDate[date] || []).forEach(race => {
             const r_id = race.info.race_id;
             if (isAutoLockPastVotesEnabled() && dateTimeline === 'past') {
                 raceLocks[r_id] = true;
             }
-
-            let shouldCollapse = false;
-            if (
-                dateTimeline === 'upcoming' &&
-                isFirstLoad &&
-                collapseBeforeTime &&
-                race.info.time !== "TBA" &&
-                race.info.sort_time
-            ) {
-                // Prefer the unambiguous +09:00 form; bare sort_time + AM/PM display time
-                // confuses parseRaceSortTime's CT-heuristic and shifts races ~14h.
-                const raceTime = parseRaceSortTime(race.info.sort_time_iso || race.info.sort_time, race.info);
-                if (raceTime && raceTime < collapseBeforeTime && r_id !== keepOpenRaceId) {
-                    shouldCollapse = true;
-                }
-            }
-
-            const arrow = shouldCollapse ? "▶" : "▼";
-            const collapsedClass = shouldCollapse ? "collapsed" : "";
-
             race.entries.forEach((row, idx) => { row.original_index = idx; row._raceId = r_id; });
             globalRaceEntries[r_id] = race.entries;
             globalRaceClass[r_id] = raceClassFlags(race?.info?.race_class);
-
             if (!raceSorts[r_id]) {
-                // Inherit whatever the operator already has active globally.
                 raceSorts[r_id] = { col: globalSort.col, asc: globalSort.asc };
             }
-
-            applySortLogic(r_id, raceSorts[r_id].col, raceSorts[r_id].asc);
-
-            let hasBld = false;
-            let hasWatch = false;
-            let hasMixed = false;
-            let maxIntensity = 0;
-            globalRaceEntries[r_id].forEach(row => {
-                if (!row.familyTracking) {
-                    row.familyTracking = calculateFamilyTracking(row.Horse_ID, row.Sire_ID, row.Dam_ID, row.BMS_ID);
-                }
-
-                const tracking = row.familyTracking;
-                const weights = tracking?.weights || { bld_weight: 0, watch_weight: 0 };
-
-                if (tracking.isMixed) hasMixed = true;
-                if (weights.bld_weight > 0) hasBld = true;
-                if (weights.watch_weight > 0) hasWatch = true;
-                if (tracking.intensity > maxIntensity) maxIntensity = tracking.intensity;
-            });
-
-            const rowsHtml = buildTableBody(r_id, globalRaceEntries[r_id]);
-
-            let headerClass = "race-header";
-            if (hasWatch) headerClass += " has-watch";
-            else if (hasMixed) headerClass += " row-mixed";
-            else if (hasBld) headerClass += " has-bld";
-
-            if (maxIntensity > 0) {
-                if (maxIntensity <= 0.33) headerClass += " intensity-light";
-                else if (maxIntensity <= 0.50) headerClass += " intensity-medium";
-                else if (maxIntensity <= 0.66) headerClass += " intensity-strong";
-                else headerClass += " intensity-very-strong";
-            }
-
-            let usedCount = 0;
-            const mainSymbols = ["◎", "〇", "▲", "△"];
-            for (const [k, v] of Object.entries(globalMarks)) {
-                if (k.startsWith(`${r_id}_`) && mainSymbols.includes(v)) usedCount++;
-            }
-
-            const isLocked = isRaceLocked(r_id);
-            const autoStyle = (usedCount >= 4) ? "display: none;" : "display: inline-block;";
-            const reorderStyle = (usedCount >= 4 && !isLocked) ? "display: inline-block;" : "display: none;";
-            const lockLabel = isLocked ? "🔓 Unlock Bets" : "🔒 Lock Bets";
-            const lockClass = isLocked ? " is-locked" : "";
-            const clearStyle = countRaceMarks(r_id) > 0 ? "display: inline-block;" : "display: none;";
-
-            const localName = localizeRaceName(race.info.race_name) || localizeRaceClass(race.info.race_class);
-            const winBadgesHtml = buildRaceWinBadgesHtml(race);
-            const historyBtnHtml = dateTimeline === 'past' && !raceHasHistoryData(race)
-                ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Fetch finish positions and result data for this race">📜 Update History</button>`
-                : "";
-
-            html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
-                <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
-                    <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> <span id="header-meta-${r_id}">${raceStatusEmoji(race)} ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName} ${winBadgesHtml}</span>
-
-                    ${historyBtnHtml}
-
-                    <button class="btn-autopick-safe auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20" ${isLocked ? 'disabled' : ''}>🛡️ Safe Bet</button>
-                    <button class="btn-autopick auto-group-${r_id}" style="${autoStyle}; margin-left: 8px;" onclick="autoPick(event, '${r_id}', null)" title="Use Sidebar Slider" ${isLocked ? 'disabled' : ''}>🎲 Auto</button>
-                    <button class="btn-autopick-lucky auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 75)" title="Force Risk to 75" ${isLocked ? 'disabled' : ''}>🍀 Lucky</button>
-                    <button id="btn-clear-${r_id}" class="btn-clear-bets" style="${clearStyle}" onclick="clearRaceBets(event, '${r_id}')" title="Clear all marks in this race" ${isLocked ? 'disabled' : ''}>🧹 Clear Bets</button>
-                    <button id="btn-lock-${r_id}" class="btn-lock-bets${lockClass}" onclick="toggleRaceLock(event, '${r_id}')" title="${isLocked ? 'Unlock to allow mark changes' : 'Lock to prevent any mark changes in this race'}">${lockLabel}</button>
-
-                    <button id="btn-reorder-${r_id}" class="btn-reorder" style="${reorderStyle}" onclick="reorderPicks(event, '${r_id}')" title="Reorder Chosen Picks" ${isLocked ? 'disabled' : ''}>✨ Smart Sort</button>
-                    <span id="risk-badge-${r_id}" class="risk-badge" style="display:none;" onclick="event.stopPropagation()"></span>
-                </h3>
-                <div id="content-${r_id}" class="race-content ${collapsedClass}">
-                    <table class="${dateTimeline === 'past' && (appConfig.ui?.cleanPastRaceCards ?? true) ? 'past-race' : ''}">
-                        <thead id="thead-${r_id}">${buildTableHeaderRow(r_id)}</thead>
-                        <tbody id="tbody-${r_id}">${rowsHtml}</tbody>
-                    </table>
-                </div>
-            </div>`;
         });
-
-        html += `</div>`;
-        scheds.innerHTML += html;
-
-        if (!firstCardPainted && isDevModeEnabled()) {
-            firstCardPainted = true;
-            const ms = performance.now().toFixed(0);
-            console.log(`[DevMode] First cards rendered: ${ms}ms from page load`);
-            appendDebugLine(`First cards rendered: ${ms}ms`);
-        }
     });
+
+    // Build all tab shell divs in one innerHTML pass — no race content yet, just the wrappers.
+    scheds.innerHTML = dates.map(date =>
+        `<div id="tab-${date}" class="tab-content${date === activeDate ? ' active' : ''}"></div>`
+    ).join('');
+
+    // Render only the active date now; all others render on demand in switchMainTab.
+    renderDateTab(activeDate, collapseBeforeTime, keepOpenRaceId);
 
     updateWinningVotesFocusButton();
     updateLiveViewPopoutAvailability();
@@ -3156,7 +3184,9 @@ async function loadRaces() {
     // cache: 'no-store' bypasses any browser-side cached body — defends against
     // stale responses on profiles that cached an older Cache-Control regime.
     // The server still keeps a warm in-memory cache keyed by ETag for speed.
+    const _fetchT0 = performance.now();
     const racesRes = await fetch('/api/races', { cache: 'no-store' });
+    _devFetchMs = Math.round(performance.now() - _fetchT0);
     appendDebugLine(`/api/races status=${racesRes.status}`);
     const data = applyTimeDisplayToRacesPayload(await racesRes.json().catch(() => ({})));
     if (!racesRes.ok) {
@@ -3301,6 +3331,12 @@ function switchMainTab(date) {
     currentTimelineTab = globalDateTimelineByDate[nextDate] || currentTimelineTab;
     currentCalendarMonth = getMonthKey(nextDate) || currentCalendarMonth;
     updateOreProSyncDateDisplay();
+
+    // Lazy-render the target date if it hasn't been built yet.
+    renderDateTab(nextDate);
+    updateAllRiskBadges();
+    updateAutoBetHighlighting();
+
     document.querySelectorAll('#schedules-container .tab-content').forEach(c => {
         c.classList.toggle('active', c.id === `tab-${nextDate}`);
     });
