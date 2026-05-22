@@ -25,7 +25,10 @@ let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 let appConfig = {}; // NEW: Stores app configuration
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
 let renderedDates = new Set(); // Lazy render tracking — cleared on each full re-render
-let _devFetchMs = 0;           // Fetch duration captured in loadRaces for dev timing split
+let _devFetchMs = 0;    // headers + body download + JSON.parse
+let _devStateMs = 0;    // global state build loop (all races/dates)
+let _devSidebarMs = 0;  // renderWeekendWatchlist + renderEnginePicks
+let _devRenderMs = 0;   // renderDayTabsAndSchedules → renderDateTab → innerHTML
 let raceNameDict = { stakes: {}, classNames: {} }; // Phase 21: Race name translation dictionary
 
 const DEFAULT_RACE_COLUMNS = ["Shirushi", "BK", "PP", "Horse", "Record", "Last3", "J%", "T%", "Sire", "SF", "Dam", "BMS", "Odds", "Fav", "Finish"];
@@ -3108,8 +3111,8 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         if (el && !el.dataset.paintRecorded) {
             el.dataset.paintRecorded = '1';
             const totalMs = Math.round(performance.now());
-            el.textContent = `⚡ fetch:${_devFetchMs}ms total:${totalMs}ms`;
-            console.log(`[DevMode] First paint: fetch=${_devFetchMs}ms total=${totalMs}ms`);
+            el.textContent = `⚡ json:${_devFetchMs}ms state:${_devStateMs}ms sidebar:${_devSidebarMs}ms render:${_devRenderMs}ms total:${totalMs}ms`;
+            console.log(`[DevMode] Breakdown: json=${_devFetchMs}ms state=${_devStateMs}ms sidebar=${_devSidebarMs}ms render=${_devRenderMs}ms total=${totalMs}ms`);
         }
     }
 }
@@ -3186,9 +3189,10 @@ async function loadRaces() {
     // The server still keeps a warm in-memory cache keyed by ETag for speed.
     const _fetchT0 = performance.now();
     const racesRes = await fetch('/api/races', { cache: 'no-store' });
-    _devFetchMs = Math.round(performance.now() - _fetchT0);
+    const _headersMs = Math.round(performance.now() - _fetchT0);
     appendDebugLine(`/api/races status=${racesRes.status}`);
     const data = applyTimeDisplayToRacesPayload(await racesRes.json().catch(() => ({})));
+    _devFetchMs = Math.round(performance.now() - _fetchT0); // headers + body download + JSON.parse
     if (!racesRes.ok) {
         const detail = data?.detail || data?.message || `HTTP ${racesRes.status}`;
         appendConsoleLine(`[Races] Failed to load races: ${detail}`);
@@ -3213,6 +3217,7 @@ async function loadRaces() {
         past: timelineData.past || {}
     };
 
+    const _stateT0 = performance.now();
     ["upcoming", "past"].forEach(timeline => {
         Object.keys(globalAllRacesByDate[timeline]).forEach(date => {
             globalRacesByDate[date] = globalAllRacesByDate[timeline][date];
@@ -3263,6 +3268,7 @@ async function loadRaces() {
     });
 
     upcomingRaces.sort((a, b) => a.time - b.time);
+    _devStateMs = Math.round(performance.now() - _stateT0);
 
     let collapseBeforeTime = null;
     let keepOpenRaceId = null;
@@ -3280,10 +3286,13 @@ async function loadRaces() {
         }
     }
 
+    const _sidebarT0 = performance.now();
     renderWeekendWatchlist();
     renderEnginePicks();
     updateQuickStats();
+    _devSidebarMs = Math.round(performance.now() - _sidebarT0);
 
+    const _renderT0 = performance.now();
     const hasUpcoming = Object.keys(globalAllRacesByDate.upcoming || {}).length > 0;
     const upcomingDates = Object.keys(globalAllRacesByDate.upcoming || {}).sort();
     const pastDates = Object.keys(globalAllRacesByDate.past || {}).sort();
@@ -3305,6 +3314,7 @@ async function loadRaces() {
     currentCalendarMonth = currentActiveDate ? getMonthKey(currentActiveDate) : getAvailableCalendarMonths()[0] || null;
 
     renderDayTabsAndSchedules(currentActiveDate, collapseBeforeTime, keepOpenRaceId);
+    _devRenderMs = Math.round(performance.now() - _renderT0);
     syncVotingViewAvailability();
     updateLiveViewPopoutAvailability();
     updateAllRiskBadges();
