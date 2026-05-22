@@ -17,8 +17,6 @@ let currentActiveDate = null;
 let currentCalendarMonth = null;
 let currentMainView = 'races';
 let sidebarRaceCollapseState = {};
-let lastPrefetchAwarenessKey = "";
-let globalPrefetchUpdates = null; // { updatesByDate: {...}, hasUpdates: bool, ... } from /api/prefetch-check
 let raceSorts = {}; // Per-race sort state — always kept in sync with globalSort.
 let globalSort = { col: 'Default', asc: true }; // Single source of truth; all races mirror this.
 let winningVotesFocusEnabled = false;
@@ -141,14 +139,6 @@ function isVoteSortingEnabled() {
     return appConfig.ui?.voteSortingTop ?? true;
 }
 
-function isAutoFetchPastResultsEnabled() {
-    return appConfig.ui?.autoFetchPastResults ?? true;
-}
-
-function isPrefetchRaceCheckEnabled() {
-    return appConfig.ui?.prefetchRaceCheck ?? false;
-}
-
 function isDebugConsoleEnabled() {
     return appConfig.ui?.debugConsole ?? false;
 }
@@ -211,10 +201,6 @@ function isAutoLockPastVotesEnabled() {
 
 function isAutoBetHighlightingEnabled() {
     return appConfig.ui?.highlightAutoBets ?? false;
-}
-
-function isFallbackBridgeHighlightEnabled() {
-    return appConfig.ui?.highlightFallbackBridge ?? false;
 }
 
 function raceStatusEmoji(race) {
@@ -319,6 +305,9 @@ async function refreshPhaseBadge() {
         if (phase === 'LIVE_OPERATIONS') {
             badge.classList.add('phase-live');
             labelEl.textContent = '🔴 LIVE';
+        } else if (phase === 'AWAITING_ODDS') {
+            badge.classList.add('phase-upcoming');
+            labelEl.textContent = '⏳ Awaiting odds';
         } else if (phase === 'RACES_POPULATED') {
             badge.classList.add('phase-upcoming');
             labelEl.textContent = '📅 Upcoming';
@@ -869,6 +858,8 @@ async function init() {
     const configRes = await fetch('/api/config');
     appConfig = await configRes.json();
     applyDevModeBodyClass();
+    // Restore UMM theme from localStorage (theme is client-side; no round-trip needed).
+    applyUmmTheme(localStorage.getItem(UMM_STORAGE_KEY) === '1');
     relocateSearchBar();
 
     // Phase 21: Load race name translation dictionary
@@ -1078,13 +1069,23 @@ async function quickAddFromHover(id, listType, nameEncoded) {
         listsData[listType] = existing.join('\n') + '\n';
     }
 
-    await fetch('/api/lists', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-            bloodlines: listsData.bloodlines,
-            watchlist: listsData.watchlist
-        })
-    });
+    try {
+        const resp = await fetch('/api/lists', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                bloodlines: listsData.bloodlines,
+                watchlist: listsData.watchlist
+            })
+        });
+        if (!resp.ok) {
+            const msg = await resp.text().catch(() => '');
+            alert(`Add failed: ${msg || resp.status}`);
+            return;
+        }
+    } catch (err) {
+        alert(`Add failed: ${err.message || 'network error'}`);
+        return;
+    }
 
     await refreshListsOnly();
 }
@@ -1148,32 +1149,43 @@ async function performListAddSearch() {
 
     if (!val) { box.style.display = 'none'; return; }
 
-    // 1) Local matches from horses entered on currently loaded race cards.
+    // Active tab determines which ID space we're populating:
+    //   Bloodlines tab (side-tab-fav active) → breeding_horses (HansyokuNum)
+    //   Watchlist tab  (side-tab-watch active) → horses (KettoNum / active runners)
+    const watchActive = document.getElementById('side-tab-watch')?.classList.contains('active');
+    const searchType = watchActive ? 'racing' : 'breeding';
+
     const seen = new Set();
     const matches = [];
-    for (const h of searchableHorses) {
-        if (seen.has(h.h_id)) continue;
-        if (h.name.toLowerCase().includes(val)) {
-            seen.add(h.h_id);
-            matches.push({ h_id: h.h_id, name: h.name, badge: '' });
+
+    // 1) Local matches from race-card entries — only relevant on Watchlist tab
+    //    (searchableHorses are active runners, not breeding entries).
+    if (watchActive) {
+        for (const h of searchableHorses) {
+            if (seen.has(h.h_id)) continue;
+            if (h.name.toLowerCase().includes(val)) {
+                seen.add(h.h_id);
+                matches.push({ h_id: h.h_id, name: h.name, badge: '' });
+            }
         }
     }
 
     // Render local hits immediately so the dropdown stays snappy.
     renderListAddSuggestions(matches, box);
 
-    // 2) Backend search across the full horses + breeding_horses tables —
-    // catches horses not entered this week (e.g. Lebensstil between starts).
+    // 2) Backend search filtered to the correct ID space.
     if (val.length < 2) return;
     try {
-        const resp = await fetch(`/api/horses/search?q=${encodeURIComponent(val)}`);
+        const resp = await fetch(`/api/horses/search?q=${encodeURIComponent(val)}&type=${searchType}`);
         if (!resp.ok) return;
         const data = await resp.json();
         const results = (data && data.results) || [];
         for (const r of results) {
             if (!r.id || seen.has(r.id)) continue;
             seen.add(r.id);
-            matches.push({ h_id: r.id, name: r.name || r.id, badge: r.source === 'breeder' ? 'breeding' : 'not racing this week' });
+            // Badge only for Watchlist results not on a current race card.
+            const badge = watchActive && r.source === 'horse' ? 'not racing this week' : '';
+            matches.push({ h_id: r.id, name: r.name || r.id, badge });
         }
         renderListAddSuggestions(matches, box);
     } catch (_) { /* ignore — local results already rendered */ }
@@ -1187,7 +1199,9 @@ function renderListAddSuggestions(matches, box) {
     }
     let html = '';
     matches.slice(0, 12).forEach((m, idx) => {
-        const nameEnc = encodeURIComponent(m.name || '');
+        // encodeURIComponent leaves ' unencoded; replace manually so the onclick
+        // attribute string isn't broken by names like "I'm Indy".
+        const nameEnc = encodeURIComponent(m.name || '').replace(/'/g, '%27');
         const badgeHtml = m.badge
             ? ` <span style="color:#888; font-size:11px;">(${escapeHtml(m.badge)})</span>`
             : '';
@@ -1241,20 +1255,21 @@ async function selectListAddHorse(h_id, nameEnc) {
 
 // Creates a wrapper with a 500ms delay hover menu
 function buildNameWithHover(id, name, listType, trackedStatus, intensity, isMixed) {
-    if (!id || id === 'nan' || id === '---' || !name) return escapeHtml(name || "");
+    if (!id || id === 'nan' || id === '---') return escapeHtml(name || "");
     const cleanId = String(id).split('.')[0].trim();
-    if (!cleanId) return escapeHtml(name);
+    if (!cleanId) return escapeHtml(name || "");
+    const displayName = name || `(${cleanId})`;
     
     // Safety check just in case listsData isn't fully loaded yet
     const isTracked = listsData[listType] && listsData[listType].includes(cleanId);
     
     const escapedId = escapeHtml(cleanId);
     const escapedListType = escapeHtml(listType);
-    const escapedName = escapeHtml(name);
-    
-    // Encode the name so we can pass it through the inline onclick handler
-    // without worrying about quotes or backslashes in horse names.
-    const nameEnc = encodeURIComponent(name || '');
+    const escapedName = escapeHtml(displayName);
+
+    // Encode the name for inline onclick; also replace ' so apostrophes in
+    // horse names (e.g. "I'm Indy") don't break the JS string delimiter.
+    const nameEnc = encodeURIComponent(displayName).replace(/'/g, '%27');
     let btnHtml = "";
     if (isTracked) {
         btnHtml = `<button class="hover-action-btn remove-btn" data-horse-id="${cleanId}" data-list-type="${listType}" onclick="removeHorseFromHover('${cleanId}', '${listType}')">➖ Remove</button>`;
@@ -1617,11 +1632,22 @@ function buildTableBody(r_id, entries) {
         const fallbackSources = (row && typeof row._fallbackSources === 'object' && row._fallbackSources)
             ? row._fallbackSources
             : {};
-        const fallbackHighlightEnabled = isFallbackBridgeHighlightEnabled();
+        const fallbackHighlightEnabled = false;
         const fallbackCellAttrs = (field) => {
             const source = String(fallbackSources[field] || '').trim();
             if (!fallbackHighlightEnabled || !source) return '';
             return ` class="fallback-field-cell" title="Fallback source: ${escapeHtml(source)}"`;
+        };
+        // Show a dash for missing/zero values (posts/brackets blank until Fri JST,
+        // odds/fav blank until publish). Treats null, undefined, '', '0', and 0
+        // as missing — JV-Link zero-pads unset numeric fields.
+        const dispNum = (v) => {
+            if (v === null || v === undefined) return '—';
+            const s = String(v).trim();
+            if (s === '' || s === '0') return '—';
+            const n = parseFloat(s);
+            if (Number.isFinite(n) && n === 0) return '—';
+            return s;
         };
         
         // NEW: Added id="row-${r_id}-${h_id}" to the <tr>
@@ -1637,21 +1663,23 @@ function buildTableBody(r_id, entries) {
                 const bkNum = parseInt(row.BK, 10);
                 const bkCls = (Number.isFinite(bkNum) && bkNum >= 1 && bkNum <= 8) ? `bk-color-${bkNum}` : '';
                 const fb = fallbackCellAttrs('BK');
+                const txt = dispNum(row.BK);
                 if (fb && bkCls) {
-                    return `<td${fb.replace('class="', `class="${bkCls} `)}>${row.BK || ""}</td>`;
+                    return `<td${fb.replace('class="', `class="${bkCls} `)}>${txt}</td>`;
                 }
                 const cls = bkCls ? ` class="${bkCls}"` : '';
-                return `<td${cls}${fb}>${row.BK || ""}</td>`;
+                return `<td${cls}${fb}>${txt}</td>`;
             })(),
             PP: (() => {
                 const bkNum = parseInt(row.BK, 10);
                 const bkCls = (Number.isFinite(bkNum) && bkNum >= 1 && bkNum <= 8) ? `bk-color-${bkNum}` : '';
                 const fb = fallbackCellAttrs('PP');
+                const txt = dispNum(row.PP);
                 if (fb && bkCls) {
-                    return `<td${fb.replace('class="', `class="${bkCls} `)}>${row.PP || ""}</td>`;
+                    return `<td${fb.replace('class="', `class="${bkCls} `)}>${txt}</td>`;
                 }
                 const cls = bkCls ? ` class="${bkCls}"` : '';
-                return `<td${cls}${fb}>${row.PP || ""}</td>`;
+                return `<td${cls}${fb}>${txt}</td>`;
             })(),
             Horse: `<td style="font-weight: bold;">${horseStr} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></td>`,
             Record: `<td>${row.Record || ""}</td>`,
@@ -1743,9 +1771,9 @@ function buildTableBody(r_id, entries) {
                     openTag = `<td data-cell="odds"${fb}`;
                 }
                 const tip = upsetCls ? ` title="Finish ${finishN} vs market rank ${favN} (Δ${(finishN - favN > 0 ? '+' : '')}${finishN - favN})"` : '';
-                return `${openTag}${tip}>${row.Odds || ""}</td>`;
+                return `${openTag}${tip}>${dispNum(row.Odds)}</td>`;
             })(),
-            Fav: `<td data-cell="fav"${fallbackCellAttrs('Fav')}>${row.Fav || ""}</td>`,
+            Fav: `<td data-cell="fav"${fallbackCellAttrs('Fav')}>${dispNum(row.Fav)}</td>`,
             Finish: (() => { const f = Number(row.Finish); const shown = (Number.isFinite(f) && f > 0) ? f : ''; return `<td data-cell="finish" class="finish-pos finish-pos-${shown}">${shown}</td>`; })()
         };
 
@@ -2740,164 +2768,11 @@ function normalizeRacesPayload(data) {
     };
 }
 
-function getPrefetchPendingUpdateTypes(prefetch = globalPrefetchUpdates) {
-    const updatesByDate = prefetch?.updatesByDate || {};
-    const types = new Set();
-    Object.values(updatesByDate).forEach(items => {
-        if (!Array.isArray(items)) return;
-        items.forEach(item => {
-            if (item) types.add(item);
-        });
-    });
-    return types;
-}
-
 function syncUpcomingRefreshButtonState() {
     const btn = document.getElementById('btn-upcoming-refresh');
     if (!btn) return;
-
-    if (!isPrefetchRaceCheckEnabled()) {
-        btn.dataset.action = 'legacy-refresh';
-        btn.textContent = '🛰️ Update Upcoming Cards';
-        return;
-    }
-
-    if (!globalPrefetchUpdates || !globalPrefetchUpdates.enabled) {
-        btn.dataset.action = 'check';
-        btn.textContent = '🛰️ Check Pending Updates';
-        return;
-    }
-
-    if (globalPrefetchUpdates.error) {
-        btn.dataset.action = 'check';
-        btn.textContent = '🛰️ Recheck Pending Updates';
-        return;
-    }
-
-    if (globalPrefetchUpdates.hasUpdates) {
-        btn.dataset.action = 'apply';
-        btn.textContent = '⬇️ Apply Pending Updates';
-        return;
-    }
-
-    btn.dataset.action = 'check';
-    btn.textContent = '🛰️ Check Pending Updates';
-}
-
-function updatePrefetchStatusBanner(prefetch) {
-    const banner = document.getElementById('prefetch-status-banner');
-    if (!banner) return;
-
-    if (!isPrefetchRaceCheckEnabled()) {
-        banner.style.display = 'none';
-        banner.textContent = '';
-        banner.classList.remove('status-ok', 'status-warn', 'status-error');
-        syncUpcomingRefreshButtonState();
-        return;
-    }
-
-    banner.style.display = 'block';
-    banner.classList.remove('status-ok', 'status-warn', 'status-error');
-
-    if (!prefetch || !prefetch.enabled) {
-        banner.classList.add('status-warn');
-        banner.textContent = 'Prefetch check enabled • checking…';
-        syncUpcomingRefreshButtonState();
-        return;
-    }
-
-    if (prefetch.error) {
-        banner.classList.add('status-error');
-        banner.textContent = `Prefetch error: ${prefetch.error}`;
-        syncUpcomingRefreshButtonState();
-        return;
-    }
-
-    if (!prefetch.hasUpdates) {
-        banner.classList.add('status-ok');
-        const ts = prefetch.checkedAt ? ` (${prefetch.checkedAt.slice(11, 16)})` : '';
-        banner.textContent = `✓ All up to date${ts}`;
-        syncUpcomingRefreshButtonState();
-        return;
-    }
-
-    const datesWithUpdates = Object.keys(prefetch.updatesByDate || {}).length;
-    banner.classList.add('status-warn');
-    banner.textContent = `Updates on ${datesWithUpdates} day${datesWithUpdates !== 1 ? 's' : ''} — see calendar`;
-    syncUpcomingRefreshButtonState();
-}
-
-function notifyPrefetchRaceCheck(data) {
-    if (!isPrefetchRaceCheckEnabled()) {
-        updatePrefetchStatusBanner(null);
-        syncUpcomingRefreshButtonState();
-        return;
-    }
-
-    const prefetch = data;
-    updatePrefetchStatusBanner(prefetch || null);
-    if (!prefetch || !prefetch.enabled) return;
-
-    if (prefetch.error) {
-        appendConsoleLine(`[Prefetch] Check failed: ${prefetch.error}`);
-        appendDebugLine(`Prefetch check error: ${prefetch.error}`);
-        return;
-    }
-
-    const awarenessKey = JSON.stringify(prefetch.updatesByDate || {});
-    if (awarenessKey && awarenessKey === lastPrefetchAwarenessKey) return;
-    lastPrefetchAwarenessKey = awarenessKey;
-
-    const summary = prefetch.summary || {};
-    appendDebugLine(
-        `Prefetch: newRaceDates=${summary.newRaceDates || 0}, newEntries=${summary.newEntryRaces || 0}, ` +
-        `postPositions=${summary.postPositionRaces || 0}, finishPositions=${summary.finishPositionRaces || 0}, ` +
-        `futureChecked=${summary.checkedFutureRaces || 0}, pastChecked=${summary.checkedPastRaces || 0}`
-    );
-
-    if (!prefetch.hasUpdates) {
-        appendConsoleLine('[Prefetch] No updates detected.');
-        return;
-    }
-
-    const datesWithUpdates = Object.keys(prefetch.updatesByDate || {});
-    appendConsoleLine(`[Prefetch] Updates available on ${datesWithUpdates.length} date(s): ${datesWithUpdates.join(', ')}`);
-}
-
-async function loadPrefetchCheck() {
-    if (!isPrefetchRaceCheckEnabled()) {
-        globalPrefetchUpdates = null;
-        updatePrefetchStatusBanner(null);
-        renderRaceCalendar();
-        syncUpcomingRefreshButtonState();
-        return null;
-    }
-    try {
-        globalPrefetchUpdates = { enabled: true, hasUpdates: false, updatesByDate: {} };
-        updatePrefetchStatusBanner(null); // Show "checking" state immediately
-        appendDebugLine('loadPrefetchCheck started');
-        const res = await fetch('/api/prefetch-check');
-        if (!res.ok) {
-            appendDebugLine(`Prefetch check HTTP ${res.status}`);
-            syncUpcomingRefreshButtonState();
-            return null;
-        }
-        const data = await res.json().catch(() => null);
-        if (!data) {
-            syncUpcomingRefreshButtonState();
-            return null;
-        }
-        globalPrefetchUpdates = data;
-        notifyPrefetchRaceCheck(data);
-        renderRaceCalendar();
-        appendDebugLine(`Prefetch check done: hasUpdates=${data.hasUpdates}, dates=${Object.keys(data.updatesByDate || {}).length}`);
-        return data;
-    } catch (e) {
-        appendDebugLine(`Prefetch check exception: ${e.message}`);
-        return null;
-    } finally {
-        syncUpcomingRefreshButtonState();
-    }
+    btn.dataset.action = 'legacy-refresh';
+    btn.textContent = '🛰️ Update Upcoming Cards';
 }
 
 function getSortedActiveDates() {
@@ -2909,9 +2784,7 @@ function getMonthKey(dateStr) {
 }
 
 function getAvailableCalendarMonths() {
-    const raceDates = getSortedActiveDates();
-    const updateDates = Object.keys(globalPrefetchUpdates?.updatesByDate || {});
-    return [...new Set([...raceDates, ...updateDates].map(getMonthKey).filter(Boolean))].sort();
+    return [...new Set(getSortedActiveDates().map(getMonthKey).filter(Boolean))].sort();
 }
 
 function formatCalendarMonth(monthKey) {
@@ -3050,15 +2923,11 @@ function renderRaceCalendar() {
     for (let day = 1; day <= daysInMonth; day += 1) {
         const dateStr = `${monthKey}-${String(day).padStart(2, '0')}`;
         const races = globalRacesByDate[dateStr];
-        const updateTypes = globalPrefetchUpdates?.updatesByDate?.[dateStr];
-        const hasUpdates = Array.isArray(updateTypes) && updateTypes.length > 0;
-        const updateTitle = hasUpdates ? ` \u2022 updates: ${updateTypes.join(', ')}` : '';
 
         if (!races) {
             cells.push(`
-                <div class="race-calendar-cell${hasUpdates ? ' has-prefetch-updates' : ''}" title="${dateStr}${updateTitle}">
+                <div class="race-calendar-cell" title="${dateStr}">
                     <div class="race-calendar-daynum" style="padding: 8px; color: #4b5565;">${day}</div>
-                    ${hasUpdates ? '<div class="race-calendar-cell-update-pip"></div>' : ''}
                 </div>
             `);
             continue;
@@ -3066,13 +2935,11 @@ function renderRaceCalendar() {
 
         const timeline = globalDateTimelineByDate[dateStr] || 'upcoming';
         const activeClass = dateStr === currentActiveDate ? ' is-selected' : '';
-        const updateClass = hasUpdates ? ' has-prefetch-updates' : '';
         cells.push(`
-            <button type="button" class="race-calendar-day timeline-${timeline}${activeClass}${updateClass}" onclick="selectCalendarDate('${dateStr}')" title="${dateStr} \u2022 ${races.length} race${races.length === 1 ? '' : 's'}${updateTitle}">
+            <button type="button" class="race-calendar-day timeline-${timeline}${activeClass}" onclick="selectCalendarDate('${dateStr}')" title="${dateStr} \u2022 ${races.length} race${races.length === 1 ? '' : 's'}">
                 <div class="race-calendar-daynum">${day}</div>
                 <div class="race-calendar-meta">
                     <span class="race-calendar-count">${races.length}</span>
-                    ${hasUpdates ? '<span class="race-calendar-update-pip"></span>' : ''}
                 </div>
             </button>
         `);
@@ -3219,9 +3086,9 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
                 if (k.startsWith(`${r_id}_`) && mainSymbols.includes(v)) usedCount++;
             }
 
-            const autoStyle = (usedCount >= 4) ? "display: none;" : "display: inline-block;";
-            const reorderStyle = (usedCount >= 4) ? "display: inline-block;" : "display: none;";
             const isLocked = isRaceLocked(r_id);
+            const autoStyle = (usedCount >= 4) ? "display: none;" : "display: inline-block;";
+            const reorderStyle = (usedCount >= 4 && !isLocked) ? "display: inline-block;" : "display: none;";
             const lockLabel = isLocked ? "🔓 Unlock Bets" : "🔒 Lock Bets";
             const lockClass = isLocked ? " is-locked" : "";
             const clearStyle = countRaceMarks(r_id) > 0 ? "display: inline-block;" : "display: none;";
@@ -3274,7 +3141,10 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 async function loadRaces() {
     const t0 = performance.now();
     appendDebugLine('loadRaces started');
-    const racesRes = await fetch('/api/races');
+    // cache: 'no-store' bypasses any browser-side cached body — defends against
+    // stale responses on profiles that cached an older Cache-Control regime.
+    // The server still keeps a warm in-memory cache keyed by ETag for speed.
+    const racesRes = await fetch('/api/races', { cache: 'no-store' });
     appendDebugLine(`/api/races status=${racesRes.status}`);
     const data = applyTimeDisplayToRacesPayload(await racesRes.json().catch(() => ({})));
     if (!racesRes.ok) {
@@ -3400,9 +3270,6 @@ async function loadRaces() {
 
     isFirstLoad = false;
     appendDebugLine(`loadRaces completed in ${(performance.now() - t0).toFixed(0)}ms`);
-
-    // Fire prefetch check in the background — does not block the race list from rendering.
-    loadPrefetchCheck();
 }
 
 // --- TAB SWITCHING ---
@@ -4320,67 +4187,18 @@ async function refreshUpcomingRacesLite() {
     }
 
     try {
-        appendConsoleLine(`[Prefetch] Button clicked. Action: ${action}`);
-        if (action === 'apply') {
-            appendConsoleLine('[Prefetch] Applying pending updates. This can take a while if many races are checked.');
-            progressTimer = setInterval(() => {
-                appendConsoleLine(`[Prefetch] Apply still running... ${formatElapsedSeconds()}s elapsed.`);
-            }, 12000);
-        }
-
-        if (action === 'legacy-refresh') {
-            appendConsoleLine('[Prefetch] Legacy upcoming refresh started. This can take several minutes when many races are refreshed.');
-            progressTimer = setInterval(() => {
-                appendConsoleLine(`[Prefetch] Legacy upcoming refresh still running... ${formatElapsedSeconds()}s elapsed.`);
-            }, 12000);
-            const data = await postJson('/api/races/upcoming/refresh', {});
-            await refreshDataAndUI();
-            const failedCount = Array.isArray(data.failed_races) ? data.failed_races.length : 0;
-            appendConsoleLine(
-                `[Prefetch] Legacy upcoming refresh complete in ${(performance.now() - startedAt).toFixed(0)}ms ` +
-                `(races=${data.updated_races || 0}, rows=${data.updated_rows || 0}, failed=${failedCount}).`
-            );
-            alert(`Upcoming refresh complete. Races updated: ${data.updated_races || 0}, rows updated: ${data.updated_rows || 0}, failed races: ${failedCount}.`);
-            return;
-        }
-
-        if (action === 'check') {
-            await loadPrefetchCheck();
-            if (globalPrefetchUpdates?.hasUpdates) {
-                const dates = Object.keys(globalPrefetchUpdates.updatesByDate || {}).sort();
-                appendConsoleLine(`[Prefetch] Check complete in ${(performance.now() - startedAt).toFixed(0)}ms. Pending dates: ${dates.length}.`);
-                alert(`Pending updates found on ${dates.length} date(s):\n${dates.join('\n')}\n\nClick the button again to apply them.`);
-            } else {
-                appendConsoleLine(`[Prefetch] Check complete in ${(performance.now() - startedAt).toFixed(0)}ms. No pending updates.`);
-                alert('No pending updates found.');
-            }
-            return;
-        }
-
-        const data = await postJson('/api/races/prefetch/apply', {});
-        appendConsoleLine('[Prefetch] Server apply completed. Refreshing local UI and re-checking status...');
+        appendConsoleLine('[Prefetch] Legacy upcoming refresh started. This can take several minutes when many races are refreshed.');
+        progressTimer = setInterval(() => {
+            appendConsoleLine(`[Prefetch] Legacy upcoming refresh still running... ${formatElapsedSeconds()}s elapsed.`);
+        }, 12000);
+        const data = await postJson('/api/races/upcoming/refresh', {});
         await refreshDataAndUI();
-        const latestPrefetch = await loadPrefetchCheck();
-
-        const applied = data.applied || {};
-        const remainingDates = Object.keys(latestPrefetch?.updatesByDate || {});
-        const remainingLine = latestPrefetch?.hasUpdates
-            ? `\n\nStill pending after apply: ${remainingDates.length} date(s)`
-            : '\n\nAll pending updates are now cleared.';
-        alert(
-            `Pending updates applied.\n\n` +
-            `Types: ${(applied.pendingUpdateTypes || []).join(', ') || 'none'}\n` +
-            `New race cache size: ${applied.newRaceCachedCount || 0}\n` +
-            `Upcoming races updated: ${applied.updatedUpcomingRaces || 0}\n` +
-            `Upcoming rows updated: ${applied.updatedUpcomingRows || 0}\n` +
-            `Past races refreshed: ${applied.updatedPastRaces || 0}\n` +
-            `Past entries updated: ${applied.updatedPastEntries || 0}` +
-            remainingLine
-        );
+        const failedCount = Array.isArray(data.failed_races) ? data.failed_races.length : 0;
         appendConsoleLine(
-            `[Prefetch] Apply complete in ${(performance.now() - startedAt).toFixed(0)}ms. ` +
-            `Remaining pending dates: ${remainingDates.length}.`
+            `[Prefetch] Legacy upcoming refresh complete in ${(performance.now() - startedAt).toFixed(0)}ms ` +
+            `(races=${data.updated_races || 0}, rows=${data.updated_rows || 0}, failed=${failedCount}).`
         );
+        alert(`Upcoming refresh complete. Races updated: ${data.updated_races || 0}, rows updated: ${data.updated_rows || 0}, failed races: ${failedCount}.`);
     } catch (err) {
         appendConsoleLine(`[Prefetch] Update action failed: ${err.message}`);
         alert(`Update action failed: ${err.message}`);
@@ -7085,24 +6903,13 @@ async function showSettingsModal() {
     document.getElementById('setting-advancedTools').checked = appConfig.sidebarTabs?.advancedTools ?? false;
     document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
     document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
-    document.getElementById('setting-autoFetchPastResults').checked = isAutoFetchPastResultsEnabled();
-    document.getElementById('setting-prefetchRaceCheck').checked = isPrefetchRaceCheckEnabled();
     document.getElementById('setting-devMode').checked = isDevModeEnabled();
     document.getElementById('setting-debugConsole').checked = isDebugConsoleEnabled();
     document.getElementById('setting-autoLockPastVotes').checked = isAutoLockPastVotesEnabled();
     document.getElementById('setting-cleanPastRaceCards').checked = appConfig.ui?.cleanPastRaceCards ?? true;
-    // 🎤 Uma Musume mode — backend is source of truth (umamusume_added_ids in
-    // app_state). Awaited so the checkbox doesn't get stomped by a late-arriving
-    // callback if the user toggles immediately after opening the modal.
-    try {
-        const r = await fetch('/api/umamusume/characters');
-        if (r.ok) {
-            const d = await r.json();
-            document.getElementById('setting-umamusumeMode').checked = !!d.enabled;
-        }
-    } catch (_) { /* leave at last-known state */ }
+    // 🎤 Uma Musume mode — theme state is client-side (localStorage).
+    document.getElementById('setting-umamusumeMode').checked = localStorage.getItem(UMM_STORAGE_KEY) === '1';
     document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
-    document.getElementById('setting-highlightFallbackBridge').checked = isFallbackBridgeHighlightEnabled();
     document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     document.getElementById('setting-tvModeSplitPercent').value = Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent))
         ? Number(appConfig.ui?.tvModeSplitPercent)
@@ -7130,52 +6937,53 @@ function closeSettingsModal() {
     document.getElementById('settings-modal').style.display = 'none';
 }
 
-// 🎤 Uma Musume mode — toggle on/off via /api/umamusume/apply. ON resolves every
-// non-still-racing character to a breeding_horses or horses ID and inserts only
-// IDs that weren't already in Bloodlines (tracked in app_state.umamusume_added_ids
-// so OFF removes exactly those). Refreshes listsData + repaints the sidebar.
+// 🎤 Uma Musume mode
+// Theme (body.umm-mode class) is managed client-side via localStorage.
+// Horse roster add/remove is handled separately from the Character Roster page (umm.html).
+// Toggle OFF cleans up any horses that were added via the roster.
+
+const UMM_STORAGE_KEY = 'umanager-umm-theme';
+
+function applyUmmTheme(enabled) {
+    document.body.classList.toggle('umm-mode', enabled);
+    // Swap the Pedigree Lists group header emoji
+    const summary = document.querySelector('#pedigree-lists-group > summary');
+    if (summary) {
+        summary.textContent = enabled ? '🎤 Pedigree Lists' : '🎯 Pedigree Lists';
+    }
+    localStorage.setItem(UMM_STORAGE_KEY, enabled ? '1' : '0');
+}
+
 async function toggleUmamusumeMode(event) {
     const checkbox = event.target;
     const enabling = checkbox.checked;
-    checkbox.disabled = true;
-    try {
-        const resp = await fetch('/api/umamusume/apply', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: enabling })
-        });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
 
-        // Reload bloodlines from server and repaint the sidebar + race table.
-        const listRes = await fetch('/api/lists');
-        listsData = await listRes.json();
-        renderLists();
-        updateRaceHighlighting();
+    // Theme flip is instant — no round-trip needed.
+    applyUmmTheme(enabling);
 
-        if (enabling) {
-            const msg =
-                `🎤 Uma Musume mode ON\n\n` +
-                `Added: ${data.inserted} characters to Bloodlines\n` +
-                `Already present: ${data.already_present}\n` +
-                `Still racing (skipped): ${data.still_racing}\n` +
-                `Unresolved: ${data.unresolved}` +
-                (data.unresolved > 0
-                    ? `\n\nCouldn't match these names in your DB:\n  • ${data.unresolved_names.slice(0, 15).join('\n  • ')}` +
-                      (data.unresolved_names.length > 15 ? `\n  • …and ${data.unresolved_names.length - 15} more` : '')
-                    : '');
-            alert(msg);
-        } else {
-            alert(`🎤 Uma Musume mode OFF\n\nRemoved ${data.removed} characters from Bloodlines.\nAnything you manually added is untouched.`);
+    // Turning OFF: clean up any horses the Character Roster added.
+    if (!enabling) {
+        checkbox.disabled = true;
+        try {
+            const resp = await fetch('/api/umamusume/apply', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: false })
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.removed > 0) {
+                    const listRes = await fetch('/api/lists');
+                    listsData = await listRes.json();
+                    renderLists();
+                    updateRaceHighlighting();
+                }
+            }
+        } catch (err) {
+            console.warn('UMM cleanup failed:', err);
+        } finally {
+            checkbox.disabled = false;
         }
-        // Re-pin to the intended state in case any late-arriving callback
-        // (e.g. a stale settings-modal load) tries to overwrite the checkbox.
-        checkbox.checked = enabling;
-    } catch (err) {
-        alert(`Uma Musume mode failed: ${err.message}`);
-        checkbox.checked = !enabling; // roll back the visual toggle
-    } finally {
-        checkbox.disabled = false;
     }
 }
 
@@ -7205,8 +7013,6 @@ function resetFormulaWeights() {
 }
 
 async function updateSidebarSettings() {
-    const previousAutoFetchPastResults = isAutoFetchPastResultsEnabled();
-    const previousPrefetchRaceCheck = isPrefetchRaceCheckEnabled();
     const previousDataEngine = String(appConfig.backend?.dataEngine || 'nk').toLowerCase();
     // Update config from checkbox values
     appConfig.sidebarTabs = {
@@ -7225,15 +7031,12 @@ async function updateSidebarSettings() {
         ...appConfig.ui,
         betSafetyIndicator: document.getElementById('setting-betSafetyIndicator').checked,
         voteSortingTop: document.getElementById('setting-voteSortingTop').checked,
-        autoFetchPastResults: document.getElementById('setting-autoFetchPastResults').checked,
-        prefetchRaceCheck: document.getElementById('setting-prefetchRaceCheck').checked,
         devMode: document.getElementById('setting-devMode').checked,
         debugConsole: document.getElementById('setting-debugConsole').checked,
         autoLockPastVotes: document.getElementById('setting-autoLockPastVotes').checked,
         cleanPastRaceCards: document.getElementById('setting-cleanPastRaceCards').checked,
         showConsole: document.getElementById('setting-showConsole').checked,
         highlightAutoBets: document.getElementById('setting-highlightAutoBets').checked,
-        highlightFallbackBridge: document.getElementById('setting-highlightFallbackBridge').checked,
         tvModeSplitPercent: parseClampedPercent('setting-tvModeSplitPercent', Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent)) ? Number(appConfig.ui?.tvModeSplitPercent) : 50),
         tvModePanelsFlipped: document.getElementById('setting-tvModePanelsFlipped').checked,
         formulaWeights: {
@@ -7262,8 +7065,7 @@ async function updateSidebarSettings() {
 
     appendDebugLine(
         `Settings saved: engine=${appConfig.backend?.dataEngine ?? 'nk'}, showConsole=${appConfig.ui?.showConsole ?? true}, ` +
-        `debugConsole=${appConfig.ui?.debugConsole ?? false}, prefetchRaceCheck=${appConfig.ui?.prefetchRaceCheck ?? false}, ` +
-        `highlightFallbackBridge=${appConfig.ui?.highlightFallbackBridge ?? false}`
+        `debugConsole=${appConfig.ui?.debugConsole ?? false}`
     );
     
     // Apply settings immediately to sidebar
@@ -7275,13 +7077,6 @@ async function updateSidebarSettings() {
     renderEnginePicks();
     updateQuickStats();
 
-    if (!previousAutoFetchPastResults && isAutoFetchPastResultsEnabled()) {
-        await refreshDataAndUI();
-    }
-    if (!previousPrefetchRaceCheck && isPrefetchRaceCheckEnabled()) {
-        appendConsoleLine('[Prefetch] Race prefetch check enabled. Running lightweight scan on next refresh...');
-        await loadRaces();
-    }
     if (previousDataEngine !== appConfig.backend.dataEngine) {
         appendConsoleLine(`[Engine] Switched data engine to ${appConfig.backend.dataEngine.toUpperCase()}. Reloading races...`);
         await refreshDataAndUI();
@@ -7419,11 +7214,6 @@ function applySidebarSettings() {
     if (consoleEl) {
         consoleEl.style.display = ((appConfig.ui?.showConsole ?? false) && isDevModeEnabled()) ? 'block' : 'none';
     }
-    if (!isPrefetchRaceCheckEnabled()) {
-        globalPrefetchUpdates = null;
-        renderRaceCalendar();
-    }
-    updatePrefetchStatusBanner(globalPrefetchUpdates);
     appendDebugLine('Sidebar settings applied');
 
     // Keep lock behavior and header controls in sync when settings change.

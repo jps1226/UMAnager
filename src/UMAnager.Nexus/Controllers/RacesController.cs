@@ -103,6 +103,16 @@ public sealed class RacesController : ControllerBase
                 : (DateTime?)null;
             var maxBreedingUpdated = await db.BreedingHorses.AsNoTracking()
                 .MaxAsync(b => (DateTime?)b.LastUpdated);
+            // Odds + post position ticks write to race_entries.updated_at but never
+            // touch races.last_updated. Include the entries' max so the ETag busts
+            // when odds/posts land — otherwise desktop sits on a stale 304 body
+            // while mobile gets fresh data via SignalR.
+            var raceIds = races.Select(r => r.RaceId).ToHashSet();
+            var maxEntryUpdated = raceIds.Count > 0
+                ? await db.RaceEntries.AsNoTracking()
+                    .Where(e => raceIds.Contains(e.RaceId))
+                    .MaxAsync(e => (DateTime?)e.UpdatedAt)
+                : null;
             // Phase 8: include jockey/trainer stats refresh tick so a stats recompute (no race
             // row touched) still busts the 304 cache.
             var maxJockeyRefresh = await db.Database
@@ -112,9 +122,10 @@ public sealed class RacesController : ControllerBase
                 .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                 .FirstOrDefaultAsync();
             var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-            // v2: bump schema version suffix whenever the response shape changes (new fields,
+            // v3: bump schema version suffix whenever the response shape changes (new fields,
             // renamed fields, etc.) so browsers never serve a stale 304 cache body.
-            var etag = $"\"races-v2-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{jtTicks}\"";
+            // Added entries-max-updated tick (odds/posts ingestion path).
+            var etag = $"\"races-v4-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
             Response.Headers["Cache-Control"] = "no-cache"; // re-validate every time, but allow 304
             Response.Headers["ETag"] = etag;
             var ifNoneMatch = Request.Headers["If-None-Match"].ToString();
@@ -132,7 +143,6 @@ public sealed class RacesController : ControllerBase
                 return File(cached.Bytes, "application/json; charset=utf-8");
             }
 
-            var raceIds = races.Select(r => r.RaceId).ToHashSet();
             var allEntries = await db.RaceEntries.AsNoTracking()
                 .Where(e => raceIds.Contains(e.RaceId))
                 .ToListAsync();

@@ -182,9 +182,23 @@ public sealed class NexusPipeServer : BackgroundService
                             }
                         }
 
+                        // After DIFN stream completes, parse newly-staged UM records and stamp
+                        // last_um_refresh so the weekly auto-refresh cadence resets correctly.
+                        if (eventType == "STREAM_DIFN_COMPLETE" && recordCount > 0)
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                using var scope = _scopeFactory.CreateScope();
+                                var svc = scope.ServiceProvider.GetRequiredService<DifnRecordParsingService>();
+                                await svc.ParseAllRecordsAsync(CancellationToken.None);
+                                var appState = scope.ServiceProvider.GetRequiredService<AppStateService>();
+                                await appState.SetTimestampAsync(AppStateService.Keys.LastUmRefresh, DateTime.UtcNow);
+                                _logger.LogInformation("[Nexus] DIFN auto-parse complete, last_um_refresh stamped.");
+                            });
+                        }
+
                         // After TOKU stream completes, parse newly-staged RA + SE records so
-                        // upcoming races appear in the UI. DIFN streams don't need this because
-                        // UM records get parsed on demand; TOKU is the only path for RA/SE.
+                        // upcoming races appear in the UI.
                         if (eventType == "STREAM_TOKU_COMPLETE" && recordCount > 0)
                         {
                             _ = Task.Run(async () =>

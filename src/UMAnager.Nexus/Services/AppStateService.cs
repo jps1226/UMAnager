@@ -23,6 +23,9 @@ public sealed class AppStateService
 
         // JSON array of "yyyy-MM-dd" strings — race dates for which "odds are live" has been sent.
         public const string OddsNotifiedDates = "odds_notified_dates";
+
+        // DateTime — wall-clock of last successful UM (horse master) ingest.
+        public const string LastUmRefresh = "last_um_refresh";
     }
 
     private readonly IDbContextFactory<AppDbContext> _contextFactory;

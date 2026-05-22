@@ -21,6 +21,7 @@ public sealed class LiveOrchestrator : BackgroundService
     private readonly SidecarBridge _bridge;
     private readonly IDiscordNotifier _discord;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
+    private readonly AppStateService _appState;
     private readonly ILogger<LiveOrchestrator> _logger;
 
     private readonly Channel<bool> _forceTickChannel = Channel.CreateBounded<bool>(
@@ -38,6 +39,7 @@ public sealed class LiveOrchestrator : BackgroundService
         SidecarBridge bridge,
         IDiscordNotifier discord,
         IDbContextFactory<AppDbContext> dbFactory,
+        AppStateService appState,
         ILogger<LiveOrchestrator> logger)
     {
         _phase     = phase;
@@ -47,6 +49,7 @@ public sealed class LiveOrchestrator : BackgroundService
         _bridge    = bridge;
         _discord   = discord;
         _dbFactory = dbFactory;
+        _appState  = appState;
         _logger    = logger;
     }
 
@@ -92,14 +95,22 @@ public sealed class LiveOrchestrator : BackgroundService
             LastObservedPhase = desired;
             _ = _discord.NotifyPhaseChangedAsync(previousPhase, desired);
 
-            if (previousPhase == AppPhase.WAITING_FOR_RACES && desired == AppPhase.RACES_POPULATED)
+            // Race plan landed: fire the "populated" notification on the first transition
+            // out of WAITING_FOR_RACES. Usually that's → AWAITING_ODDS (cards published before
+            // odds), but if odds happen to land in the same poll we go straight to RACES_POPULATED.
+            if (previousPhase == AppPhase.WAITING_FOR_RACES
+                && (desired == AppPhase.AWAITING_ODDS || desired == AppPhase.RACES_POPULATED))
                 _ = NotifyRacePlanPopulatedAsync();
         }
 
         var paused = await _phase.IsLivePollPausedAsync();
         var interval = await GetIntervalForPhaseAsync(desired);
 
-        // 2. Act per phase (skip work if paused or Sidecar offline; still keep the loop ticking).
+        // 2. Weekly UM refresh — runs in any non-LIVE phase when Sidecar is idle.
+        if (desired != AppPhase.LIVE_OPERATIONS && _bridge.IsConnected && !paused)
+            await MaybeEnqueueUmRefreshAsync(ct);
+
+        // 3. Act per phase (skip work if paused or Sidecar offline; still keep the loop ticking).
         if (!paused && _bridge.IsConnected && desired == AppPhase.LIVE_OPERATIONS)
         {
             var (oddsResult, oddsCount, _) = await _odds.EnqueueForLiveWindowAsync(ct);
@@ -107,10 +118,11 @@ public sealed class LiveOrchestrator : BackgroundService
             _logger.LogInformation("[Orchestrator] LIVE tick: odds={Odds}({Count} races), results={Results}.",
                 oddsResult, oddsCount, resultsResult);
         }
-        else if (!paused && _bridge.IsConnected && desired == AppPhase.RACES_POPULATED)
+        else if (!paused && _bridge.IsConnected
+                 && (desired == AppPhase.RACES_POPULATED || desired == AppPhase.AWAITING_ODDS))
         {
             var datesEnqueued = await _odds.EnqueueForUpcomingDatesAsync(ct);
-            _logger.LogInformation("[Orchestrator] RACES_POPULATED tick: prelive odds enqueued for {Count} date(s).", datesEnqueued);
+            _logger.LogInformation("[Orchestrator] {Phase} tick: odds enqueued for {Count} date(s).", desired, datesEnqueued);
         }
         else
         {
@@ -134,7 +146,7 @@ public sealed class LiveOrchestrator : BackgroundService
 
     private async Task<TimeSpan> ClampForLiveBoundaryAsync(AppPhase phase, TimeSpan interval)
     {
-        if (phase != AppPhase.RACES_POPULATED) return interval;
+        if (phase != AppPhase.RACES_POPULATED && phase != AppPhase.AWAITING_ODDS) return interval;
 
         var liveWindowMinutes = await _settings.GetIntAsync(
             SettingsService.Keys.LiveWindowMinutes,
@@ -166,11 +178,28 @@ public sealed class LiveOrchestrator : BackgroundService
         AppPhase.RACES_POPULATED  => await _settings.GetTimeSpanAsync(
                                         SettingsService.Keys.OddsPollIntervalPrelive,
                                         SettingsService.Defaults.OddsPollIntervalPrelive),
+        AppPhase.AWAITING_ODDS    => await _settings.GetTimeSpanAsync(
+                                        SettingsService.Keys.OddsPollIntervalAwaiting,
+                                        SettingsService.Defaults.OddsPollIntervalAwaiting),
         AppPhase.WAITING_FOR_RACES => await _settings.GetTimeSpanAsync(
                                         SettingsService.Keys.PopulatePollInterval,
                                         SettingsService.Defaults.PopulatePollInterval),
         _ => TimeSpan.FromMinutes(5),
     };
+
+    private async Task MaybeEnqueueUmRefreshAsync(CancellationToken ct)
+    {
+        if (_bridge.IngestionStatus == "Streaming") return;
+
+        var lastRefresh = await _appState.GetTimestampAsync(AppStateService.Keys.LastUmRefresh);
+        if (lastRefresh.HasValue && (DateTime.UtcNow - lastRefresh.Value).TotalDays < 7) return;
+
+        _logger.LogInformation("[Orchestrator] Weekly UM refresh due (last={Last}). Enqueueing STREAM_DIFN.",
+            lastRefresh?.ToString("O") ?? "never");
+        _bridge.StagedRecordCount = 0;
+        _bridge.IngestionStatus   = "Streaming";
+        await _bridge.CommandQueue.Writer.WriteAsync("{\"command\":\"STREAM_DIFN\"}", ct);
+    }
 
     private async Task NotifyRacePlanPopulatedAsync()
     {

@@ -29,31 +29,6 @@
         .view-switcher-sidebar { margin-right: 0; }
         .view-switcher-sidebar .toolbar-btn { flex: 1; }
         .active-date-nav-sidebar { width: 100%; min-width: 0; box-sizing: border-box; }
-        .prefetch-status-banner {
-            font-size: 11px;
-            border: 1px solid #3f495d;
-            border-radius: 8px;
-            padding: 7px 9px;
-            background: #121926;
-            color: #b7c4e3;
-            line-height: 1.35;
-            white-space: pre-wrap;
-        }
-        .prefetch-status-banner.status-ok {
-            border-color: #35624e;
-            background: #17342b;
-            color: #c6ffe3;
-        }
-        .prefetch-status-banner.status-warn {
-            border-color: #8d6d2c;
-            background: #362b16;
-            color: #ffeab5;
-        }
-        .prefetch-status-banner.status-error {
-            border-color: #9e4656;
-            background: #3a1f25;
-            color: #ffd0d0;
-        }
         .btn-primary-prominent { background: #1dd1a1; color: #000; font-weight: bold; border-color: #1dd1a1; font-size: 15px; padding: 10px; }
         .btn-compact { font-size: 12px; padding: 8px; }
         .btn-micro { font-size: 12px; padding: 6px; }
@@ -170,9 +145,10 @@
         .top-bar-center { display: flex; gap: 16px; align-items: stretch; flex: 0 0 auto; }
         .top-bar-right  { display: flex; align-items: stretch; margin-left: auto; flex-shrink: 0; }
 
-        /* Compact date control + 📅 popover anchor */
+        /* Compact date control — date display is now the calendar trigger */
         .active-date-nav-topbar { background: rgba(255, 255, 255, 0.05); border: 1px solid #333; border-radius: 10px; padding: 4px 8px; }
-        .active-date-calendar-btn { font-size: 16px; }
+        .active-date-display-clickable { cursor: pointer; border-radius: 6px; padding: 2px 6px; transition: background 0.15s; }
+        .active-date-display-clickable:hover { background: rgba(255, 255, 255, 0.09); }
         .calendar-popover {
             position: absolute;
             top: 80px;          /* below the top bar's date control */
@@ -226,7 +202,8 @@
             min-width: 230px;
         }
         .active-date-display {
-            min-width: 150px;
+            flex: 1;
+            min-width: 0;
             text-align: center;
         }
         .active-date-label {
@@ -679,6 +656,9 @@
             display: none !important;
         }
         .voting-races-main {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
             padding: 14px 18px;
             display: flex;
             flex-direction: column;
@@ -2149,34 +2129,50 @@ input[type=range]::-webkit-slider-runnable-track {
         pointer-events: auto;
     }
 
-    /* Hamburger: floating top-left, only visible on phones. */
+    /* Hamburger: now inline with Main/Voting tabs (moved out of fixed position
+       2026-05-22). Sits as the first item in .view-switcher-topbar. */
     .mobile-menu-btn {
-        display: block;
-        position: fixed;
-        top: 8px; left: 8px;
-        z-index: 2500;
-        width: 38px; height: 38px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        position: static;
+        width: 36px; height: 36px;
         border-radius: 8px;
         background: rgba(26,28,35,0.92);
         color: #1dd1a1;
         border: 1px solid #333;
-        font-size: 20px;
+        font-size: 18px;
         line-height: 1;
         cursor: pointer;
+        padding: 0;
     }
     .mobile-menu-btn:active { background: #1dd1a1; color: #000; }
 
     /* Main content fills the screen; tighten paddings. */
     .main-content { width: 100vw; }
-    .top-sticky-bar { padding: 8px 10px 0 56px; /* leave room for hamburger */ }
+    .top-sticky-bar { padding: 6px 10px 0 10px; }
     .scrollable-races { padding: 0 8px 16px 8px; }
 
     /* Clocks stack and shrink. */
     .top-bar-clock-row { flex-direction: column; gap: 8px; margin-bottom: 10px; }
     .top-bar-left, .top-bar-center, .top-bar-right { width: 100%; margin-left: 0; }
     .top-bar-center { flex-wrap: wrap; gap: 8px; }
-    .clock-container { gap: 16px; padding: 8px; }
+    /* Reflow: JST and CST share the top row, countdown drops to its own full-width row below. */
+    .clock-container {
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 6px 12px;
+        padding: 8px 10px;
+    }
+    .clock-container .clock-box { flex: 0 0 auto; }
+    .clock-container .countdown-wrapper {
+        order: 3;
+        flex: 1 1 100%;
+        text-align: center;
+    }
     .clock-time { font-size: 16px; }
+    .countdown-time { font-size: 22px; }
+    .countdown-race { font-size: 11px; }
     .quick-stats { gap: 10px; padding: 8px 10px; justify-content: space-between; }
     .quick-stat-block { min-width: 60px; }
     .quick-stat-value { font-size: 16px; }
@@ -2236,6 +2232,81 @@ input[type=range]::-webkit-slider-runnable-track {
 
     /* Settings modal: full-screen on phones. */
     .settings-modal-content { width: 96vw; max-width: 96vw; max-height: 92vh; padding: 14px; }
+
+    /* ── Mobile top-of-page compaction (2026-05-22) ── */
+    .top-bar-clock-row { gap: 4px; margin-bottom: 4px; }
+    /* Clocks row — force JST + countdown + CST onto ONE horizontal line.
+       The desktop default uses flex-wrap which the previous mobile override
+       set to 'wrap' — we revert that so the countdown can't drop to its own row
+       when data loads. */
+    .clock-container {
+        flex-wrap: nowrap !important;
+        gap: 8px;
+        padding: 4px 6px;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        box-sizing: border-box;
+    }
+    .clock-box { padding: 2px 4px; flex: 0 0 auto; }
+    .clock-label { font-size: 9px; letter-spacing: 0.04em; }
+    .clock-time  { font-size: 13px; }
+    /* Countdown stays inline — cap its width and stack its 3 mini-lines vertically
+       inside the constrained slot so it can't push JST/CST off the row. */
+    .countdown-wrapper {
+        flex: 0 0 auto !important;
+        order: 0 !important;
+        text-align: center !important;
+        padding: 2px 8px !important;
+        min-width: 0;
+    }
+    .countdown-title { font-size: 9px;  line-height: 1.0; }
+    .countdown-time  { font-size: 16px; line-height: 1.05; }
+    .countdown-race  { font-size: 9px;  line-height: 1.0; }
+    /* Phase pill + stats share a row inside .top-bar-right. */
+    .top-bar-right {
+        display: flex !important;
+        gap: 6px;
+        align-items: stretch;
+        margin: 4px 0;
+        width: 100%;
+    }
+    .phase-badge { padding: 3px 8px; margin: 0; flex: 0 0 auto; display: flex; flex-direction: column; justify-content: center; }
+    .phase-badge-label { font-size: 11px; }
+    .phase-badge-sub   { font-size: 9px;  }
+    .top-bar-right #quick-stats { flex: 1 1 auto; }
+    /* Quick stats — drop subtitles, tighten. */
+    .quick-stats { padding: 4px 8px; gap: 6px; margin: 0; justify-content: space-around; }
+    .quick-stat-block { min-width: 0; padding: 0; }
+    .quick-stat-label { font-size: 9px; }
+    .quick-stat-value { font-size: 14px; line-height: 1.1; }
+    .quick-stat-sub   { display: none; }
+    /* Toolbar buttons — tight rows. */
+    .main-toolbar { padding: 2px 0; gap: 4px; }
+    .main-toolbar-left { gap: 4px; }
+    .toolbar-btn { padding: 5px 8px; font-size: 12px; }
+    /* Date selector — now a separate row below the view-switcher tabs. */
+    .top-bar-left { padding: 0; }
+    /* Row 1: hamburger / Main / Voting */
+    .view-switcher-topbar {
+        display: flex;
+        gap: 3px;
+        align-items: center;
+        flex-wrap: nowrap;
+    }
+    /* Row 2: date nav (sibling of view-switcher-topbar, stretched by top-bar-left) */
+    .active-date-nav-topbar {
+        min-width: 0;
+        gap: 2px;
+        padding: 2px 6px;
+        justify-content: center;
+    }
+    /* Shrink buttons in the top row to fit everything on 375px viewports. */
+    .view-switcher-topbar .toolbar-btn { padding: 5px 6px; font-size: 11px; }
+    .active-date-label { font-size: 11px; line-height: 1.1; font-weight: 700; white-space: nowrap; }
+    .active-date-meta  { font-size: 9px;  line-height: 1.1; white-space: nowrap; opacity: 0.75; }
+    .active-date-nav-btn { padding: 2px 5px; font-size: 12px; min-width: 0; }
+    .active-date-display { padding: 0 4px; min-width: 0; overflow: hidden; }
 }
 
 /* ── Phase 19c: Upset coloring on past-race odds cells ──
@@ -2260,4 +2331,110 @@ td.bk-color-4 { background: #5970b0 !important; color: #fff !important; font-wei
 td.bk-color-5 { background: #b8b053 !important; color: #000 !important; font-weight: 700; text-align: center; }
 td.bk-color-6 { background: #72af68 !important; color: #fff !important; font-weight: 700; text-align: center; }
 td.bk-color-7 { background: #efa65e !important; color: #000 !important; font-weight: 700; text-align: center; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Phase 24 — Uma Musume Mode  (body.umm-mode)
+   All rules scoped so the default dark theme is untouched when OFF.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Sidebar shell ── */
+body.umm-mode #sidebar {
+    background: linear-gradient(180deg, #fdf4fb 0%, #fef8ff 100%);
+    border-right: 1.5px solid #f0c0e0;
+}
+
+/* ── Group summary headers — game's green gradient ── */
+body.umm-mode .sidebar-group > summary {
+    background: linear-gradient(90deg, #5db85c 0%, #7ed858 100%);
+    color: #fff;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    border: none;
+    box-shadow: 0 2px 6px rgba(93,184,92,0.35);
+}
+body.umm-mode .sidebar-group > summary:hover {
+    background: linear-gradient(90deg, #4da84c 0%, #6ec848 100%);
+}
+
+/* ── Tab bar buttons — pink pill style ── */
+body.umm-mode .tab-btn {
+    background: #fce8f5;
+    color: #a03070;
+    border: 1.5px solid #f0b0d8;
+    border-radius: 999px;
+    font-weight: 600;
+}
+body.umm-mode .tab-btn.active {
+    background: linear-gradient(135deg, #ff7eb9 0%, #f0409a 100%);
+    color: #fff;
+    border-color: #f0409a;
+    box-shadow: 0 2px 10px rgba(240,64,154,0.4);
+}
+body.umm-mode .tab-btn:hover:not(.active) {
+    background: #f8d0ec;
+    border-color: #e890cc;
+}
+
+/* ── Horse list items — white cards ── */
+body.umm-mode .horse-item {
+    background: #fff;
+    border: 1.5px solid #f8cce8;
+    border-radius: 10px;
+    box-shadow: 0 2px 6px rgba(240,64,154,0.08);
+    color: #5a1840;
+}
+body.umm-mode .horse-item-name { color: #a03070; font-weight: 600; }
+body.umm-mode .btn-delete { color: #cc6090; }
+body.umm-mode .btn-delete:hover { color: #f04080; }
+
+/* ── Search input ── */
+body.umm-mode #list-add-search {
+    background: #fff;
+    border: 1.5px solid #f0b0d8;
+    color: #5a1840;
+    border-radius: 8px;
+}
+body.umm-mode #list-add-search::placeholder { color: #c090b0; }
+body.umm-mode #list-add-search:focus { border-color: #ff7eb9; box-shadow: 0 0 0 2px rgba(255,126,185,0.2); outline: none; }
+
+/* ── Sidebar section sub-headers (Engine Picks, Weekend Watchlist labels) ── */
+body.umm-mode .ww-section-header {
+    color: #a03070;
+    border-bottom: 1px dashed #f0c0e0;
+}
+body.umm-mode .ww-section-divider { border-color: #f0c0e0; }
+
+/* ── Weekend watchlist horse chips ── */
+body.umm-mode .ww-horse-chip {
+    background: #fff;
+    border-color: #f8cce8;
+    color: #5a1840;
+}
+
+/* ── Characters button (hidden until umm-mode ON) ── */
+#umm-characters-btn {
+    display: none;
+    width: 100%;
+    margin: 6px 0 2px;
+    padding: 7px 12px;
+    background: linear-gradient(135deg, #ff7eb9 0%, #f0409a 100%);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    box-shadow: 0 3px 10px rgba(240,64,154,0.35);
+    text-decoration: none;
+    letter-spacing: 0.03em;
+    transition: opacity 0.15s, transform 0.1s;
+}
+#umm-characters-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+body.umm-mode #umm-characters-btn { display: flex; }
 td.bk-color-8 { background: #dc809a !important; color: #000 !important; font-weight: 700; text-align: center; }

@@ -4,12 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260521-3">
+    <link rel="stylesheet" href="/static/style.css?v=20260522-9">
 </head>
 <body>
 
-<!-- Phase 13: mobile-only hamburger to open the drawer-style sidebar. -->
-<button id="mobile-menu-btn" class="mobile-menu-btn" onclick="toggleMobileSidebar()" aria-label="Open menu">☰</button>
+<!-- Phase 13: mobile-only hamburger lives inline with the Main/Voting tabs
+     (moved 2026-05-22 from fixed position). -->
 <div id="mobile-sidebar-backdrop" class="mobile-sidebar-backdrop" onclick="toggleMobileSidebar(false)"></div>
 
 <div class="sidebar">
@@ -22,7 +22,6 @@
     </div>
 
     <div class="sidebar-top-controls">
-        <div id="prefetch-status-banner" class="prefetch-status-banner" style="display:none;"></div>
     </div>
 
     <div class="sidebar-scroll">
@@ -89,6 +88,7 @@
                 <button class="tab-btn active" onclick="switchSidebarTab('fav')">Bloodlines</button>
                 <button class="tab-btn" onclick="switchSidebarTab('watch')">Watchlist</button>
             </div>
+            <a id="umm-characters-btn" href="/umm.html" target="_blank">🎤 Character Roster</a>
             <div class="list-add-search-wrap">
                 <input type="text" id="list-add-search" placeholder="Search horses to add…"
                        oninput="handleListAddSearch(event)" onkeydown="handleListAddKey(event)"
@@ -142,17 +142,18 @@
         <div class="top-bar-clock-row">
             <div class="top-bar-left">
                 <div class="view-switcher view-switcher-topbar">
+                    <button id="mobile-menu-btn" class="mobile-menu-btn" onclick="toggleMobileSidebar()" aria-label="Open menu">☰</button>
                     <button id="main-view-races" onclick="switchMainView('races')" class="toolbar-btn toolbar-btn-muted is-active">🏠 Main</button>
                     <button id="main-view-voting" onclick="switchMainView('voting')" class="toolbar-btn toolbar-btn-muted">🗳️ Voting</button>
                 </div>
                 <div class="active-date-nav active-date-nav-topbar">
                     <button type="button" id="active-date-prev" class="active-date-nav-btn" onclick="shiftActiveDate(-1)">◀</button>
-                    <div class="active-date-display">
+                    <div class="active-date-display active-date-display-clickable"
+                         onclick="toggleCalendarPopover(event)" title="Open calendar">
                         <div id="active-date-label" class="active-date-label">No day selected</div>
                         <div id="active-date-meta" class="active-date-meta">0 races</div>
                     </div>
                     <button type="button" id="active-date-next" class="active-date-nav-btn" onclick="shiftActiveDate(1)">▶</button>
-                    <button type="button" id="active-date-calendar-btn" class="active-date-nav-btn active-date-calendar-btn" onclick="toggleCalendarPopover(event)" title="Open full calendar">📅</button>
                 </div>
             </div>
             <div class="top-bar-center">
@@ -173,12 +174,12 @@
                         <div class="clock-time" id="cst">--:--:--</div>
                     </div>
                 </div>
+            </div>
+            <div class="top-bar-right">
                 <div id="phase-badge" class="phase-badge phase-waiting">
                     <div class="phase-badge-label">⏸ Waiting</div>
                     <div id="phase-badge-sub" class="phase-badge-sub">Loading…</div>
                 </div>
-            </div>
-            <div class="top-bar-right">
                 <div id="quick-stats" class="quick-stats">
                     <div class="quick-stat-block">
                         <div class="quick-stat-label">Marks</div>
@@ -214,7 +215,6 @@
                     <div id="search-suggestions" class="suggestions-box"></div>
                 </div>
 
-                <button id="btn-live-view-popout" onclick="showExportModal()" class="toolbar-btn toolbar-btn-primary" style="display:none;">🪟 Live View Popout</button>
                 <button id="btn-tv-mode" onclick="window.open('/tv.html', '_blank', 'noopener')" class="toolbar-btn toolbar-btn-primary">📺 TV Mode</button>
                 <button id="btn-winning-votes-focus" onclick="toggleWinningVotesFocus()" class="toolbar-btn toolbar-btn-muted" style="display:none;">🏁 Hit 0% (0/0)</button>
                 <button onclick="collapseVotedRaces()" class="toolbar-btn toolbar-btn-muted">✅ Collapse Voted</button>
@@ -322,14 +322,6 @@
                             <span>🗳️ Float Votes To Top</span>
                         </label>
                         <label class="settings-option-row">
-                            <input type="checkbox" id="setting-autoFetchPastResults" onchange="updateSidebarSettings()">
-                            <span>🏁 Auto-Fetch Past Results</span>
-                        </label>
-                        <label class="settings-option-row">
-                            <input type="checkbox" id="setting-prefetchRaceCheck" onchange="updateSidebarSettings()">
-                            <span>🔎 Prefetch Race Check Alerts</span>
-                        </label>
-                        <label class="settings-option-row">
                             <input type="checkbox" id="setting-autoLockPastVotes" onchange="updateSidebarSettings()">
                             <span>🔒 Auto-Lock Past Race Votes</span>
                         </label>
@@ -356,10 +348,6 @@
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-highlightAutoBets" onchange="updateSidebarSettings()">
                             <span>💡 Highlight Auto-Bets</span>
-                        </label>
-                        <label class="settings-option-row">
-                            <input type="checkbox" id="setting-highlightFallbackBridge" onchange="updateSidebarSettings()">
-                            <span>🧷 Highlight NK Fallback Fields</span>
                         </label>
                         <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
                             <span>📺 TV Mode Split %</span>
@@ -579,6 +567,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260521-8"></script>
+<script src="/static/script.js?v=20260522-4"></script>
 </body>
 </html>
