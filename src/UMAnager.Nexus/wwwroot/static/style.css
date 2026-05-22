@@ -143,7 +143,12 @@
         .top-bar-clock-row { display: flex; align-items: stretch; gap: 16px; margin-bottom: 20px; }
         .top-bar-left   { display: flex; flex-direction: column; gap: 8px; align-items: stretch; flex-shrink: 0; min-width: 0; }
         .top-bar-center { display: flex; gap: 16px; align-items: stretch; flex: 0 0 auto; }
-        .top-bar-right  { display: flex; align-items: stretch; margin-left: auto; flex-shrink: 0; }
+        .top-bar-right  { display: flex; flex-direction: column; align-items: stretch; margin-left: auto; flex-shrink: 0; gap: 4px; justify-content: center; }
+        .top-bar-right-row { display: flex; align-items: stretch; }
+        .top-bar-risk { padding: 2px 10px 4px; }
+        .top-bar-risk-label { font-size: 11px; color: #888; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px; text-align: center; margin-bottom: 4px; }
+        .top-bar-risk input[type=range] { width: 100%; cursor: pointer; accent-color: #ff9f43; }
+        .top-bar-risk-scale { display: flex; justify-content: space-between; font-size: 9px; color: #555; font-weight: bold; letter-spacing: 0.3px; margin-top: 1px; }
 
         /* Compact date control — date display is now the calendar trigger */
         .active-date-nav-topbar { background: rgba(255, 255, 255, 0.05); border: 1px solid #333; border-radius: 10px; padding: 4px 8px; }
@@ -2264,17 +2269,13 @@ input[type=range]::-webkit-slider-runnable-track {
     .countdown-time  { font-size: 16px; line-height: 1.05; }
     .countdown-race  { font-size: 9px;  line-height: 1.0; }
     /* Phase pill + stats share a row inside .top-bar-right. */
-    .top-bar-right {
-        display: flex !important;
-        gap: 6px;
-        align-items: stretch;
-        margin: 4px 0;
-        width: 100%;
-    }
+    .top-bar-right { margin: 4px 0; width: 100%; gap: 2px; }
+    .top-bar-right-row { display: flex; align-items: stretch; gap: 6px; }
+    .top-bar-right-row #quick-stats { flex: 1 1 auto; }
+    .top-bar-risk { padding: 2px 6px 2px; }
     .phase-badge { padding: 3px 8px; margin: 0; flex: 0 0 auto; display: flex; flex-direction: column; justify-content: center; }
     .phase-badge-label { font-size: 11px; }
     .phase-badge-sub   { font-size: 9px;  }
-    .top-bar-right #quick-stats { flex: 1 1 auto; }
     /* Quick stats — drop subtitles, tighten. */
     .quick-stats { padding: 4px 8px; gap: 6px; margin: 0; justify-content: space-around; }
     .quick-stat-block { min-width: 0; padding: 0; }

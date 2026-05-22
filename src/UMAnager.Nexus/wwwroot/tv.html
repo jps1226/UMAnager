@@ -8,7 +8,14 @@
     <title>📺 TV Mode · UMAnager</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; }
-        html, body { margin: 0; padding: 0; height: 100%; background: #0b0c10; color: #f0f0f0; font-family: sans-serif; }
+        html, body {
+            margin: 0; padding: 0;
+            height: 100%; width: 100%;
+            background: #0b0c10; color: #f0f0f0;
+            font-family: sans-serif;
+            overflow: hidden;
+            overscroll-behavior: none;
+        }
 
         /* ── Results ticker (top bar) ── */
         #results-ticker {
@@ -135,11 +142,15 @@
             background: rgba(77, 112, 197, 0.2);
         }
 
-        /* ── App shell ── */
+        /* ── App shell ──
+           Use dvh (dynamic viewport height) so the layout respects mobile browser
+           chrome (URL bar). 100vh on iOS Safari / Brave Android extends UNDER the
+           URL bar, hiding the topmost elements. dvh tracks the visible viewport. */
         #app-shell {
             display: flex;
             flex-direction: column;
-            height: 100vh;
+            height: 100vh;       /* fallback for older browsers */
+            height: 100dvh;
             overflow: hidden;
         }
 
@@ -150,6 +161,7 @@
             flex: 1 1 auto;
             min-height: 0;
             overflow: hidden;
+            position: relative;       /* anchor for overlay-mode absolute child */
             --gch-size: 50%;
         }
         #gch-panel {
@@ -204,6 +216,145 @@
             user-select: none;
             cursor: col-resize !important;
         }
+
+        /* ── Phase 23 slice 2: Desktop overlay mode ──
+           When body.overlay-mode is set on a desktop-landscape viewport, the
+           GCh video fills the entire layout and the race list floats over it
+           as a frosted-glass card on the right. Mobile portrait is unaffected
+           (the carousel media query at the bottom overrides anyway). */
+        body.overlay-mode #tv-layout { --gch-size: 100%; }
+        body.overlay-mode #split-handle { display: none; }
+        body.overlay-mode #toggle-gch-size,
+        body.overlay-mode #flip-panels-btn { display: none; }
+        body.overlay-mode #racelist-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            bottom: 10px;
+            width: 380px;
+            max-width: 38vw;
+            min-width: 280px;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            z-index: 20;
+            transition: transform 240ms ease, opacity 240ms ease;
+        }
+        body.overlay-mode #racelist-panel.is-hidden {
+            transform: translateX(calc(100% + 20px));
+            opacity: 0;
+            pointer-events: none;
+        }
+        /* Minimal header chip — gives a target for the close × and a Refresh
+           button without imposing a panel background over the video. */
+        body.overlay-mode #racelist-panel #racelist-header {
+            background: rgba(11, 12, 16, 0.55);
+            backdrop-filter: blur(8px) saturate(160%);
+            -webkit-backdrop-filter: blur(8px) saturate(160%);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 999px;
+            padding: 6px 12px;
+            margin: 0 4px 8px;
+            flex-shrink: 0;
+        }
+        /* Cards have no background — text floats directly on the video.
+           Strong text-shadow keeps names readable over bright video frames. */
+        body.overlay-mode #racelist-panel .race-card {
+            background: transparent;
+            border: none;
+            padding: 6px 10px;
+            margin-bottom: 4px;
+            text-shadow:
+                0 1px 2px rgba(0, 0, 0, 0.95),
+                0 0 8px rgba(0, 0, 0, 0.75);
+        }
+        body.overlay-mode #racelist-panel .race-title {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+            color: #e8e8e8;
+        }
+        body.overlay-mode #racelist-panel .race-title.collapsed {
+            border-bottom-color: rgba(255, 255, 255, 0.08);
+        }
+        /* Fade mask: top 1/3 fully opaque, then linear fade to transparent at
+           the bottom edge. Mask is anchored to the *scroll container*, not the
+           content, so as content scrolls upward the fade band stays put in
+           viewport space — cards entering the bottom region soft-disappear. */
+        body.overlay-mode #racelist-panel #racelist-scroll {
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+            /* Aggressive fade: top ~12% fully opaque, linear fade from there,
+               fully transparent by 60% down — bottom 40% of the scroll viewport
+               is clear video. Mask is anchored to the scroll container, so the
+               fade band stays viewport-fixed while content scrolls through it. */
+            mask-image: linear-gradient(to bottom,
+                rgba(0,0,0,1) 0%,
+                rgba(0,0,0,1) 12%,
+                rgba(0,0,0,0) 60%);
+            -webkit-mask-image: linear-gradient(to bottom,
+                rgba(0,0,0,1) 0%,
+                rgba(0,0,0,1) 12%,
+                rgba(0,0,0,0) 60%);
+            padding-bottom: 80px;     /* extra room so the fade falls past the last card */
+        }
+        body.overlay-mode #racelist-panel #racelist-scroll::-webkit-scrollbar { display: none; }
+        /* Horse names get a slightly stronger shadow since they're the focal text */
+        body.overlay-mode #racelist-panel .horse-name {
+            text-shadow:
+                0 1px 3px rgba(0, 0, 0, 0.98),
+                0 0 10px rgba(0, 0, 0, 0.85);
+            color: #fff;
+        }
+        body.overlay-mode #racelist-panel .fav-badge {
+            background: rgba(0, 0, 0, 0.55);
+            border-color: rgba(255, 255, 255, 0.25);
+            backdrop-filter: blur(4px);
+        }
+        /* Show overlay button in overlay-mode + on desktop landscape only */
+        #show-overlay-btn {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+            z-index: 19;
+            background: rgba(11, 12, 16, 0.7);
+            backdrop-filter: blur(8px);
+            color: #1dd1a1;
+            border: 1px solid rgba(29, 209, 161, 0.45);
+            border-radius: 999px;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            display: none;
+        }
+        #show-overlay-btn:hover { background: rgba(29, 209, 161, 0.18); }
+        body.overlay-mode #racelist-panel.is-hidden ~ #show-overlay-btn { display: inline-flex; align-items: center; gap: 6px; }
+
+        /* Mode-toggle button (always visible on desktop; hidden on mobile-portrait override below) */
+        #mode-toggle-btn {
+            background: #222;
+            color: #d6c1ff;
+            border: 1px solid #4d3f73;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        #mode-toggle-btn:hover { background: #2c2640; color: #ece0ff; }
+
+        /* Hide-overlay (×) chip lives inside the racelist-header in overlay mode */
+        #hide-overlay-btn {
+            background: transparent;
+            color: #888;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 3px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            display: none;
+        }
+        body.overlay-mode #hide-overlay-btn { display: inline-block; }
+        #hide-overlay-btn:hover { color: #fff; border-color: #555; }
 
         /* Portrait / small screens → stack vertically */
         @media (max-width: 700px) or (orientation: portrait) {
@@ -403,25 +554,6 @@
             padding: 10px;
         }
 
-        /* Date tabs */
-        #date-tabs {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-            margin-bottom: 10px;
-        }
-        .date-tab {
-            background: #1a1c23;
-            border: 1px solid #333;
-            color: #aaa;
-            border-radius: 4px;
-            padding: 4px 10px;
-            font-size: 12px;
-            cursor: pointer;
-        }
-        .date-tab.active { background: #1dd1a1; color: #000; border-color: #1dd1a1; font-weight: bold; }
-        .date-tab:hover:not(.active) { background: #222; }
-
         /* Race cards */
         .race-card {
             background: #1a1c23;
@@ -478,6 +610,206 @@
 
         #status-msg { padding: 16px; color: #666; font-size: 13px; }
         #status-msg.error { color: #ff6b6b; }
+
+        /* ════════════════════════════════════════════════════════════════
+           Phase 23: Mobile portrait carousel
+           Landscape on phones falls through to the desktop two-panel TV
+           layout above ("actual TV mode"). Portrait swaps in this shell.
+           ════════════════════════════════════════════════════════════════ */
+        #tv-mobile-shell { display: none; }
+
+        @media (max-width: 700px) and (orientation: portrait) {
+            #racelist-panel,
+            #split-handle { display: none !important; }
+            /* Overlay-mode chrome is a desktop affordance — hide on mobile portrait */
+            #mode-toggle-btn,
+            #show-overlay-btn,
+            #hide-overlay-btn { display: none !important; }
+            body.overlay-mode #racelist-panel { display: none !important; }
+            #gch-panel { flex: 0 0 auto; }
+            #gch-panel:not(.minimized) {
+                flex: 0 0 40vh;     /* fallback */
+                flex: 0 0 40dvh;
+            }
+            #tv-mobile-shell {
+                display: flex;
+                flex-direction: column;
+                flex: 1 1 0;
+                min-height: 0;
+                background: #0b0c10;
+                border-top: 2px solid #222;
+            }
+        }
+
+        /* Per-race-card header (lives inside each carousel card) */
+        .tvm-race-header {
+            padding: 8px 12px;
+            background: #0e1116;
+            border-bottom: 1px solid #1c2029;
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 8px;
+            flex-shrink: 0;
+            transition: background 200ms ease, border-color 200ms ease;
+        }
+        /* Active-card highlight: green-accent header + brighter label.
+           Slim 2px green underline reads at a glance as "this is the one". */
+        .tv-card.is-active .tvm-race-header {
+            background: linear-gradient(90deg, rgba(29, 209, 161, 0.14) 0%, #0e1116 75%);
+            border-bottom-color: #1dd1a1;
+            box-shadow: inset 0 -2px 0 0 #1dd1a1;
+        }
+        .tv-card.is-active .race-label { color: #44e8b8; }
+        .tv-card.is-active .race-pager { color: #1dd1a1; }
+        .tvm-race-header .race-label {
+            color: #1dd1a1;
+            font-weight: bold;
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+            min-width: 0;
+        }
+        .tvm-race-header .race-eta {
+            color: #888;
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .tvm-race-header .race-eta.is-soon { color: #f5a623; }
+        .tvm-race-header .race-eta.is-live { color: #ff5b5b; font-weight: bold; }
+        .tvm-race-header .race-eta.is-active { color: #1dd1a1; }
+        .tvm-race-header .race-pager {
+            font-size: 10px;
+            color: #666;
+            font-variant-numeric: tabular-nums;
+            flex-shrink: 0;
+        }
+
+        #tv-mobile-carousel {
+            flex: 1 1 0;
+            min-height: 0;
+            display: flex;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scroll-snap-type: x mandatory;
+            scrollbar-width: none;
+            -webkit-overflow-scrolling: touch;
+        }
+        #tv-mobile-carousel::-webkit-scrollbar { display: none; }
+        .tv-card {
+            flex: 0 0 100%;
+            scroll-snap-align: start;
+            scroll-snap-stop: always;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        .tv-card-body {
+            flex: 1 1 0;
+            overflow-y: auto;
+            padding: 10px 12px 16px;
+            -webkit-overflow-scrolling: touch;
+        }
+        .tv-card-empty {
+            color: #555;
+            font-size: 13px;
+            font-style: italic;
+            padding: 24px 12px;
+            text-align: center;
+        }
+
+        /* Entries / Marks rows share .tv-row */
+        .tv-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 4px;
+            border-bottom: 1px solid #181b22;
+            font-size: 14px;
+        }
+        .tv-row:last-child { border-bottom: none; }
+        .tv-row .badge { /* inherits .badge above */ }
+        .tv-row .row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .tv-row .row-odds {
+            font-variant-numeric: tabular-nums;
+            color: #ddd;
+            font-size: 13px;
+            min-width: 50px;
+            text-align: right;
+        }
+        .tv-row .row-odds.dim { color: #555; }
+        .tv-row .row-fav {
+            font-size: 10px;
+            color: #999;
+            border: 1px solid #444;
+            border-radius: 3px;
+            padding: 1px 5px;
+            flex-shrink: 0;
+        }
+        .tv-row .row-fav.is-chalk { color: #f5a623; border-color: #b48f3d; }
+
+        /* Finish-strip */
+        .tv-finish-list { display: flex; flex-direction: column; gap: 6px; }
+        .tv-finish-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            background: #14171f;
+            border: 1px solid #232735;
+            border-radius: 6px;
+        }
+        .tv-finish-row[data-finish="1"] { border-left: 4px solid #d4af37; }
+        .tv-finish-row[data-finish="2"] { border-left: 4px solid #aaaab4; }
+        .tv-finish-row[data-finish="3"] { border-left: 4px solid #b0713c; }
+        .tv-finish-pos {
+            font-weight: bold;
+            color: #ccc;
+            font-size: 16px;
+            min-width: 22px;
+        }
+        .tv-finish-row .row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .tv-hit-pills {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        /* reuse .rt-hit-pill styling from the results ticker for consistency */
+
+        /* Auto-marquee for the top results ticker on mobile portrait.
+           Wraps content in #rt-marquee-track and slides it from right→left.
+           Tapping the ticker pauses the animation (so you can read it). */
+        @keyframes tv-rt-marquee {
+            0%   { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+        }
+        @media (max-width: 700px) and (orientation: portrait) {
+            #results-ticker.visible {
+                overflow: hidden;
+                flex-wrap: nowrap;
+                position: relative;
+            }
+            #results-ticker.visible #rt-marquee-track {
+                display: inline-flex;
+                gap: 14px;
+                align-items: center;
+                white-space: nowrap;
+                animation: tv-rt-marquee 40s linear infinite;
+                will-change: transform;
+            }
+            #results-ticker.visible #rt-marquee-track:hover,
+            #results-ticker.is-paused #rt-marquee-track {
+                animation-play-state: paused;
+            }
+            /* Hide the fixed-right "next tick" label inside marquee — it duplicates */
+            #results-ticker #rt-next-tick { display: none; }
+        }
     </style>
 </head>
 <body>
@@ -492,6 +824,7 @@
             <a class="gch-open-btn" href="https://sp.gch.jp/jra" target="_blank" rel="noopener">
                 ↗ Open
             </a>
+            <button id="mode-toggle-btn" onclick="toggleOverlayMode()" title="Toggle Overlay / Split layout (M)">🎴 Overlay</button>
             <button id="flip-panels-btn" onclick="togglePanelFlip()">⇄ Flip Panels</button>
             <button id="toggle-gch-size" onclick="toggleGchSize()">▲ Collapse</button>
         </div>
@@ -521,21 +854,27 @@
 
     <div id="split-handle" role="separator" aria-label="Resize panels" aria-orientation="vertical"></div>
 
+    <!-- ═══ Mobile portrait carousel (Phase 23) — one card per race ═══ -->
+    <div id="tv-mobile-shell" aria-label="Mobile race carousel">
+        <div id="tv-mobile-carousel"></div>
+    </div>
+
     <!-- ═══ Race list panel ═══ -->
     <div id="racelist-panel">
         <div id="racelist-header">
             <h2>🏇 Live View</h2>
             <span id="racelist-date-label">Loading…</span>
             <button id="reload-btn" onclick="loadRaces()">⟳ Refresh</button>
+            <button id="hide-overlay-btn" onclick="setOverlayVisible(false)" title="Hide overlay (O)">×</button>
         </div>
         <div id="racelist-scroll">
-            <div id="date-tabs"></div>
             <div id="race-list-body">
                 <div id="status-msg">Loading race data…</div>
             </div>
         </div>
     </div>
 
+    <button id="show-overlay-btn" onclick="setOverlayVisible(true)" title="Show race overlay (O)">🎴 Show Marks</button>
 </div>
 </div>
 
@@ -575,6 +914,15 @@ let tickerAudioCtx = null;
 const TICKER_SOUND_KEY = 'umanager-tv-ticker-sound';
 const LAYOUT_SPLIT_KEY = 'umanager-tv-split-percent';
 const LAYOUT_FLIP_KEY = 'umanager-tv-panel-flipped';
+const OVERLAY_MODE_KEY = 'umanager-tv-overlay-mode';
+const OVERLAY_VISIBLE_KEY = 'umanager-tv-overlay-visible';
+
+/* Phase 23 slice 2: desktop overlay mode.
+   - overlayMode: true → race list floats over GCh video; false → classic split panel.
+   - overlayVisible: when overlay-mode, controls whether the floating card is shown.
+   Mobile portrait always renders the carousel (overlay rules are scoped out via CSS). */
+let overlayMode = true;
+let overlayVisible = true;
 
 async function fetchAppConfig() {
     const res = await fetch('/api/config');
@@ -608,6 +956,8 @@ async function saveTvLayoutToConfig() {
         if (!appConfig.ui || typeof appConfig.ui !== 'object') appConfig.ui = {};
         appConfig.ui.tvModeSplitPercent = clampSplitPercent(splitPercent);
         appConfig.ui.tvModePanelsFlipped = !!panelFlipped;
+        appConfig.ui.tvModeOverlay = !!overlayMode;
+        appConfig.ui.tvModeOverlayVisible = !!overlayVisible;
         await fetch('/api/config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -630,6 +980,9 @@ function clampSplitPercent(val) {
 
 function applySplitLayout() {
     const tv = document.getElementById('tv-layout');
+    // In overlay-mode the split percent is meaningless — GCh fills the full
+    // layout. Skip so we don't clobber the stylesheet's 100% rule.
+    if (overlayMode) { tv.style.removeProperty('--gch-size'); return; }
     tv.style.setProperty('--gch-size', splitPercent + '%');
 }
 
@@ -637,6 +990,8 @@ function persistLayoutPrefs() {
     try {
         localStorage.setItem(LAYOUT_SPLIT_KEY, String(splitPercent));
         localStorage.setItem(LAYOUT_FLIP_KEY, panelFlipped ? '1' : '0');
+        localStorage.setItem(OVERLAY_MODE_KEY, overlayMode ? '1' : '0');
+        localStorage.setItem(OVERLAY_VISIBLE_KEY, overlayVisible ? '1' : '0');
     } catch (err) {
         // Ignore storage failures.
     }
@@ -661,8 +1016,47 @@ function togglePanelFlip() {
     persistLayoutPrefs();
 }
 
+function applyOverlayModeUi() {
+    document.body.classList.toggle('overlay-mode', overlayMode);
+    const racelist = document.getElementById('racelist-panel');
+    if (racelist) racelist.classList.toggle('is-hidden', overlayMode && !overlayVisible);
+    const btn = document.getElementById('mode-toggle-btn');
+    if (btn) {
+        btn.textContent = overlayMode ? '▤ Split' : '🎴 Overlay';
+        btn.title = overlayMode
+            ? 'Switch to classic split-panel layout (M)'
+            : 'Switch to overlay layout (M)';
+    }
+    // The inline --gch-size from applySplitLayout() would override the
+    // body.overlay-mode CSS rule. In overlay-mode, GCh fills the whole
+    // layout; in split-mode, restore the user's saved split.
+    const tv = document.getElementById('tv-layout');
+    if (tv) {
+        if (overlayMode) tv.style.removeProperty('--gch-size');
+        else applySplitLayout();
+    }
+}
+function toggleOverlayMode() {
+    overlayMode = !overlayMode;
+    // When entering overlay-mode, default the overlay to visible.
+    if (overlayMode) overlayVisible = true;
+    applyOverlayModeUi();
+    persistLayoutPrefs();
+}
+function setOverlayVisible(visible) {
+    if (!overlayMode) return;
+    overlayVisible = !!visible;
+    applyOverlayModeUi();
+    persistLayoutPrefs();
+}
+function toggleOverlayVisible() {
+    setOverlayVisible(!overlayVisible);
+}
+
 async function loadLayoutPrefs() {
     let loadedFromConfig = false;
+    let overlayModeFromCfg = null;
+    let overlayVisibleFromCfg = null;
     try {
         const cfg = await fetchAppConfig();
         const cfgSplit = Number(cfg?.ui?.tvModeSplitPercent);
@@ -675,6 +1069,8 @@ async function loadLayoutPrefs() {
             panelFlipped = cfgFlip;
             loadedFromConfig = true;
         }
+        if (typeof cfg?.ui?.tvModeOverlay === 'boolean') overlayModeFromCfg = cfg.ui.tvModeOverlay;
+        if (typeof cfg?.ui?.tvModeOverlayVisible === 'boolean') overlayVisibleFromCfg = cfg.ui.tvModeOverlayVisible;
     } catch (err) {
         // Fallback to local storage.
     }
@@ -686,12 +1082,21 @@ async function loadLayoutPrefs() {
             splitPercent = clampSplitPercent(rawSplit == null ? 50 : parseFloat(rawSplit));
             panelFlipped = rawFlip === '1';
         }
+        const rawOverlay = localStorage.getItem(OVERLAY_MODE_KEY);
+        const rawOverlayVis = localStorage.getItem(OVERLAY_VISIBLE_KEY);
+        overlayMode = overlayModeFromCfg != null ? overlayModeFromCfg
+                    : (rawOverlay == null ? true : rawOverlay === '1');
+        overlayVisible = overlayVisibleFromCfg != null ? overlayVisibleFromCfg
+                       : (rawOverlayVis == null ? true : rawOverlayVis === '1');
     } catch (err) {
         splitPercent = 50;
         panelFlipped = false;
+        overlayMode = true;
+        overlayVisible = true;
     }
     applySplitLayout();
     applyPanelFlipUi();
+    applyOverlayModeUi();
 }
 
 function installSplitHandle() {
@@ -932,12 +1337,32 @@ function showError(msg) {
     el.textContent = msg;
 }
 
-/* ── Choose active date ── */
+/* ── Choose active date ──
+   TV mode shows the day-of-action only. Pick the date that contains the race
+   closest to "now" (next-upcoming wins; falls back to most-recent-finished). */
 function pickInitialDate() {
-    const upcoming = Object.keys(racesData.upcoming_races_by_date || {}).sort();
-    if (upcoming.length) return upcoming[0];
-    const all = Object.keys(racesData.races_by_date || {}).sort();
-    return all.length ? all[all.length - 1] : null;
+    const byDate = racesData.races_by_date || {};
+    const dates = Object.keys(byDate);
+    if (!dates.length) return null;
+
+    const now = Date.now();
+    let bestUpcoming = null, bestUpcomingDelta = Infinity;
+    let bestPast = null,     bestPastDelta     = Infinity;
+
+    for (const d of dates) {
+        for (const r of byDate[d] || []) {
+            const dt = parseTvRaceTime({ sortTime: (r.info || {}).sort_time, info: r.info });
+            if (!dt) continue;
+            const delta = dt.getTime() - now;
+            if (delta >= 0) {
+                if (delta < bestUpcomingDelta) { bestUpcoming = d; bestUpcomingDelta = delta; }
+            } else {
+                const ago = -delta;
+                if (ago < bestPastDelta) { bestPast = d; bestPastDelta = ago; }
+            }
+        }
+    }
+    return bestUpcoming || bestPast || dates.sort()[dates.length - 1];
 }
 
 /* ── Next-results-tick countdown (polls orchestrator status) ── */
@@ -1022,23 +1447,94 @@ function loadTickerSoundPref() {
 }
 
 /* ── Results ticker (top-5 from most recent finished race) ── */
+/* "Upcoming" ticker mode — shown when no race has finishers yet (Thursday →
+   Friday morning, before the first card runs). Picks the next-upcoming race
+   by sort_time and surfaces market top-3 favorites + countdown, so the top
+   bar is always populated. Marquee on mobile still applies. */
+function renderUpcomingTicker(allRaces) {
+    const ticker = document.getElementById('results-ticker');
+    if (!ticker) return;
+    const now = Date.now();
+    const upcoming = allRaces
+        .map(r => ({ r, dt: parseTvRaceTime({ sortTime: (r.info || {}).sort_time, info: r.info }) }))
+        .filter(x => x.dt && x.dt.getTime() > now - 5 * 60 * 1000)  // include races that just went off
+        .sort((a, b) => a.dt - b.dt);
+
+    if (!upcoming.length) {
+        ticker.classList.remove('visible');
+        ticker.innerHTML = '';
+        return;
+    }
+    const race = upcoming[0].r;
+    const info = race.info || {};
+    const place = String(info.place_name || info.place || '').toUpperCase();
+    const raceNo = info.race_number || '?';
+    const raceTime = tvFormatRaceTime(info);
+    const eta = tvmFormatEta(race);
+
+    const entries = Array.isArray(race.entries) ? race.entries : [];
+    const top3 = entries
+        .filter(e => {
+            const f = parseInt(String(e.Fav || '').trim(), 10);
+            return Number.isFinite(f) && f >= 1 && f <= 3;
+        })
+        .sort((a, b) => parseInt(a.Fav, 10) - parseInt(b.Fav, 10));
+
+    const soundLabel = tickerSoundEnabled ? '🔔' : '🔕';
+    let html = `<button id="rt-sound-toggle" type="button" onclick="toggleTickerSound()" title="Toggle ticker chime">${soundLabel}</button>`;
+    html += `<span class="rt-label" style="color:#1dd1a1;">⏭ NEXT</span>`;
+    html += `<span class="rt-race">${esc(place)} R${esc(String(raceNo))} · ${esc(raceTime)}</span>`;
+    if (eta.text) {
+        const etaColor = eta.cls === 'is-live' ? '#ff5b5b'
+                       : eta.cls === 'is-soon' ? '#f5a623'
+                       : '#888';
+        html += `<span class="rt-race" style="color:${etaColor};font-weight:bold;">${esc(eta.text)}</span>`;
+    }
+
+    if (top3.length) {
+        for (const e of top3) {
+            const fav = parseInt(e.Fav, 10);
+            const pp = parseInt(e.PP, 10);
+            const bk = parseInt(e.BK, 10) || 0;
+            const c = BK_COLORS[bk] || { bg: '#444', color: '#fff', border: '#555' };
+            const ppHtml = Number.isFinite(pp)
+                ? `<span class="rt-pp" style="background:${c.bg};color:${c.color};border-color:${c.border}">${pp}</span>`
+                : '';
+            const name = String(e.Horse || '').trim() || '—';
+            const oddsRaw = parseFloat(e.Odds);
+            const oddsHtml = Number.isFinite(oddsRaw) && oddsRaw > 0
+                ? ` <span style="color:#aaa;font-variant-numeric:tabular-nums;">×${oddsRaw.toFixed(1)}</span>`
+                : '';
+            html += `<span class="rt-finisher"><span class="rt-pos">#${fav}</span>${ppHtml}<span class="rt-name">${esc(name)}</span>${oddsHtml}</span>`;
+        }
+    } else {
+        html += `<span class="rt-race" style="color:#666;font-style:italic;">Market opens with morning odds</span>`;
+    }
+
+    html += `<span id="rt-next-tick" title="Time until next data poll">${esc(formatNextTickLabel())}</span>`;
+
+    ticker.innerHTML = html;
+    ticker.classList.add('visible');
+    lastTickerRaceId = String(info.race_id || '');
+    lastTickerHadHit = false;
+    applyTickerMarquee();
+}
+
 function renderResultsTicker() {
     const ticker = document.getElementById('results-ticker');
     if (!ticker) return;
 
-    // Find most recent race with finish data across ALL dates. "Most recent" = highest
-    // sort_time among races that have at least one entry with Finish populated.
-    const allRaces = [];
-    for (const list of Object.values(racesData?.races_by_date || {})) {
-        if (Array.isArray(list)) allRaces.push(...list);
-    }
+    // Scope to activeDate (today's race day, auto-picked). Otherwise the ticker
+    // sticks on last week's last-finished race even after the new race day rolls in.
+    const allRaces = Array.isArray((racesData?.races_by_date || {})[activeDate])
+        ? (racesData.races_by_date[activeDate]).slice()
+        : [];
     const finished = allRaces.filter(r => {
         const entries = Array.isArray(r.entries) ? r.entries : [];
         return entries.some(e => String(e.Finish || '').trim() !== '' && String(e.Finish).trim() !== '0');
     });
     if (!finished.length) {
-        ticker.classList.remove('visible');
-        ticker.innerHTML = '';
+        renderUpcomingTicker(allRaces);
         return;
     }
     finished.sort((a, b) => {
@@ -1132,6 +1628,7 @@ function renderResultsTicker() {
 
     ticker.innerHTML = html;
     ticker.classList.add('visible');
+    applyTickerMarquee();
 
     // Flash + chime only when something actually changed: the ticker advanced to
     // a new race, or a hit appeared on the race we were already showing (e.g. the
@@ -1164,27 +1661,14 @@ function renderAll() {
         return;
     }
 
-    if (!activeDate || !allDates.includes(activeDate)) {
-        activeDate = pickInitialDate() || allDates[0];
-    }
+    // TV mode always tracks the closest-to-now race; recompute every render so
+    // we follow the action without a manual date picker.
+    activeDate = pickInitialDate() || allDates[0];
 
-    renderDateTabs(allDates);
     renderRaceList();
     renderResultsTicker();
+    renderMobileShell();
     document.getElementById('racelist-date-label').textContent = activeDate;
-}
-
-function renderDateTabs(dates) {
-    const container = document.getElementById('date-tabs');
-    container.innerHTML = dates.map(d =>
-        `<button class="date-tab ${d === activeDate ? 'active' : ''}" onclick="switchDate('${esc(d)}')" type="button">${esc(d)}</button>`
-    ).join('');
-}
-
-function switchDate(date) {
-    activeDate = date;
-    forceScrollOnNextCollapse = true;
-    renderAll();
 }
 
 function renderRaceList() {
@@ -1363,6 +1847,240 @@ function autoCollapseRacesTv() {
     }
 }
 
+/* ════════════════════════════════════════════════════════════════
+   Phase 23: Mobile portrait carousel
+   ════════════════════════════════════════════════════════════════ */
+function isMobilePortrait() {
+    return window.matchMedia('(max-width: 700px) and (orientation: portrait)').matches;
+}
+
+function pickActiveRace() {
+    if (!racesData || !activeDate) return null;
+    const races = (racesData.races_by_date || {})[activeDate] || [];
+    if (!races.length) return null;
+
+    const now = Date.now();
+    let next = null, nextMs = Infinity;
+    let lastDone = null, lastDoneMs = -Infinity;
+
+    for (const r of races) {
+        const dt = parseTvRaceTime({ sortTime: (r.info || {}).sort_time, info: r.info });
+        if (!dt) continue;
+        const ms = dt.getTime();
+        if (ms > now) {
+            if (ms < nextMs) { next = r; nextMs = ms; }
+        } else {
+            if (ms > lastDoneMs) { lastDone = r; lastDoneMs = ms; }
+        }
+    }
+    // Prefer the next-upcoming race; fall back to the most recently finished
+    // (useful when a card is winding down and the user is reading top-3).
+    return next || lastDone;
+}
+
+function tvmFormatEta(race) {
+    const dt = parseTvRaceTime({ sortTime: (race.info || {}).sort_time, info: race.info });
+    if (!dt) return { text: '', cls: '' };
+    const diffMs = dt.getTime() - Date.now();
+    if (diffMs <= -15 * 60 * 1000) return { text: 'finished', cls: '' };
+    if (diffMs <= 0) return { text: 'LIVE', cls: 'is-live' };
+    const total = Math.round(diffMs / 1000);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    const text = m >= 60
+        ? `${Math.floor(m / 60)}h ${m % 60}m`
+        : (m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`);
+    return { text: `off in ${text}`, cls: diffMs <= 5 * 60 * 1000 ? 'is-soon' : '' };
+}
+
+function getMarksForRace(raceId) {
+    const out = {};
+    const marks = (marksData && marksData.marks) || {};
+    for (const [key, symbol] of Object.entries(marks)) {
+        if (!symbol || symbol === 'X') continue;
+        const under = key.lastIndexOf('_');
+        if (under < 0 || key.slice(0, under) !== raceId) continue;
+        out[key.slice(under + 1)] = symbol;
+    }
+    return out;
+}
+
+/* Build one card per race; swipe between races.
+   Each card mirrors landscape's compact view: marked horses with PP/mark/name/fav.
+   On data load, snap to the active race (next-upcoming, or last-finished if all done). */
+let mobileShellLastSig = '';
+let mobileShellPendingScroll = true;
+
+function renderMobileShell(opts) {
+    opts = opts || {};
+    if (!isMobilePortrait()) return;
+
+    const carousel = document.getElementById('tv-mobile-carousel');
+    if (!carousel) return;
+
+    if (!racesData || !activeDate) {
+        carousel.innerHTML = '<div class="tv-card"><div class="tv-card-body"><div class="tv-card-empty">Waiting for race data…</div></div></div>';
+        return;
+    }
+
+    const races = (racesData.races_by_date || {})[activeDate] || [];
+    if (!races.length) {
+        carousel.innerHTML = '<div class="tv-card"><div class="tv-card-body"><div class="tv-card-empty">No races for this date.</div></div></div>';
+        return;
+    }
+
+    // Sort by sort_time so swipe order is chronological.
+    const sortedRaces = races.slice().sort((a, b) => {
+        const ta = (a.info && a.info.sort_time) || '';
+        const tb = (b.info && b.info.sort_time) || '';
+        return String(ta).localeCompare(String(tb));
+    });
+    const activeRace = pickActiveRace();
+    const activeRaceId = activeRace ? String(activeRace.info?.race_id || '') : '';
+
+    // Re-render whole carousel only when race set changes; otherwise just update ETAs.
+    const sig = activeDate + '|' + sortedRaces.map(r => String(r.info?.race_id || '')).join(',');
+    if (sig !== mobileShellLastSig) {
+        carousel.innerHTML = sortedRaces.map((r, idx) =>
+            buildRaceCard(r, idx, sortedRaces.length, activeRaceId)
+        ).join('');
+        mobileShellLastSig = sig;
+        mobileShellPendingScroll = true;
+    } else {
+        // Refresh per-card body content (marks/odds may have changed) without rebuilding the shell.
+        sortedRaces.forEach((r, idx) => {
+            const rid = String(r.info?.race_id || idx);
+            const body = document.getElementById('tvm-body-' + rid);
+            if (body) body.innerHTML = buildRaceCardBody(r);
+            const isActive = rid === activeRaceId;
+            const etaEl = document.getElementById('tvm-eta-' + rid);
+            if (etaEl) {
+                const eta = tvmFormatEta(r);
+                etaEl.textContent = eta.text;
+                etaEl.className = 'race-eta ' + (isActive ? (eta.cls || 'is-active') : eta.cls);
+            }
+            // Active-card highlight follows the rolling activeRaceId — re-toggle every tick.
+            const card = carousel.querySelector('.tv-card[data-race-id="' + rid.replace(/"/g, '\\"') + '"]');
+            if (card) card.classList.toggle('is-active', isActive);
+        });
+    }
+
+    // Snap to active race after the DOM settles. Skip if user has already scrolled
+    // manually since the last data refresh (mobileShellPendingScroll cleared on swipe).
+    if (mobileShellPendingScroll && activeRaceId) {
+        const idx = sortedRaces.findIndex(r => String(r.info?.race_id || '') === activeRaceId);
+        if (idx >= 0) {
+            requestAnimationFrame(() => {
+                const card = carousel.children[idx];
+                if (card) card.scrollIntoView({ inline: 'start', block: 'nearest', behavior: opts.smooth ? 'smooth' : 'auto' });
+            });
+        }
+        mobileShellPendingScroll = false;
+    }
+}
+
+function buildRaceCard(race, idx, total, activeRaceId) {
+    const info = race.info || {};
+    const raceId = String(info.race_id || idx).trim();
+    const place = String(info.place_name || info.place || '').toUpperCase();
+    const raceNo = info.race_number || '?';
+    const raceTime = tvFormatRaceTime(info);
+    const raceName = String(info.race_name || info.name || '').trim();
+    const label = `${place} R${raceNo} · ${raceTime}${raceName ? ' · ' + raceName : ''}`;
+    const eta = tvmFormatEta(race);
+    const isActive = raceId === activeRaceId;
+    const etaCls = isActive ? (eta.cls || 'is-active') : eta.cls;
+
+    return `<div class="tv-card${isActive ? ' is-active' : ''}" data-race-id="${esc(raceId)}">
+        <div class="tvm-race-header">
+            <span class="race-label">${esc(label)}</span>
+            <span class="race-eta ${etaCls}" id="tvm-eta-${esc(raceId)}">${esc(eta.text)}</span>
+            <span class="race-pager">${idx + 1}/${total}</span>
+        </div>
+        <div class="tv-card-body" id="tvm-body-${esc(raceId)}">${buildRaceCardBody(race)}</div>
+    </div>`;
+}
+
+function buildRaceCardBody(race) {
+    const info = race.info || {};
+    const raceId = String(info.race_id || '').trim();
+    const entries = Array.isArray(race.entries) ? race.entries : [];
+    const markByHorse = getMarksForRace(raceId);
+
+    const markedIds = Object.keys(markByHorse);
+    if (!markedIds.length) {
+        return '<div class="tv-card-empty">No marks set for this race.<br><br>Set marks on the main dashboard — they\'ll appear here.</div>';
+    }
+
+    const rows = markedIds.map(hid => {
+        const sym = markByHorse[hid];
+        const e = entries.find(x => String(x.Horse_ID ?? '').split('.')[0] === hid);
+        return {
+            sym,
+            rank: MARK_RANK[sym] || 99,
+            name: e ? String(e.Horse || '—') : 'Unknown',
+            pp: e ? parseInt(e.PP) : null,
+            bk: e ? (parseInt(e.BK) || 0) : 0,
+            fav: e ? String(e.Fav || '').trim() : '',
+        };
+    }).sort((a, b) => a.rank - b.rank);
+
+    return rows.map(r => {
+        const c = BK_COLORS[r.bk] || { bg: '#444', color: '#fff', border: '#555' };
+        const bkStyle = `background:${c.bg};color:${c.color};border-color:${c.border};`;
+        const ppBadge = Number.isFinite(r.pp) && r.pp > 0
+            ? `<span class="badge" style="${bkStyle}">${r.pp}</span>`
+            : `<span class="badge empty"></span>`;
+        const symBadge = `<span class="badge" style="${bkStyle};font-size:${r.sym === '◎' ? '17px' : '14px'};">${esc(r.sym)}</span>`;
+        const favHtml = r.fav
+            ? `<span class="row-fav${r.fav === '1' ? ' is-chalk' : ''}">Fav ${esc(r.fav)}</span>`
+            : `<span class="row-fav">Fav —</span>`;
+        return `<div class="tv-row">${ppBadge}${symBadge}<span class="row-name">${esc(r.name)}</span>${favHtml}</div>`;
+    }).join('');
+}
+
+/* Clear pending-scroll the moment the user manually swipes — prevents the next
+   tick (every 1s) from yanking them back to the active race. */
+function installMobileCarousel() {
+    const carousel = document.getElementById('tv-mobile-carousel');
+    if (!carousel) return;
+    let lastScrollLeft = carousel.scrollLeft;
+    carousel.addEventListener('scroll', () => {
+        if (Math.abs(carousel.scrollLeft - lastScrollLeft) > 5) {
+            mobileShellPendingScroll = false;
+            lastScrollLeft = carousel.scrollLeft;
+        }
+    }, { passive: true });
+}
+
+/* Wrap the existing #results-ticker content in a marquee track when in mobile
+   portrait, and duplicate it so the loop reads continuously. Idempotent — runs
+   after every ticker render. */
+function applyTickerMarquee() {
+    const ticker = document.getElementById('results-ticker');
+    if (!ticker || !ticker.classList.contains('visible')) return;
+    if (!isMobilePortrait()) {
+        // Unwrap if we previously wrapped.
+        const track = ticker.querySelector('#rt-marquee-track');
+        if (track) {
+            ticker.innerHTML = track.innerHTML.split('<span class="rt-marquee-spacer"></span>')[0];
+        }
+        return;
+    }
+    if (ticker.querySelector('#rt-marquee-track')) return; // already wrapped
+    const inner = ticker.innerHTML;
+    ticker.innerHTML = `<div id="rt-marquee-track">${inner}<span class="rt-marquee-spacer" style="display:inline-block;width:40px;"></span>${inner}</div>`;
+    // Tap to pause/resume.
+    ticker.addEventListener('click', () => ticker.classList.toggle('is-paused'), { once: false });
+}
+
+/* Auto-refresh: re-render mobile shell every second so the ETA countdown is live
+   without waiting on /api/races; also keep the ticker marquee wrapper applied. */
+setInterval(() => {
+    if (isMobilePortrait()) renderMobileShell();
+    applyTickerMarquee();
+}, 1000);
+
 /* ── Auto-refresh every 60 s (fallback; SignalR pushes faster) ── */
 setInterval(loadRaces, 60000);
 setInterval(autoCollapseRacesTv, 5000);
@@ -1393,10 +2111,26 @@ async function bootLiveHub() {
     } catch (_) { /* fall back to 60s polling */ }
 }
 
+/* ── Hotkeys (desktop) ──
+   M: toggle overlay/split mode. O: toggle overlay visibility in overlay-mode.
+   Ignored while typing in inputs. */
+function installHotkeys() {
+    document.addEventListener('keydown', (e) => {
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        const k = (e.key || '').toLowerCase();
+        if (k === 'm') { e.preventDefault(); toggleOverlayMode(); }
+        else if (k === 'o') { e.preventDefault(); toggleOverlayVisible(); }
+    });
+}
+
 /* ── Boot ── */
 loadTickerSoundPref();
 loadLayoutPrefs();
 installSplitHandle();
+installMobileCarousel();
+installHotkeys();
 bootGchEmbed();
 forceScrollOnNextCollapse = true;
 loadRaces();

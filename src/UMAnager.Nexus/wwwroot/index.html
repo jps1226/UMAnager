@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260522-9">
+    <link rel="stylesheet" href="/static/style.css?v=20260522-10">
 </head>
 <body>
 
@@ -116,19 +116,6 @@
         </div>
     </details>
 
-    <details id="auto-pick-group" class="sidebar-group" open>
-            <summary>⚙️ Auto-Pick Strategy</summary>
-            <div class="sidebar-group-content strategy-panel-content">
-                <div class="strategy-mode-label">
-                    Mode: <span id="risk-label" class="risk-label-value">Balanced (50)</span>
-                </div>
-                <input type="range" id="risk-slider" min="0" max="100" value="50" oninput="updateRiskLabel(this.value)">
-                <div class="strategy-scale-labels">
-                    <span>SAFE / CHALK</span>
-                    <span>CHAOS / VALUE</span>
-                </div>
-            </div>
-        </details>
         
     </div>
 
@@ -176,26 +163,36 @@
                 </div>
             </div>
             <div class="top-bar-right">
-                <div id="phase-badge" class="phase-badge phase-waiting">
-                    <div class="phase-badge-label">⏸ Waiting</div>
-                    <div id="phase-badge-sub" class="phase-badge-sub">Loading…</div>
+                <div class="top-bar-right-row">
+                    <div id="phase-badge" class="phase-badge phase-waiting">
+                        <div class="phase-badge-label">⏸ Waiting</div>
+                        <div id="phase-badge-sub" class="phase-badge-sub">Loading…</div>
+                    </div>
+                    <div id="quick-stats" class="quick-stats">
+                        <div class="quick-stat-block">
+                            <div class="quick-stat-label">Marks</div>
+                            <div id="qs-marks" class="quick-stat-value">—</div>
+                            <div id="qs-marks-detail" class="quick-stat-sub">no day</div>
+                        </div>
+                        <div class="quick-stat-block">
+                            <div class="quick-stat-label">Agreement</div>
+                            <div id="qs-agreement" class="quick-stat-value">—</div>
+                            <div id="qs-agreement-sub" class="quick-stat-sub">engine vs you</div>
+                            <div id="qs-agreement-best" class="quick-stat-sub quick-stat-best" title="Risk slider value that would best match your marks today"></div>
+                        </div>
+                        <div class="quick-stat-block">
+                            <div class="quick-stat-label">Day P/L</div>
+                            <div id="qs-pl" class="quick-stat-value">—</div>
+                            <div id="qs-pl-sub" class="quick-stat-sub">stake / net</div>
+                        </div>
+                    </div>
                 </div>
-                <div id="quick-stats" class="quick-stats">
-                    <div class="quick-stat-block">
-                        <div class="quick-stat-label">Marks</div>
-                        <div id="qs-marks" class="quick-stat-value">—</div>
-                        <div id="qs-marks-detail" class="quick-stat-sub">no day</div>
-                    </div>
-                    <div class="quick-stat-block">
-                        <div class="quick-stat-label">Agreement</div>
-                        <div id="qs-agreement" class="quick-stat-value">—</div>
-                        <div id="qs-agreement-sub" class="quick-stat-sub">engine vs you</div>
-                        <div id="qs-agreement-best" class="quick-stat-sub quick-stat-best" title="Risk slider value that would best match your marks today"></div>
-                    </div>
-                    <div class="quick-stat-block">
-                        <div class="quick-stat-label">Day P/L</div>
-                        <div id="qs-pl" class="quick-stat-value">—</div>
-                        <div id="qs-pl-sub" class="quick-stat-sub">stake / net</div>
+                <div class="top-bar-risk">
+                    <div class="top-bar-risk-label">MODE: <span id="risk-label" class="risk-label-value">Balanced (50)</span></div>
+                    <input type="range" id="risk-slider" min="0" max="100" value="50" oninput="updateRiskLabel(this.value)">
+                    <div class="top-bar-risk-scale">
+                        <span>SAFE / CHALK</span>
+                        <span>CHAOS / VALUE</span>
                     </div>
                 </div>
             </div>
@@ -291,10 +288,6 @@
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-weekendWatchlist" onchange="updateSidebarSettings()">
                             <span>🏆 Weekend Watchlist</span>
-                        </label>
-                        <label class="settings-option-row">
-                            <input type="checkbox" id="setting-autoPickStrategy" onchange="updateSidebarSettings()">
-                            <span>⚙️ Auto-Pick Strategy</span>
                         </label>
                         <label class="settings-option-row dev-only">
                             <input type="checkbox" id="setting-advancedTools" onchange="updateSidebarSettings()">
@@ -567,6 +560,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260522-4"></script>
+<script src="/static/script.js?v=20260522-6"></script>
 </body>
 </html>

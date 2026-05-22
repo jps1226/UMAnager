@@ -6,6 +6,7 @@ namespace UMAnager.Nexus.Services;
 public enum AppPhase
 {
     WAITING_FOR_RACES,
+    AWAITING_ODDS,
     RACES_POPULATED,
     LIVE_OPERATIONS,
 }
@@ -84,7 +85,19 @@ public sealed class PhaseService
             .AsNoTracking()
             .AnyAsync(r => r.SortTime != null && r.SortTime > jstNow);
 
-        return anyFuture ? AppPhase.RACES_POPULATED : AppPhase.WAITING_FOR_RACES;
+        if (!anyFuture) return AppPhase.WAITING_FOR_RACES;
+
+        // Split RACES_POPULATED: if no upcoming-race entry has odds yet, we're still
+        // waiting on JRA to publish them (Thu evening JST → Fri morning JST). Poll
+        // tighter in that window so first-odds-publish is picked up promptly.
+        var anyUpcomingOdds = await ctx.RaceEntries
+            .AsNoTracking()
+            .AnyAsync(e => e.Odds != null
+                        && ctx.Races.Any(r => r.RaceId == e.RaceId
+                                           && r.SortTime != null
+                                           && r.SortTime > jstNow));
+
+        return anyUpcomingOdds ? AppPhase.RACES_POPULATED : AppPhase.AWAITING_ODDS;
     }
 
     public async Task<bool> IsLivePollPausedAsync()

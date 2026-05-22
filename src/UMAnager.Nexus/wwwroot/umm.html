@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎤 Uma Musume — Character Roster</title>
+<style>
+/* ── Reset & Base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f5eef8;
+    color: #3a1040;
+    min-height: 100vh;
+}
+
+/* ── Header — game's diagonal-hatched green gradient ─────────────────────── */
+.umm-header {
+    background: linear-gradient(135deg, #4caf50 0%, #81c784 40%, #66bb6a 100%);
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    height: 58px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 3px 12px rgba(76,175,80,0.4);
+    /* diagonal hash pattern like the game */
+    background-image:
+        linear-gradient(135deg, #4caf50 0%, #81c784 40%, #66bb6a 100%),
+        repeating-linear-gradient(
+            45deg,
+            transparent,
+            transparent 8px,
+            rgba(255,255,255,0.06) 8px,
+            rgba(255,255,255,0.06) 10px
+        );
+    background-blend-mode: normal;
+}
+
+.umm-back-btn {
+    color: #fff;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+    background: rgba(0,0,0,0.18);
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 20px;
+    padding: 5px 12px;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+.umm-back-btn:hover { background: rgba(0,0,0,0.32); }
+
+.umm-header h1 {
+    color: #fff;
+    font-size: 20px;
+    font-weight: 800;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.25);
+    letter-spacing: 0.03em;
+    flex: 1;
+}
+
+.umm-header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.umm-btn {
+    padding: 7px 16px;
+    border: none;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+    white-space: nowrap;
+}
+.umm-btn:hover { opacity: 0.85; transform: translateY(-1px); }
+.umm-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+.umm-btn-add-all {
+    background: linear-gradient(135deg, #ff7eb9, #f0409a);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(240,64,154,0.4);
+}
+.umm-btn-remove-all {
+    background: rgba(255,255,255,0.25);
+    color: #fff;
+    border: 1.5px solid rgba(255,255,255,0.5);
+}
+
+/* ── Stats bar ────────────────────────────────────────────────────────────── */
+.umm-stats-bar {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 10px 20px;
+    background: #fff;
+    border-bottom: 1.5px solid #e8d0f0;
+    font-size: 13px;
+    flex-wrap: wrap;
+}
+
+.umm-stat {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-weight: 600;
+    color: #7a3090;
+}
+.umm-stat-val {
+    background: linear-gradient(135deg, #f0d0ff, #e0b0f8);
+    color: #5a1080;
+    border-radius: 10px;
+    padding: 1px 8px;
+    font-size: 12px;
+    font-weight: 700;
+}
+.umm-stat-val.green { background: linear-gradient(135deg, #c8f0c8, #a0e0a0); color: #1a6020; }
+.umm-stat-val.pink  { background: linear-gradient(135deg, #ffd8ec, #ffb0d8); color: #9a1060; }
+.umm-stat-val.gray  { background: #e8e8e8; color: #666; }
+
+.umm-filter-wrap {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+}
+.umm-filter-btn {
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1.5px solid #d0a0e8;
+    background: transparent;
+    color: #7a3090;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.umm-filter-btn.active, .umm-filter-btn:hover {
+    background: linear-gradient(135deg, #e8b0f8, #d090e8);
+    color: #fff;
+    border-color: transparent;
+}
+
+/* ── Grid ─────────────────────────────────────────────────────────────────── */
+.umm-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    gap: 14px;
+    padding: 18px 20px 40px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+/* ── Character card ───────────────────────────────────────────────────────── */
+.umm-card {
+    background: #fff;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 3px 10px rgba(180,100,220,0.1);
+    border: 2.5px solid #e0b8f0;
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.15s, box-shadow 0.15s;
+    position: relative;
+}
+.umm-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px rgba(180,100,220,0.2);
+}
+.umm-card.is-added {
+    border-color: #d4a017;
+    box-shadow: 0 0 0 1px #d4a017, 0 4px 14px rgba(212,160,23,0.25);
+}
+.umm-card.is-still-racing {
+    opacity: 0.55;
+    filter: grayscale(0.4);
+}
+.umm-card.is-unresolved {
+    border-style: dashed;
+    border-color: #ccc;
+    opacity: 0.7;
+}
+
+/* Gold corner ribbon for added cards */
+.umm-card.is-added::before {
+    content: '✓';
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    background: linear-gradient(135deg, #f5c518, #d4a017);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 900;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+}
+
+/* Portrait area */
+.umm-portrait {
+    height: 110px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 46px;
+    position: relative;
+    overflow: hidden;
+    user-select: none;
+}
+.umm-portrait-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+    display: block;
+}
+.umm-portrait-img + .umm-portrait-emoji { display: none; }
+.umm-portrait.no-img .umm-portrait-emoji { display: inline; }
+
+/* Card body */
+.umm-card-body {
+    padding: 8px 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+}
+.umm-char-name {
+    font-size: 12.5px;
+    font-weight: 800;
+    color: #3a1040;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.umm-horse-name {
+    font-size: 11px;
+    color: #8a50a0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-height: 15px;
+}
+
+/* Status row */
+.umm-card-status {
+    margin-top: 7px;
+}
+.umm-toggle-btn {
+    width: 100%;
+    padding: 5px 0;
+    border-radius: 8px;
+    border: none;
+    font-size: 11.5px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.12s, transform 0.1s;
+}
+.umm-toggle-btn:hover:not(:disabled) { opacity: 0.82; transform: scale(0.97); }
+.umm-toggle-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.umm-toggle-btn.btn-add {
+    background: linear-gradient(135deg, #ff7eb9, #f0409a);
+    color: #fff;
+}
+.umm-toggle-btn.btn-remove {
+    background: linear-gradient(135deg, #a8e6a8, #5cb85c);
+    color: #fff;
+}
+.umm-toggle-btn.btn-racing {
+    background: #e0e0e0;
+    color: #888;
+    cursor: default;
+}
+.umm-toggle-btn.btn-unresolved {
+    background: #f0f0f0;
+    color: #aaa;
+    cursor: default;
+    font-size: 10.5px;
+}
+
+/* ── Loading / empty state ───────────────────────────────────────────────── */
+.umm-loading {
+    text-align: center;
+    padding: 60px 20px;
+    color: #9a60b0;
+    font-size: 16px;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 500px) {
+    .umm-header h1 { font-size: 16px; }
+    .umm-btn { padding: 6px 10px; font-size: 12px; }
+    .umm-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; padding: 12px; }
+}
+</style>
+</head>
+<body>
+
+<header class="umm-header">
+    <a href="/" class="umm-back-btn">← Dashboard</a>
+    <h1>🎤 Character Roster</h1>
+    <div class="umm-header-actions">
+        <button class="umm-btn umm-btn-add-all" id="btn-add-all" onclick="addAll()">✨ Add All</button>
+        <button class="umm-btn umm-btn-remove-all" id="btn-remove-all" onclick="removeAll()">✖ Remove All</button>
+    </div>
+</header>
+
+<div class="umm-stats-bar">
+    <div class="umm-stat">Total <span class="umm-stat-val" id="stat-total">—</span></div>
+    <div class="umm-stat">In Bloodlines <span class="umm-stat-val green" id="stat-added">—</span></div>
+    <div class="umm-stat">Still Racing <span class="umm-stat-val gray" id="stat-racing">—</span></div>
+    <div class="umm-stat">Unresolved <span class="umm-stat-val pink" id="stat-unresolved">—</span></div>
+    <div class="umm-filter-wrap">
+        <button class="umm-filter-btn active" id="filter-all" onclick="setFilter('all')">All</button>
+        <button class="umm-filter-btn" id="filter-added" onclick="setFilter('added')">Added</button>
+        <button class="umm-filter-btn" id="filter-available" onclick="setFilter('available')">Not Added</button>
+    </div>
+</div>
+
+<div class="umm-grid" id="umm-grid">
+    <div class="umm-loading">🎠 Loading roster…</div>
+</div>
+
+<script>
+// Character portrait backgrounds — cycles through game-inspired pastels
+const PORTRAIT_PALETTES = [
+    ['#ffd6e8','#ffb3d1'],['#d6eaff','#b3d4ff'],['#d6ffd6','#b3f0b3'],
+    ['#fff3d6','#ffe0b3'],['#e8d6ff','#d4b3ff'],['#ffd6d6','#ffb3b3'],
+    ['#d6fff8','#b3f5e8'],['#ffefd6','#ffddb3'],['#e8ffd6','#d4ffb3'],
+    ['#ffd6f8','#ffb3f0'],
+];
+// Emoji horses / characters — a rotating set for visual variety
+const PORTRAITS = ['🐴','🏇','🎽','🌸','⭐','🌺','💫','🎀','🌟','🍀',
+                   '🎠','🦄','🎪','🌈','🎯','💖','✨','🎵','🌙','🔥'];
+
+let allChars = [];      // resolved characters from API
+let bloodlineIds = new Set(); // IDs currently in bloodlines
+let addedByRoster = new Set(); // IDs tracked in umamusume_added_ids
+let currentFilter = 'all';
+
+async function loadData() {
+    const [charsRes, listsRes] = await Promise.all([
+        fetch('/api/umamusume/characters'),
+        fetch('/api/lists'),
+    ]);
+
+    if (!charsRes.ok || !listsRes.ok) {
+        document.getElementById('umm-grid').innerHTML =
+            '<div class="umm-loading">⚠ Failed to load data — is Nexus running?</div>';
+        return;
+    }
+
+    const charsData = await charsRes.json();
+    const listsData = await listsRes.json();
+
+    allChars = charsData.characters || [];
+
+    // Parse bloodlines into a Set of IDs (format: "id" or "id#Name")
+    bloodlineIds = new Set(
+        (listsData.bloodlines || '').split('\n')
+            .map(l => l.trim().split('#')[0].trim())
+            .filter(Boolean)
+    );
+
+    // Parse which IDs the roster previously added (from API's added_count / enabled)
+    // We can infer from umamusume_added_ids — the API returns characters with matched_id
+    // We'll track locally as we toggle.
+
+    updateStats();
+    renderGrid();
+}
+
+function updateStats() {
+    const total = allChars.length;
+    const added = allChars.filter(c => c.matched_id && bloodlineIds.has(c.matched_id)).length;
+    const racing = allChars.filter(c => c.still_racing).length;
+    const unresolved = allChars.filter(c => !c.still_racing && !c.matched_id).length;
+
+    document.getElementById('stat-total').textContent = total;
+    document.getElementById('stat-added').textContent = added;
+    document.getElementById('stat-racing').textContent = racing;
+    document.getElementById('stat-unresolved').textContent = unresolved;
+}
+
+function setFilter(f) {
+    currentFilter = f;
+    document.querySelectorAll('.umm-filter-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('filter-' + f).classList.add('active');
+    renderGrid();
+}
+
+function renderGrid() {
+    const grid = document.getElementById('umm-grid');
+    const visible = allChars.filter(c => {
+        if (currentFilter === 'added')     return c.matched_id && bloodlineIds.has(c.matched_id);
+        if (currentFilter === 'available') return !c.still_racing && c.matched_id && !bloodlineIds.has(c.matched_id);
+        return true;
+    });
+
+    if (visible.length === 0) {
+        grid.innerHTML = '<div class="umm-loading">No characters match this filter.</div>';
+        return;
+    }
+
+    grid.innerHTML = visible.map((c, i) => buildCard(c, i)).join('');
+}
+
+function buildCard(c, i) {
+    const isAdded    = !!c.matched_id && bloodlineIds.has(c.matched_id);
+    const isRacing   = c.still_racing;
+    const isResolved = !!c.matched_id;
+
+    const pal = PORTRAIT_PALETTES[i % PORTRAIT_PALETTES.length];
+    const emoji = PORTRAITS[i % PORTRAITS.length];
+
+    let cardClass = 'umm-card';
+    if (isAdded)          cardClass += ' is-added';
+    else if (isRacing)    cardClass += ' is-still-racing';
+    else if (!isResolved) cardClass += ' is-unresolved';
+
+    let btnHtml;
+    if (isRacing) {
+        btnHtml = `<button class="umm-toggle-btn btn-racing" disabled>🏇 Still Racing</button>`;
+    } else if (!isResolved) {
+        btnHtml = `<button class="umm-toggle-btn btn-unresolved" disabled>? Not in DB</button>`;
+    } else if (isAdded) {
+        btnHtml = `<button class="umm-toggle-btn btn-remove" onclick="toggleChar(this,'${esc(c.matched_id)}','${esc(c.name_en)}',false)">✓ In Bloodlines</button>`;
+    } else {
+        btnHtml = `<button class="umm-toggle-btn btn-add" onclick="toggleChar(this,'${esc(c.matched_id)}','${esc(c.name_en)}',true)">+ Add to Bloodlines</button>`;
+    }
+
+    const horseName = c.matched_source ? (c.name_ja || '') : '';
+
+    const bgStyle = `background:linear-gradient(135deg,${pal[0]},${pal[1]})`;
+    const portraitInner = c.image_url
+        ? `<img src="${esc(c.image_url)}" alt="" loading="lazy" class="umm-portrait-img" onerror="this.remove();this.parentNode.classList.add('no-img');"><span class="umm-portrait-emoji">${emoji}</span>`
+        : `<span class="umm-portrait-emoji">${emoji}</span>`;
+
+    return `
+<div class="${cardClass}" id="card-${esc(c.matched_id || c.name_en)}">
+    <div class="umm-portrait" style="${bgStyle}">
+        ${portraitInner}
+    </div>
+    <div class="umm-card-body">
+        <div class="umm-char-name" title="${esc(c.name_en)}">${esc(c.name_en)}</div>
+        <div class="umm-horse-name" title="${esc(horseName)}">${esc(horseName)}</div>
+        <div class="umm-card-status">${btnHtml}</div>
+    </div>
+</div>`;
+}
+
+function esc(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+async function toggleChar(btn, id, name, add) {
+    btn.disabled = true;
+    btn.textContent = add ? '…Adding' : '…Removing';
+    try {
+        const resp = await fetch('/api/umamusume/toggle-character', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, name, add })
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+        if (add) bloodlineIds.add(id);
+        else     bloodlineIds.delete(id);
+
+        updateStats();
+        renderGrid(); // re-render so card state flips
+    } catch (err) {
+        alert(`Failed: ${err.message}`);
+        btn.disabled = false;
+        btn.textContent = add ? '+ Add to Bloodlines' : '✓ In Bloodlines';
+    }
+}
+
+async function addAll() {
+    const btn = document.getElementById('btn-add-all');
+    btn.disabled = true;
+    btn.textContent = '…Adding';
+    try {
+        const resp = await fetch('/api/umamusume/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: true })
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        // Update local bloodlineIds from the resolved characters
+        allChars.forEach(c => {
+            if (c.matched_id && !c.still_racing) bloodlineIds.add(c.matched_id);
+        });
+
+        updateStats();
+        renderGrid();
+        btn.textContent = `✨ Added ${data.inserted} new`;
+        setTimeout(() => { btn.textContent = '✨ Add All'; btn.disabled = false; }, 2000);
+    } catch (err) {
+        alert(`Add All failed: ${err.message}`);
+        btn.disabled = false;
+        btn.textContent = '✨ Add All';
+    }
+}
+
+async function removeAll() {
+    if (!confirm('Remove all Uma Musume characters from Bloodlines? Horses you added manually are untouched.')) return;
+    const btn = document.getElementById('btn-remove-all');
+    btn.disabled = true;
+    btn.textContent = '…Removing';
+    try {
+        const resp = await fetch('/api/umamusume/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: false })
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        allChars.forEach(c => { if (c.matched_id) bloodlineIds.delete(c.matched_id); });
+
+        updateStats();
+        renderGrid();
+        btn.textContent = `✖ Removed ${data.removed}`;
+        setTimeout(() => { btn.textContent = '✖ Remove All'; btn.disabled = false; }, 2000);
+    } catch (err) {
+        alert(`Remove All failed: ${err.message}`);
+        btn.disabled = false;
+        btn.textContent = '✖ Remove All';
+    }
+}
+
+loadData();
+</script>
+</body>
+</html>

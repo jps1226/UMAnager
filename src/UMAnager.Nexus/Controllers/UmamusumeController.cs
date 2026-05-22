@@ -28,11 +28,12 @@ public sealed class UmamusumeController : ControllerBase
         _env = env;
     }
 
-    private sealed record Character(string name_en, string name_ja, bool still_racing, string[]? aliases);
+    private sealed record Character(string name_en, string name_ja, bool still_racing, string[]? aliases, string? image_url);
     private sealed record CharactersFile(int version, string last_curated, Character[] characters);
 
     public sealed record ApplyRequest(bool enabled);
-    public sealed record ResolvedChar(string name_en, string? matched_id, string? matched_source, bool still_racing);
+    public sealed record ToggleCharRequest(string id, string name, bool add);
+    public sealed record ResolvedChar(string name_en, string? matched_id, string? matched_source, bool still_racing, string? image_url);
 
     [HttpGet("characters")]
     public async Task<IActionResult> List(CancellationToken ct)
@@ -138,6 +139,49 @@ public sealed class UmamusumeController : ControllerBase
         }
     }
 
+    [HttpPost("toggle-character")]
+    public async Task<IActionResult> ToggleCharacter([FromBody] ToggleCharRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.id)) return BadRequest("id required");
+
+        using var db = await _dbFactory.CreateDbContextAsync(ct);
+        using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        if (req.add)
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                "INSERT INTO user_horse_lists (list_type, horse_id, display_name) VALUES ('bloodlines', {0}, {1}) ON CONFLICT DO NOTHING",
+                new object[] { req.id, req.name ?? req.id }, ct);
+
+            // Track this ID in umamusume_added_ids so bulk Remove All can clean it up.
+            var addedJson = await GetAppStateAsync(db, "umamusume_added_ids", ct);
+            var addedIds = string.IsNullOrWhiteSpace(addedJson)
+                ? new List<string>()
+                : (JsonSerializer.Deserialize<List<string>>(addedJson) ?? new List<string>());
+            if (!addedIds.Contains(req.id, StringComparer.Ordinal))
+            {
+                addedIds.Add(req.id);
+                await SetAppStateAsync(db, "umamusume_added_ids", JsonSerializer.Serialize(addedIds), ct);
+            }
+        }
+        else
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                "DELETE FROM user_horse_lists WHERE list_type = 'bloodlines' AND horse_id = {0}",
+                new object[] { req.id }, ct);
+
+            var addedJson = await GetAppStateAsync(db, "umamusume_added_ids", ct);
+            var addedIds = string.IsNullOrWhiteSpace(addedJson)
+                ? new List<string>()
+                : (JsonSerializer.Deserialize<List<string>>(addedJson) ?? new List<string>());
+            addedIds.RemoveAll(x => string.Equals(x, req.id, StringComparison.Ordinal));
+            await SetAppStateAsync(db, "umamusume_added_ids", JsonSerializer.Serialize(addedIds), ct);
+        }
+
+        await tx.CommitAsync(ct);
+        return Ok(new { status = req.add ? "added" : "removed", id = req.id });
+    }
+
     private CharactersFile? LoadCharacterFile()
     {
         // Try ContentRoot/Resources first (where the build copies it), then fall
@@ -200,7 +244,7 @@ public sealed class UmamusumeController : ControllerBase
                 if (horseByJa.TryGetValue(name, out hid))       { id = hid; source = "horse";    break; }
             }
 
-            results.Add(new ResolvedChar(c.name_en, id, source, c.still_racing));
+            results.Add(new ResolvedChar(c.name_en, id, source, c.still_racing, c.image_url));
         }
         return results;
     }

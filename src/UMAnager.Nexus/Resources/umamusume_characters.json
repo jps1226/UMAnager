@@ -1,85 +1,1101 @@
 {
-  "version": 1,
+  "version": 2,
   "last_curated": "2026-05-21",
-  "notes": "Real-horse counterparts of Uma Musume Pretty Derby characters. Name matching tries name_en first against breeding_horses, then horses; falls back to name_ja; finally any string in aliases. Add aliases when the JRA-VAN romanization differs from canonical. Set still_racing=true to exclude from auto-add (e.g. Forever Young still racing in 2026).",
+  "notes": "Real-horse counterparts of Uma Musume Pretty Derby characters. Name matching tries name_en first against breeding_horses, then horses; falls back to name_ja; finally any string in aliases. Add aliases when the JRA-VAN romanization differs from canonical. Set still_racing=true to exclude from auto-add (e.g. Forever Young still racing in 2026). v2 (2026-05-21): expanded roster to include 60 additional playable Uma Musume characters from GameTora (race != human/unknown, playable=true), populated image_url field on every entry pointing to gametora.com thumb CDN. v3 (2026-05-21): re-probed image_url with 01 preferred over 02 — 01 is the default school uniform, 02 is the first alternate (swimsuit/event) costume.",
   "characters": [
-    { "name_en": "Special Week",          "name_ja": "スペシャルウィーク",     "still_racing": false },
-    { "name_en": "Silence Suzuka",        "name_ja": "サイレンススズカ",       "still_racing": false },
-    { "name_en": "Tokai Teio",            "name_ja": "トウカイテイオー",       "still_racing": false },
-    { "name_en": "Mejiro Mcqueen",        "name_ja": "メジロマックイーン",     "still_racing": false, "aliases": ["Mejiro McQueen"] },
-    { "name_en": "Symboli Rudolf",        "name_ja": "シンボリルドルフ",       "still_racing": false },
-    { "name_en": "Gold Ship",             "name_ja": "ゴールドシップ",         "still_racing": false },
-    { "name_en": "Vodka",                 "name_ja": "ウオッカ",               "still_racing": false },
-    { "name_en": "Daiwa Scarlet",         "name_ja": "ダイワスカーレット",     "still_racing": false },
-    { "name_en": "T M Opera O",           "name_ja": "テイエムオペラオー",     "still_racing": false, "aliases": ["T.M. Opera O", "TM Opera O", "T.M.Opera O"] },
-    { "name_en": "Narita Brian",          "name_ja": "ナリタブライアン",       "still_racing": false },
-    { "name_en": "Mihono Bourbon",        "name_ja": "ミホノブルボン",         "still_racing": false },
-    { "name_en": "El Condor Pasa",        "name_ja": "エルコンドルパサー",     "still_racing": false },
-    { "name_en": "Grass Wonder",          "name_ja": "グラスワンダー",         "still_racing": false },
-    { "name_en": "Air Groove",            "name_ja": "エアグルーヴ",           "still_racing": false },
-    { "name_en": "Fine Motion",           "name_ja": "ファインモーション",     "still_racing": false },
-    { "name_en": "Manhattan Cafe",        "name_ja": "マンハッタンカフェ",     "still_racing": false },
-    { "name_en": "Stay Gold",             "name_ja": "ステイゴールド",         "still_racing": false },
-    { "name_en": "Symboli Kris S",        "name_ja": "シンボリクリスエス",     "still_racing": false },
-    { "name_en": "Hishi Amazon",          "name_ja": "ヒシアマゾン",           "still_racing": false },
-    { "name_en": "Hishi Akebono",         "name_ja": "ヒシアケボノ",           "still_racing": false },
-    { "name_en": "Maruzensky",            "name_ja": "マルゼンスキー",         "still_racing": false },
-    { "name_en": "Mejiro Ryan",           "name_ja": "メジロライアン",         "still_racing": false },
-    { "name_en": "Mejiro Dober",          "name_ja": "メジロドーベル",         "still_racing": false },
-    { "name_en": "Mejiro Bright",         "name_ja": "メジロブライト",         "still_racing": false },
-    { "name_en": "Mejiro Palmer",         "name_ja": "メジロパーマー",         "still_racing": false },
-    { "name_en": "Mejiro Ardan",          "name_ja": "メジロアルダン",         "still_racing": false },
-    { "name_en": "Mejiro Ramonu",         "name_ja": "メジロラモーヌ",         "still_racing": false },
-    { "name_en": "Sakura Bakushin O",     "name_ja": "サクラバクシンオー",     "still_racing": false },
-    { "name_en": "Sakura Chiyono O",      "name_ja": "サクラチヨノオー",       "still_racing": false },
-    { "name_en": "Sakura Laurel",         "name_ja": "サクラローレル",         "still_racing": false },
-    { "name_en": "Inari One",             "name_ja": "イナリワン",             "still_racing": false },
-    { "name_en": "Twin Turbo",            "name_ja": "ツインターボ",           "still_racing": false },
-    { "name_en": "Ines Fujin",            "name_ja": "イネスフウジン",         "still_racing": false, "aliases": ["Inez Fujin"] },
-    { "name_en": "Biwa Hayahide",         "name_ja": "ビワハヤヒデ",           "still_racing": false },
-    { "name_en": "Winning Ticket",        "name_ja": "ウイニングチケット",     "still_racing": false },
-    { "name_en": "Rice Shower",           "name_ja": "ライスシャワー",         "still_racing": false },
-    { "name_en": "Nice Nature",           "name_ja": "ナイスネイチャ",         "still_racing": false },
-    { "name_en": "King Halo",             "name_ja": "キングヘイロー",         "still_racing": false },
-    { "name_en": "Seiun Sky",             "name_ja": "セイウンスカイ",         "still_racing": false },
-    { "name_en": "Admire Vega",           "name_ja": "アドマイヤベガ",         "still_racing": false },
-    { "name_en": "Yaeno Muteki",          "name_ja": "ヤエノムテキ",           "still_racing": false },
-    { "name_en": "Bamboo Memory",         "name_ja": "バンブーメモリー",       "still_racing": false },
-    { "name_en": "Marvelous Sunday",      "name_ja": "マーベラスサンデー",     "still_racing": false },
-    { "name_en": "Tamamo Cross",          "name_ja": "タマモクロス",           "still_racing": false },
-    { "name_en": "Oguri Cap",             "name_ja": "オグリキャップ",         "still_racing": false },
-    { "name_en": "Super Creek",           "name_ja": "スーパークリーク",       "still_racing": false },
-    { "name_en": "Daitaku Helios",        "name_ja": "ダイタクヘリオス",       "still_racing": false },
-    { "name_en": "Matikanefukukitaru",    "name_ja": "マチカネフクキタル",     "still_racing": false },
-    { "name_en": "Matikanetannhauser",    "name_ja": "マチカネタンホイザ",     "still_racing": false },
-    { "name_en": "Tap Dance City",        "name_ja": "タップダンスシチー",     "still_racing": false },
-    { "name_en": "Curren Chan",           "name_ja": "カレンチャン",           "still_racing": false },
-    { "name_en": "Smart Falcon",          "name_ja": "スマートファルコン",     "still_racing": false },
-    { "name_en": "Eishin Flash",          "name_ja": "エイシンフラッシュ",     "still_racing": false },
-    { "name_en": "Buena Vista",           "name_ja": "ブエナビスタ",           "still_racing": false },
-    { "name_en": "Orfevre",               "name_ja": "オルフェーヴル",         "still_racing": false },
-    { "name_en": "Kawakami Princess",     "name_ja": "カワカミプリンセス",     "still_racing": false },
-    { "name_en": "Hokko Tarumae",         "name_ja": "ホッコータルマエ",       "still_racing": false },
-    { "name_en": "Copano Rickey",         "name_ja": "コパノリッキー",         "still_racing": false },
-    { "name_en": "Tosen Jordan",          "name_ja": "トーセンジョーダン",     "still_racing": false },
-    { "name_en": "Kitasan Black",         "name_ja": "キタサンブラック",       "still_racing": false },
-    { "name_en": "Satono Diamond",        "name_ja": "サトノダイヤモンド",     "still_racing": false },
-    { "name_en": "Duramente",             "name_ja": "ドゥラメンテ",           "still_racing": false },
-    { "name_en": "Tanino Gimlet",         "name_ja": "タニノギムレット",       "still_racing": false },
-    { "name_en": "Air Shakur",            "name_ja": "エアシャカール",         "still_racing": false },
-    { "name_en": "Marvelous Crown",       "name_ja": "マーベラスクラウン",     "still_racing": false },
-    { "name_en": "Daring Tact",           "name_ja": "デアリングタクト",       "still_racing": false },
-    { "name_en": "Almond Eye",            "name_ja": "アーモンドアイ",         "still_racing": false },
-    { "name_en": "Contrail",              "name_ja": "コントレイル",           "still_racing": false },
-    { "name_en": "Loves Only You",        "name_ja": "ラヴズオンリーユー",     "still_racing": false },
-    { "name_en": "Equinox",               "name_ja": "イクイノックス",         "still_racing": false },
-    { "name_en": "Liberty Island",        "name_ja": "リバティアイランド",     "still_racing": false },
-    { "name_en": "Akaitorino Musume",     "name_ja": "アカイトリノムスメ",     "still_racing": false },
-    { "name_en": "Astonbolasher",         "name_ja": "アストンマーチャン",     "still_racing": false, "aliases": ["Aston Machan"] },
-    { "name_en": "Sweep Tosho",           "name_ja": "スイープトウショウ",     "still_racing": false },
-    { "name_en": "Cesario",               "name_ja": "シーザリオ",             "still_racing": false },
-    { "name_en": "Air Messiah",           "name_ja": "エアメサイア",           "still_racing": false },
-    { "name_en": "Mejiro Ardan",          "name_ja": "メジロアルダン",         "still_racing": false },
-    { "name_en": "Forever Young",         "name_ja": "フォーエバーヤング",     "still_racing": true,  "note": "still actively racing in 2026" }
+    {
+      "name_en": "Special Week",
+      "name_ja": "スペシャルウィーク",
+      "still_racing": false,
+      "char_id": 1001,
+      "url_name": "special-week",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1001_100101.png"
+    },
+    {
+      "name_en": "Silence Suzuka",
+      "name_ja": "サイレンススズカ",
+      "still_racing": false,
+      "char_id": 1002,
+      "url_name": "silence-suzuka",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1002_100201.png"
+    },
+    {
+      "name_en": "Tokai Teio",
+      "name_ja": "トウカイテイオー",
+      "still_racing": false,
+      "char_id": 1003,
+      "url_name": "tokai-teio",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1003_100301.png"
+    },
+    {
+      "name_en": "Mejiro Mcqueen",
+      "name_ja": "メジロマックイーン",
+      "still_racing": false,
+      "aliases": [
+        "Mejiro McQueen"
+      ],
+      "char_id": 1013,
+      "url_name": "mejiro-mcqueen",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1013_101301.png"
+    },
+    {
+      "name_en": "Symboli Rudolf",
+      "name_ja": "シンボリルドルフ",
+      "still_racing": false,
+      "char_id": 1017,
+      "url_name": "symboli-rudolf",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1017_101701.png"
+    },
+    {
+      "name_en": "Gold Ship",
+      "name_ja": "ゴールドシップ",
+      "still_racing": false,
+      "char_id": 1007,
+      "url_name": "gold-ship",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1007_100701.png"
+    },
+    {
+      "name_en": "Vodka",
+      "name_ja": "ウオッカ",
+      "still_racing": false,
+      "char_id": 1008,
+      "url_name": "vodka",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1008_100801.png"
+    },
+    {
+      "name_en": "Daiwa Scarlet",
+      "name_ja": "ダイワスカーレット",
+      "still_racing": false,
+      "char_id": 1009,
+      "url_name": "daiwa-scarlet",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1009_100901.png"
+    },
+    {
+      "name_en": "T M Opera O",
+      "name_ja": "テイエムオペラオー",
+      "still_racing": false,
+      "aliases": [
+        "T.M. Opera O",
+        "TM Opera O",
+        "T.M.Opera O"
+      ],
+      "char_id": 1015,
+      "url_name": "tm-opera-o",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1015_101501.png"
+    },
+    {
+      "name_en": "Narita Brian",
+      "name_ja": "ナリタブライアン",
+      "still_racing": false,
+      "char_id": 1016,
+      "url_name": "narita-brian",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1016_101601.png"
+    },
+    {
+      "name_en": "Mihono Bourbon",
+      "name_ja": "ミホノブルボン",
+      "still_racing": false,
+      "char_id": 1026,
+      "url_name": "mihono-bourbon",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1026_102601.png"
+    },
+    {
+      "name_en": "El Condor Pasa",
+      "name_ja": "エルコンドルパサー",
+      "still_racing": false,
+      "char_id": 1014,
+      "url_name": "el-condor-pasa",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1014_101401.png"
+    },
+    {
+      "name_en": "Grass Wonder",
+      "name_ja": "グラスワンダー",
+      "still_racing": false,
+      "char_id": 1011,
+      "url_name": "grass-wonder",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1011_101101.png"
+    },
+    {
+      "name_en": "Air Groove",
+      "name_ja": "エアグルーヴ",
+      "still_racing": false,
+      "char_id": 1018,
+      "url_name": "air-groove",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1018_101801.png"
+    },
+    {
+      "name_en": "Fine Motion",
+      "name_ja": "ファインモーション",
+      "still_racing": false,
+      "char_id": 1022,
+      "url_name": "fine-motion",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1022_102201.png"
+    },
+    {
+      "name_en": "Manhattan Cafe",
+      "name_ja": "マンハッタンカフェ",
+      "still_racing": false,
+      "char_id": 1025,
+      "url_name": "manhattan-cafe",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1025_102501.png"
+    },
+    {
+      "name_en": "Stay Gold",
+      "name_ja": "ステイゴールド",
+      "still_racing": false,
+      "char_id": 1135,
+      "url_name": "stay-gold",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1135_113501.png"
+    },
+    {
+      "name_en": "Symboli Kris S",
+      "name_ja": "シンボリクリスエス",
+      "still_racing": false,
+      "char_id": 1083,
+      "url_name": "symboli-kris-s",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1083_108301.png"
+    },
+    {
+      "name_en": "Hishi Amazon",
+      "name_ja": "ヒシアマゾン",
+      "still_racing": false,
+      "char_id": 1012,
+      "url_name": "hishi-amazon",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1012_101201.png"
+    },
+    {
+      "name_en": "Hishi Akebono",
+      "name_ja": "ヒシアケボノ",
+      "still_racing": false,
+      "char_id": 1028,
+      "url_name": "hishi-akebono",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1028_102801.png"
+    },
+    {
+      "name_en": "Maruzensky",
+      "name_ja": "マルゼンスキー",
+      "still_racing": false,
+      "char_id": 1004,
+      "url_name": "maruzensky",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1004_100401.png"
+    },
+    {
+      "name_en": "Mejiro Ryan",
+      "name_ja": "メジロライアン",
+      "still_racing": false,
+      "char_id": 1027,
+      "url_name": "mejiro-ryan",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1027_102701.png"
+    },
+    {
+      "name_en": "Mejiro Dober",
+      "name_ja": "メジロドーベル",
+      "still_racing": false,
+      "char_id": 1059,
+      "url_name": "mejiro-dober",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1059_105901.png"
+    },
+    {
+      "name_en": "Mejiro Bright",
+      "name_ja": "メジロブライト",
+      "still_racing": false,
+      "char_id": 1074,
+      "url_name": "mejiro-bright",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1074_107401.png"
+    },
+    {
+      "name_en": "Mejiro Palmer",
+      "name_ja": "メジロパーマー",
+      "still_racing": false,
+      "char_id": 1064,
+      "url_name": "mejiro-palmer",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1064_106401.png"
+    },
+    {
+      "name_en": "Mejiro Ardan",
+      "name_ja": "メジロアルダン",
+      "still_racing": false,
+      "char_id": 1071,
+      "url_name": "mejiro-ardan",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1071_107101.png"
+    },
+    {
+      "name_en": "Mejiro Ramonu",
+      "name_ja": "メジロラモーヌ",
+      "still_racing": false,
+      "char_id": 1086,
+      "url_name": "mejiro-ramonu",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1086_108601.png"
+    },
+    {
+      "name_en": "Sakura Bakushin O",
+      "name_ja": "サクラバクシンオー",
+      "still_racing": false,
+      "char_id": 1041,
+      "url_name": "sakura-bakushin-o",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1041_104101.png"
+    },
+    {
+      "name_en": "Sakura Chiyono O",
+      "name_ja": "サクラチヨノオー",
+      "still_racing": false,
+      "char_id": 1069,
+      "url_name": "sakura-chiyono-o",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1069_106901.png"
+    },
+    {
+      "name_en": "Sakura Laurel",
+      "name_ja": "サクラローレル",
+      "still_racing": false,
+      "char_id": 1076,
+      "url_name": "sakura-laurel",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1076_107601.png"
+    },
+    {
+      "name_en": "Inari One",
+      "name_ja": "イナリワン",
+      "still_racing": false,
+      "char_id": 1034,
+      "url_name": "inari-one",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1034_103401.png"
+    },
+    {
+      "name_en": "Twin Turbo",
+      "name_ja": "ツインターボ",
+      "still_racing": false,
+      "char_id": 1066,
+      "url_name": "twin-turbo",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1066_106601.png"
+    },
+    {
+      "name_en": "Ines Fujin",
+      "name_ja": "イネスフウジン",
+      "still_racing": false,
+      "aliases": [
+        "Inez Fujin"
+      ],
+      "char_id": 1031,
+      "url_name": "ines-fujin",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1031_103101.png"
+    },
+    {
+      "name_en": "Biwa Hayahide",
+      "name_ja": "ビワハヤヒデ",
+      "still_racing": false,
+      "char_id": 1023,
+      "url_name": "biwa-hayahide",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1023_102301.png"
+    },
+    {
+      "name_en": "Winning Ticket",
+      "name_ja": "ウイニングチケット",
+      "still_racing": false,
+      "char_id": 1035,
+      "url_name": "winning-ticket",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1035_103501.png"
+    },
+    {
+      "name_en": "Rice Shower",
+      "name_ja": "ライスシャワー",
+      "still_racing": false,
+      "char_id": 1030,
+      "url_name": "rice-shower",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1030_103001.png"
+    },
+    {
+      "name_en": "Nice Nature",
+      "name_ja": "ナイスネイチャ",
+      "still_racing": false,
+      "char_id": 1060,
+      "url_name": "nice-nature",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1060_106001.png"
+    },
+    {
+      "name_en": "King Halo",
+      "name_ja": "キングヘイロー",
+      "still_racing": false,
+      "char_id": 1061,
+      "url_name": "king-halo",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1061_106101.png"
+    },
+    {
+      "name_en": "Seiun Sky",
+      "name_ja": "セイウンスカイ",
+      "still_racing": false,
+      "char_id": 1020,
+      "url_name": "seiun-sky",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1020_102001.png"
+    },
+    {
+      "name_en": "Admire Vega",
+      "name_ja": "アドマイヤベガ",
+      "still_racing": false,
+      "char_id": 1033,
+      "url_name": "admire-vega",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1033_103301.png"
+    },
+    {
+      "name_en": "Yaeno Muteki",
+      "name_ja": "ヤエノムテキ",
+      "still_racing": false,
+      "char_id": 1072,
+      "url_name": "yaeno-muteki",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1072_107201.png"
+    },
+    {
+      "name_en": "Bamboo Memory",
+      "name_ja": "バンブーメモリー",
+      "still_racing": false,
+      "char_id": 1053,
+      "url_name": "bamboo-memory",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1053_105301.png"
+    },
+    {
+      "name_en": "Marvelous Sunday",
+      "name_ja": "マーベラスサンデー",
+      "still_racing": false,
+      "char_id": 1055,
+      "url_name": "marvelous-sunday",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1055_105501.png"
+    },
+    {
+      "name_en": "Tamamo Cross",
+      "name_ja": "タマモクロス",
+      "still_racing": false,
+      "char_id": 1021,
+      "url_name": "tamamo-cross",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1021_102101.png"
+    },
+    {
+      "name_en": "Oguri Cap",
+      "name_ja": "オグリキャップ",
+      "still_racing": false,
+      "char_id": 1006,
+      "url_name": "oguri-cap",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1006_100601.png"
+    },
+    {
+      "name_en": "Super Creek",
+      "name_ja": "スーパークリーク",
+      "still_racing": false,
+      "char_id": 1045,
+      "url_name": "super-creek",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1045_104501.png"
+    },
+    {
+      "name_en": "Daitaku Helios",
+      "name_ja": "ダイタクヘリオス",
+      "still_racing": false,
+      "char_id": 1065,
+      "url_name": "daitaku-helios",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1065_106501.png"
+    },
+    {
+      "name_en": "Matikanefukukitaru",
+      "name_ja": "マチカネフクキタル",
+      "still_racing": false,
+      "char_id": 1056,
+      "url_name": "matikanefukukitaru",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1056_105601.png"
+    },
+    {
+      "name_en": "Matikanetannhauser",
+      "name_ja": "マチカネタンホイザ",
+      "still_racing": false,
+      "char_id": 1062,
+      "url_name": "matikanetannhauser",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1062_106201.png"
+    },
+    {
+      "name_en": "Tap Dance City",
+      "name_ja": "タップダンスシチー",
+      "still_racing": false,
+      "char_id": 1107,
+      "url_name": "tap-dance-city",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1107_110701.png"
+    },
+    {
+      "name_en": "Curren Chan",
+      "name_ja": "カレンチャン",
+      "still_racing": false,
+      "char_id": 1038,
+      "url_name": "curren-chan",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1038_103801.png"
+    },
+    {
+      "name_en": "Smart Falcon",
+      "name_ja": "スマートファルコン",
+      "still_racing": false,
+      "char_id": 1046,
+      "url_name": "smart-falcon",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1046_104601.png"
+    },
+    {
+      "name_en": "Eishin Flash",
+      "name_ja": "エイシンフラッシュ",
+      "still_racing": false,
+      "char_id": 1037,
+      "url_name": "eishin-flash",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1037_103701.png"
+    },
+    {
+      "name_en": "Buena Vista",
+      "name_ja": "ブエナビスタ",
+      "still_racing": false,
+      "char_id": 1114,
+      "url_name": "buena-vista",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1114_111401.png"
+    },
+    {
+      "name_en": "Orfevre",
+      "name_ja": "オルフェーヴル",
+      "still_racing": false,
+      "char_id": 1115,
+      "url_name": "orfevre",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1115_111501.png"
+    },
+    {
+      "name_en": "Kawakami Princess",
+      "name_ja": "カワカミプリンセス",
+      "still_racing": false,
+      "char_id": 1039,
+      "url_name": "kawakami-princess",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1039_103901.png"
+    },
+    {
+      "name_en": "Hokko Tarumae",
+      "name_ja": "ホッコータルマエ",
+      "still_racing": false,
+      "char_id": 1099,
+      "url_name": "hokko-tarumae",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1099_109901.png"
+    },
+    {
+      "name_en": "Copano Rickey",
+      "name_ja": "コパノリッキー",
+      "still_racing": false,
+      "char_id": 1098,
+      "url_name": "copano-rickey",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1098_109801.png"
+    },
+    {
+      "name_en": "Tosen Jordan",
+      "name_ja": "トーセンジョーダン",
+      "still_racing": false,
+      "char_id": 1048,
+      "url_name": "tosen-jordan",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1048_104801.png"
+    },
+    {
+      "name_en": "Kitasan Black",
+      "name_ja": "キタサンブラック",
+      "still_racing": false,
+      "char_id": 1068,
+      "url_name": "kitasan-black",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1068_106801.png"
+    },
+    {
+      "name_en": "Satono Diamond",
+      "name_ja": "サトノダイヤモンド",
+      "still_racing": false,
+      "char_id": 1067,
+      "url_name": "satono-diamond",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1067_106701.png"
+    },
+    {
+      "name_en": "Duramente",
+      "name_ja": "ドゥラメンテ",
+      "still_racing": false,
+      "char_id": 1108,
+      "url_name": "duramente",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1108_110801.png"
+    },
+    {
+      "name_en": "Tanino Gimlet",
+      "name_ja": "タニノギムレット",
+      "still_racing": false,
+      "char_id": 1084,
+      "url_name": "tanino-gimlet",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1084_108401.png"
+    },
+    {
+      "name_en": "Air Shakur",
+      "name_ja": "エアシャカール",
+      "still_racing": false,
+      "char_id": 1036,
+      "url_name": "air-shakur",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1036_103601.png"
+    },
+    {
+      "name_en": "Marvelous Crown",
+      "name_ja": "マーベラスクラウン",
+      "still_racing": false
+    },
+    {
+      "name_en": "Daring Tact",
+      "name_ja": "デアリングタクト",
+      "still_racing": false,
+      "char_id": 1075,
+      "url_name": "daring-tact"
+    },
+    {
+      "name_en": "Almond Eye",
+      "name_ja": "アーモンドアイ",
+      "still_racing": false,
+      "char_id": 1129,
+      "url_name": "almond-eye",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1129_112901.png"
+    },
+    {
+      "name_en": "Contrail",
+      "name_ja": "コントレイル",
+      "still_racing": false
+    },
+    {
+      "name_en": "Loves Only You",
+      "name_ja": "ラヴズオンリーユー",
+      "still_racing": false,
+      "char_id": 1132,
+      "url_name": "loves-only-you",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1132_113201.png"
+    },
+    {
+      "name_en": "Equinox",
+      "name_ja": "イクイノックス",
+      "still_racing": false
+    },
+    {
+      "name_en": "Liberty Island",
+      "name_ja": "リバティアイランド",
+      "still_racing": false
+    },
+    {
+      "name_en": "Akaitorino Musume",
+      "name_ja": "アカイトリノムスメ",
+      "still_racing": false
+    },
+    {
+      "name_en": "Astonbolasher",
+      "name_ja": "アストンマーチャン",
+      "still_racing": false,
+      "aliases": [
+        "Aston Machan"
+      ],
+      "char_id": 1087,
+      "url_name": "aston-machan",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1087_108701.png"
+    },
+    {
+      "name_en": "Sweep Tosho",
+      "name_ja": "スイープトウショウ",
+      "still_racing": false,
+      "char_id": 1044,
+      "url_name": "sweep-tosho",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1044_104401.png"
+    },
+    {
+      "name_en": "Cesario",
+      "name_ja": "シーザリオ",
+      "still_racing": false,
+      "char_id": 1110,
+      "url_name": "cesario",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1110_111001.png"
+    },
+    {
+      "name_en": "Air Messiah",
+      "name_ja": "エアメサイア",
+      "still_racing": false,
+      "char_id": 1111,
+      "url_name": "air-messiah",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1111_111101.png"
+    },
+    {
+      "name_en": "Forever Young",
+      "name_ja": "フォーエバーヤング",
+      "still_racing": true,
+      "note": "still actively racing in 2026",
+      "char_id": 1138,
+      "url_name": "forever-young"
+    },
+    {
+      "name_en": "Admire Groove",
+      "name_ja": "アドマイヤグルーヴ",
+      "still_racing": false,
+      "char_id": 1118,
+      "url_name": "admire-groove",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1118_111801.png"
+    },
+    {
+      "name_en": "Agnes Digital",
+      "name_ja": "アグネスデジタル",
+      "still_racing": false,
+      "char_id": 1019,
+      "url_name": "agnes-digital",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1019_101901.png"
+    },
+    {
+      "name_en": "Agnes Tachyon",
+      "name_ja": "アグネスタキオン",
+      "still_racing": false,
+      "char_id": 1032,
+      "url_name": "agnes-tachyon",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1032_103201.png"
+    },
+    {
+      "name_en": "Believe",
+      "name_ja": "ビリーヴ",
+      "still_racing": false,
+      "char_id": 1095,
+      "url_name": "believe",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1095_109501.png"
+    },
+    {
+      "name_en": "Biko Pegasus",
+      "name_ja": "ビコーペガサス",
+      "still_racing": false,
+      "char_id": 1054,
+      "url_name": "biko-pegasus",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1054_105401.png"
+    },
+    {
+      "name_en": "Bubble Gum Fellow",
+      "name_ja": "バブルガムフェロー",
+      "still_racing": false,
+      "char_id": 1124,
+      "url_name": "bubble-gum-fellow",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1124_112401.png"
+    },
+    {
+      "name_en": "Calstone Light O",
+      "name_ja": "カルストンライトオ",
+      "still_racing": false,
+      "char_id": 1120,
+      "url_name": "calstone-light-o",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1120_112001.png"
+    },
+    {
+      "name_en": "Cheval Grand",
+      "name_ja": "シュヴァルグラン",
+      "still_racing": false,
+      "char_id": 1089,
+      "url_name": "cheval-grand",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1089_108901.png"
+    },
+    {
+      "name_en": "Chrono Genesis",
+      "name_ja": "クロノジェネシス",
+      "still_racing": false,
+      "char_id": 1133,
+      "url_name": "chrono-genesis",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1133_113301.png"
+    },
+    {
+      "name_en": "Daiichi Ruby",
+      "name_ja": "ダイイチルビー",
+      "still_racing": false,
+      "char_id": 1085,
+      "url_name": "daiichi-ruby",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1085_108501.png"
+    },
+    {
+      "name_en": "Dantsu Flame",
+      "name_ja": "ダンツフレーム",
+      "still_racing": false,
+      "char_id": 1092,
+      "url_name": "dantsu-flame",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1092_109201.png"
+    },
+    {
+      "name_en": "Daring Heart",
+      "name_ja": "デアリングハート",
+      "still_racing": false,
+      "char_id": 1112,
+      "url_name": "daring-heart",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1112_111201.png"
+    },
+    {
+      "name_en": "Dream Journey",
+      "name_ja": "ドリームジャーニー",
+      "still_racing": false,
+      "char_id": 1119,
+      "url_name": "dream-journey",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1119_111901.png"
+    },
+    {
+      "name_en": "Durandal",
+      "name_ja": "デュランダル",
+      "still_racing": false,
+      "char_id": 1121,
+      "url_name": "durandal",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1121_112101.png"
+    },
+    {
+      "name_en": "Espoir City",
+      "name_ja": "エスポワールシチー",
+      "still_racing": false,
+      "char_id": 1081,
+      "url_name": "espoir-city",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1081_108101.png"
+    },
+    {
+      "name_en": "Fenomeno",
+      "name_ja": "フェノーメノ",
+      "still_racing": false,
+      "char_id": 1127,
+      "url_name": "fenomeno",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1127_112701.png"
+    },
+    {
+      "name_en": "Fuji Kiseki",
+      "name_ja": "フジキセキ",
+      "still_racing": false,
+      "char_id": 1005,
+      "url_name": "fuji-kiseki",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1005_100501.png"
+    },
+    {
+      "name_en": "Furioso",
+      "name_ja": "フリオーソ",
+      "still_racing": false,
+      "char_id": 1079,
+      "url_name": "furioso",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1079_107901.png"
+    },
+    {
+      "name_en": "Fusaichi Pandora",
+      "name_ja": "フサイチパンドラ",
+      "still_racing": false,
+      "char_id": 1113,
+      "url_name": "fusaichi-pandora",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1113_111301.png"
+    },
+    {
+      "name_en": "Gentildonna",
+      "name_ja": "ジェンティルドンナ",
+      "still_racing": false,
+      "char_id": 1116,
+      "url_name": "gentildonna",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1116_111601.png"
+    },
+    {
+      "name_en": "Gold City",
+      "name_ja": "ゴールドシチー",
+      "still_racing": false,
+      "char_id": 1040,
+      "url_name": "gold-city",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1040_104001.png"
+    },
+    {
+      "name_en": "Gran Alegria",
+      "name_ja": "グランアレグリア",
+      "still_racing": false,
+      "char_id": 1131,
+      "url_name": "gran-alegria",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1131_113101.png"
+    },
+    {
+      "name_en": "Haru Urara",
+      "name_ja": "ハルウララ",
+      "still_racing": false,
+      "char_id": 1052,
+      "url_name": "haru-urara",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1052_105201.png"
+    },
+    {
+      "name_en": "Hishi Miracle",
+      "name_ja": "ヒシミラクル",
+      "still_racing": false,
+      "char_id": 1106,
+      "url_name": "hishi-miracle",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1106_110601.png"
+    },
+    {
+      "name_en": "Ikuno Dictus",
+      "name_ja": "イクノディクタス",
+      "still_racing": false,
+      "char_id": 1063,
+      "url_name": "ikuno-dictus",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1063_106301.png"
+    },
+    {
+      "name_en": "Jungle Pocket",
+      "name_ja": "ジャングルポケット",
+      "still_racing": false,
+      "char_id": 1094,
+      "url_name": "jungle-pocket",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1094_109401.png"
+    },
+    {
+      "name_en": "K.S.Miracle",
+      "name_ja": "ケイエスミラクル",
+      "still_racing": false,
+      "char_id": 1093,
+      "url_name": "ksmiracle",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1093_109301.png"
+    },
+    {
+      "name_en": "Katsuragi Ace",
+      "name_ja": "カツラギエース",
+      "still_racing": false,
+      "char_id": 1104,
+      "url_name": "katsuragi-ace",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1104_110401.png"
+    },
+    {
+      "name_en": "Kiseki",
+      "name_ja": "キセキ",
+      "still_racing": false,
+      "char_id": 1137,
+      "url_name": "kiseki",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1137_113701.png"
+    },
+    {
+      "name_en": "Lucky Lilac",
+      "name_ja": "ラッキーライラック",
+      "still_racing": false,
+      "char_id": 1130,
+      "url_name": "lucky-lilac",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1130_113001.png"
+    },
+    {
+      "name_en": "Mayano Top Gun",
+      "name_ja": "マヤノトップガン",
+      "still_racing": false,
+      "char_id": 1024,
+      "url_name": "mayano-top-gun",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1024_102401.png"
+    },
+    {
+      "name_en": "Meisho Doto",
+      "name_ja": "メイショウドトウ",
+      "still_racing": false,
+      "char_id": 1058,
+      "url_name": "meisho-doto",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1058_105801.png"
+    },
+    {
+      "name_en": "Mr. C.B.",
+      "name_ja": "ミスターシービー",
+      "still_racing": false,
+      "char_id": 1057,
+      "url_name": "mr-cb",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1057_105701.png"
+    },
+    {
+      "name_en": "Nakayama Festa",
+      "name_ja": "ナカヤマフェスタ",
+      "still_racing": false,
+      "char_id": 1049,
+      "url_name": "nakayama-festa",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1049_104901.png"
+    },
+    {
+      "name_en": "Narita Taishin",
+      "name_ja": "ナリタタイシン",
+      "still_racing": false,
+      "char_id": 1050,
+      "url_name": "narita-taishin",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1050_105001.png"
+    },
+    {
+      "name_en": "Narita Top Road",
+      "name_ja": "ナリタトップロード",
+      "still_racing": false,
+      "char_id": 1077,
+      "url_name": "narita-top-road",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1077_107701.png"
+    },
+    {
+      "name_en": "Neo Universe",
+      "name_ja": "ネオユニヴァース",
+      "still_racing": false,
+      "char_id": 1105,
+      "url_name": "neo-universe",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1105_110501.png"
+    },
+    {
+      "name_en": "Nishino Flower",
+      "name_ja": "ニシノフラワー",
+      "still_racing": false,
+      "char_id": 1051,
+      "url_name": "nishino-flower",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1051_105101.png"
+    },
+    {
+      "name_en": "No Reason",
+      "name_ja": "ノーリーズン",
+      "still_racing": false,
+      "char_id": 1096,
+      "url_name": "no-reason",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1096_109601.png"
+    },
+    {
+      "name_en": "North Flight",
+      "name_ja": "ノースフライト",
+      "still_racing": false,
+      "char_id": 1082,
+      "url_name": "north-flight",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1082_108201.png"
+    },
+    {
+      "name_en": "Red Desire",
+      "name_ja": "レッドディザイア",
+      "still_racing": false,
+      "char_id": 1136,
+      "url_name": "red-desire",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1136_113601.png"
+    },
+    {
+      "name_en": "Rhein Kraft",
+      "name_ja": "ラインクラフト",
+      "still_racing": false,
+      "char_id": 1109,
+      "url_name": "rhein-kraft",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1109_110901.png"
+    },
+    {
+      "name_en": "Royce and Royce",
+      "name_ja": "ロイスアンドロイス",
+      "still_racing": false,
+      "char_id": 1103,
+      "url_name": "royce-and-royce",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1103_110301.png"
+    },
+    {
+      "name_en": "Satono Crown",
+      "name_ja": "サトノクラウン",
+      "still_racing": false,
+      "char_id": 1088,
+      "url_name": "satono-crown",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1088_108801.png"
+    },
+    {
+      "name_en": "Seeking the Pearl",
+      "name_ja": "シーキングザパール",
+      "still_racing": false,
+      "char_id": 1042,
+      "url_name": "seeking-the-pearl",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1042_104201.png"
+    },
+    {
+      "name_en": "Shinko Windy",
+      "name_ja": "シンコウウインディ",
+      "still_racing": false,
+      "char_id": 1043,
+      "url_name": "shinko-windy",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1043_104301.png"
+    },
+    {
+      "name_en": "Sirius Symboli",
+      "name_ja": "シリウスシンボリ",
+      "still_racing": false,
+      "char_id": 1070,
+      "url_name": "sirius-symboli",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1070_107001.png"
+    },
+    {
+      "name_en": "Sounds of Earth",
+      "name_ja": "サウンズオブアース",
+      "still_racing": false,
+      "char_id": 1102,
+      "url_name": "sounds-of-earth",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1102_110201.png"
+    },
+    {
+      "name_en": "Still in Love",
+      "name_ja": "スティルインラブ",
+      "still_racing": false,
+      "char_id": 1097,
+      "url_name": "still-in-love",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1097_109701.png"
+    },
+    {
+      "name_en": "Taiki Shuttle",
+      "name_ja": "タイキシャトル",
+      "still_racing": false,
+      "char_id": 1010,
+      "url_name": "taiki-shuttle",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1010_101001.png"
+    },
+    {
+      "name_en": "Transcend",
+      "name_ja": "トランセンド",
+      "still_racing": false,
+      "char_id": 1080,
+      "url_name": "transcend",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1080_108001.png"
+    },
+    {
+      "name_en": "Tsurumaru Tsuyoshi",
+      "name_ja": "ツルマルツヨシ",
+      "still_racing": false,
+      "char_id": 1073,
+      "url_name": "tsurumaru-tsuyoshi",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1073_107301.png"
+    },
+    {
+      "name_en": "Verxina",
+      "name_ja": "ヴィルシーナ",
+      "still_racing": false,
+      "char_id": 1090,
+      "url_name": "verxina",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1090_109001.png"
+    },
+    {
+      "name_en": "Victoire Pisa",
+      "name_ja": "ヴィクトワールピサ",
+      "still_racing": false,
+      "char_id": 1143,
+      "url_name": "victoire-pisa",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1143_114301.png"
+    },
+    {
+      "name_en": "Vivlos",
+      "name_ja": "ヴィブロス",
+      "still_racing": false,
+      "char_id": 1091,
+      "url_name": "vivlos",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1091_109101.png"
+    },
+    {
+      "name_en": "Win Variation",
+      "name_ja": "ウインバリアシオン",
+      "still_racing": false,
+      "char_id": 1117,
+      "url_name": "win-variation",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1117_111701.png"
+    },
+    {
+      "name_en": "Wonder Acute",
+      "name_ja": "ワンダーアキュート",
+      "still_racing": false,
+      "char_id": 1100,
+      "url_name": "wonder-acute",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1100_110001.png"
+    },
+    {
+      "name_en": "Yamanin Zephyr",
+      "name_ja": "ヤマニンゼファー",
+      "still_racing": false,
+      "char_id": 1078,
+      "url_name": "yamanin-zephyr",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1078_107801.png"
+    },
+    {
+      "name_en": "Yukino Bijin",
+      "name_ja": "ユキノビジン",
+      "still_racing": false,
+      "char_id": 1029,
+      "url_name": "yukino-bijin",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1029_102901.png"
+    },
+    {
+      "name_en": "Zenno Rob Roy",
+      "name_ja": "ゼンノロブロイ",
+      "still_racing": false,
+      "char_id": 1047,
+      "url_name": "zenno-rob-roy",
+      "image_url": "https://gametora.com/images/umamusume/characters/thumb/chara_stand_1047_104701.png"
+    }
   ]
 }

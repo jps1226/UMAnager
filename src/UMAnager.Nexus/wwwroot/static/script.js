@@ -1459,8 +1459,6 @@ function applySortLogic(r_id, col, asc) {
         if (col === 'Default') {
             const keyA = `${r_id}_${String(a.Horse_ID).split('.')[0]}`;
             const keyB = `${r_id}_${String(b.Horse_ID).split('.')[0]}`;
-            const ppA = parseRaceNumber(a.PP);
-            const ppB = parseRaceNumber(b.PP);
             const voteSortingEnabled = isVoteSortingEnabled();
 
             if (voteSortingEnabled) {
@@ -1470,8 +1468,14 @@ function applySortLogic(r_id, col, asc) {
                 if (valA !== valB) return valA < valB ? -1 : 1;
             }
 
-            const ppComparison = comparePrimitiveValues(ppA, ppB, true);
-            if (ppComparison !== 0) return ppComparison;
+            // Past races: finish position ascending. Upcoming: post position ascending.
+            if (globalRaceInfo[r_id]?._timeline === 'past') {
+                const finishCmp = comparePrimitiveValues(parseRaceNumber(a.Finish), parseRaceNumber(b.Finish), true);
+                if (finishCmp !== 0) return finishCmp;
+            } else {
+                const ppCmp = comparePrimitiveValues(parseRaceNumber(a.PP), parseRaceNumber(b.PP), true);
+                if (ppCmp !== 0) return ppCmp;
+            }
             return a.original_index - b.original_index;
         }
 
@@ -1816,16 +1820,16 @@ function updateRiskLabel(val) {
     const slider = document.getElementById('risk-slider');
     let text = "Balanced";
     let color = "#ff9f43"; // Orange
-    
-    if (val <= 20) { text = "Ultra Safe"; color = "#0abde3"; } // Cyan
-    else if (val <= 40) { text = "Chalky"; color = "#1dd1a1"; } // Green
-    else if (val <= 60) { text = "Balanced"; color = "#ff9f43"; } // Orange
-    else if (val <= 85) { text = "Value Hunter"; color = "#ff4b4b"; } // Red
-    else { text = "Maximum Chaos"; color = "#ff0000"; } // Bright Red
-    
+
+    if (val <= 20) { text = "Ultra Safe"; color = "#0abde3"; }
+    else if (val <= 40) { text = "Chalky"; color = "#1dd1a1"; }
+    else if (val <= 60) { text = "Balanced"; color = "#ff9f43"; }
+    else if (val <= 85) { text = "Value Hunter"; color = "#ff4b4b"; }
+    else { text = "Maximum Chaos"; color = "#ff0000"; }
+
     label.innerText = `${text} (${val})`;
     label.style.color = color;
-    slider.style.color = color; // Changes the thumb color dynamically!
+    if (slider) slider.style.color = color;
     syncAutoBetPreviewColor(val);
 }
 
@@ -3006,6 +3010,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
     currentCalendarMonth = getMonthKey(activeDate) || currentCalendarMonth;
     renderRaceCalendar();
 
+    let firstCardPainted = false;
     dates.forEach((date) => {
         const isActive = date === activeDate;
         const dateTimeline = globalDateTimelineByDate[date] || 'upcoming';
@@ -3125,6 +3130,13 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 
         html += `</div>`;
         scheds.innerHTML += html;
+
+        if (!firstCardPainted && isDevModeEnabled()) {
+            firstCardPainted = true;
+            const ms = performance.now().toFixed(0);
+            console.log(`[DevMode] First cards rendered: ${ms}ms from page load`);
+            appendDebugLine(`First cards rendered: ${ms}ms`);
+        }
     });
 
     updateWinningVotesFocusButton();
@@ -6899,7 +6911,6 @@ async function showSettingsModal() {
     document.getElementById('setting-dataEngine').value = currentEngine === 'jv' ? 'jv' : 'nk';
     document.getElementById('setting-pedigreeLists').checked = appConfig.sidebarTabs?.pedigreeLists ?? true;
     document.getElementById('setting-weekendWatchlist').checked = appConfig.sidebarTabs?.weekendWatchlist ?? true;
-    document.getElementById('setting-autoPickStrategy').checked = appConfig.sidebarTabs?.autoPickStrategy ?? true;
     document.getElementById('setting-advancedTools').checked = appConfig.sidebarTabs?.advancedTools ?? false;
     document.getElementById('setting-betSafetyIndicator').checked = appConfig.ui?.betSafetyIndicator ?? true;
     document.getElementById('setting-voteSortingTop').checked = appConfig.ui?.voteSortingTop ?? true;
@@ -7018,7 +7029,6 @@ async function updateSidebarSettings() {
     appConfig.sidebarTabs = {
         pedigreeLists: document.getElementById('setting-pedigreeLists').checked,
         weekendWatchlist: document.getElementById('setting-weekendWatchlist').checked,
-        autoPickStrategy: document.getElementById('setting-autoPickStrategy').checked,
         advancedTools: document.getElementById('setting-advancedTools').checked
     };
     const parseFWInput = (id, def) => { const n = parseFloat(document.getElementById(id).value); return isNaN(n) ? def : n; };
@@ -7207,7 +7217,6 @@ function applySidebarSettings() {
     };
     apply('pedigree-lists-group',     'pedigreeLists',     true);
     apply('weekend-watchlist-group',  'weekendWatchlist',  true);
-    apply('auto-pick-group',          'autoPickStrategy',  true);
     apply('advanced-tools-group',     'advancedTools',     false);
 
     const consoleEl = document.getElementById('scrape-console');

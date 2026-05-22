@@ -18,6 +18,11 @@ public sealed class SettingsService
         // TimeSpan — odds refresh cadence during RACES_POPULATED (Thu/Fri).
         public const string OddsPollIntervalPrelive = "odds_poll_interval_prelive";
 
+        // TimeSpan — odds refresh cadence during AWAITING_ODDS (races present, JRA has
+        // not published any odds yet). Tighter than prelive so first-publish is picked
+        // up promptly; falls back to prelive cadence once any upcoming-race entry has odds.
+        public const string OddsPollIntervalAwaiting = "odds_poll_interval_awaiting";
+
         // TimeSpan — odds refresh cadence during LIVE_OPERATIONS. HARD FLOOR 5 minutes (JV-Link rate limit).
         public const string OddsPollIntervalLive = "odds_poll_interval_live";
 
@@ -62,6 +67,7 @@ public sealed class SettingsService
     {
         public static readonly TimeSpan PopulatePollInterval     = TimeSpan.FromHours(1);
         public static readonly TimeSpan OddsPollIntervalPrelive  = TimeSpan.FromHours(1);
+        public static readonly TimeSpan OddsPollIntervalAwaiting = TimeSpan.FromMinutes(15);
         public static readonly TimeSpan OddsPollIntervalLive     = TimeSpan.FromMinutes(5);
         public const int                LiveWindowMinutes        = 90;
         public const string?            DiscordWebhookUrl        = null;
@@ -157,7 +163,8 @@ public sealed class SettingsService
         }
 
         AddIfMissing(Keys.PopulatePollInterval,    Defaults.PopulatePollInterval.ToString());
-        AddIfMissing(Keys.OddsPollIntervalPrelive, Defaults.OddsPollIntervalPrelive.ToString());
+        AddIfMissing(Keys.OddsPollIntervalPrelive,  Defaults.OddsPollIntervalPrelive.ToString());
+        AddIfMissing(Keys.OddsPollIntervalAwaiting, Defaults.OddsPollIntervalAwaiting.ToString());
         AddIfMissing(Keys.OddsPollIntervalLive,    Defaults.OddsPollIntervalLive.ToString());
         AddIfMissing(Keys.LiveWindowMinutes,       Defaults.LiveWindowMinutes.ToString());
         AddIfMissing(Keys.DiscordWebhookUrl,       Defaults.DiscordWebhookUrl);
