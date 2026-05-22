@@ -82,66 +82,72 @@ public sealed class RacesController : ControllerBase
     {
         try
         {
-            using var db = await _dbFactory.CreateDbContextAsync();
+            // ── FAST PATH: ETag string still fresh (< 30 s) — zero DB queries ─────────
+            // Caching the computed ETag string avoids all 5 ETag-related DB round-trips
+            // on every request. The 30 s TTL is well below the 5-minute live-odds floor.
+            const string EtagCacheKey = "races-etag-v5";
+            if (_cache.TryGetValue<string>(EtagCacheKey, out var fastEtag))
+            {
+                Response.Headers["Cache-Control"] = "no-cache";
+                Response.Headers["ETag"] = fastEtag!;
+                if (Request.Headers["If-None-Match"].ToString() == fastEtag)
+                    return StatusCode(StatusCodes.Status304NotModified);
+                if (_cache.TryGetValue<(string Tag, byte[] Bytes)>(RacesCacheKey, out var fb) && fb.Tag == fastEtag)
+                    return File(fb.Bytes, "application/json; charset=utf-8");
+                // Body cache was evicted (server restart / memory pressure) — fall through
+                // with fastEtag set so we skip recomputing the ETag below.
+            }
 
-            // Phase 14: trim default window to roughly the last 2 weeks + any upcoming.
-            // ~5 race days × 36 races = ~180 rows for the typical operator view. Older
-            // races are still reachable via /api/races?from=YYYY-MM-DD (future endpoint).
+            // ── SLOW PATH: single DB context for ETag computation + full build ─────────
+            // Races are loaded once and reused by both the ETag check and the response
+            // builder — no double-query on cold cache paths.
+            using var db = await _dbFactory.CreateDbContextAsync();
             var jstNow = DateTime.UtcNow.AddHours(9);
-            var windowStart = jstNow.AddDays(-14);
+            var windowStart = jstNow.AddDays(-7); // narrowed 14 → 7 days (v5)
             var races = await db.Races
                 .Where(r => r.SortTime != null && r.SortTime >= windowStart)
                 .OrderBy(r => r.SortTime)
                 .AsNoTracking()
                 .ToListAsync();
 
-            // Phase 14: ETag based on (race count, max race LastUpdated, max breeding_horses
-            // LastUpdated). The breeding_horses signal ensures that an HN-name backfill
-            // (Phase 15) invalidates the cached response even when no race row was touched.
-            DateTime? maxLastUpdated = races.Count > 0
-                ? races.Max(r => r.LastUpdated)
-                : (DateTime?)null;
-            var maxBreedingUpdated = await db.BreedingHorses.AsNoTracking()
-                .MaxAsync(b => (DateTime?)b.LastUpdated);
-            // Odds + post position ticks write to race_entries.updated_at but never
-            // touch races.last_updated. Include the entries' max so the ETag busts
-            // when odds/posts land — otherwise desktop sits on a stale 304 body
-            // while mobile gets fresh data via SignalR.
-            var raceIds = races.Select(r => r.RaceId).ToHashSet();
-            var maxEntryUpdated = raceIds.Count > 0
-                ? await db.RaceEntries.AsNoTracking()
-                    .Where(e => raceIds.Contains(e.RaceId))
-                    .MaxAsync(e => (DateTime?)e.UpdatedAt)
-                : null;
-            // Phase 8: include jockey/trainer stats refresh tick so a stats recompute (no race
-            // row touched) still busts the 304 cache.
-            var maxJockeyRefresh = await db.Database
-                .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM jockeys")
-                .FirstOrDefaultAsync();
-            var maxTrainerRefresh = await db.Database
-                .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
-                .FirstOrDefaultAsync();
-            var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-            // v3: bump schema version suffix whenever the response shape changes (new fields,
-            // renamed fields, etc.) so browsers never serve a stale 304 cache body.
-            // Added entries-max-updated tick (odds/posts ingestion path).
-            var etag = $"\"races-v4-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
-            Response.Headers["Cache-Control"] = "no-cache"; // re-validate every time, but allow 304
-            Response.Headers["ETag"] = etag;
-            var ifNoneMatch = Request.Headers["If-None-Match"].ToString();
-            if (!string.IsNullOrEmpty(ifNoneMatch) && ifNoneMatch == etag)
+            string etag;
+            if (fastEtag == null)
             {
-                return StatusCode(StatusCodes.Status304NotModified);
+                // ETag cache miss: compute from the already-loaded races + 4 more queries.
+                DateTime? maxLastUpdated = races.Count > 0 ? races.Max(r => r.LastUpdated) : null;
+                var raceIdsEtag = races.Select(r => r.RaceId).ToHashSet();
+                var maxBreedingUpdated = await db.BreedingHorses.AsNoTracking()
+                    .MaxAsync(b => (DateTime?)b.LastUpdated);
+                var maxEntryUpdated = raceIdsEtag.Count > 0
+                    ? await db.RaceEntries.AsNoTracking()
+                        .Where(e => raceIdsEtag.Contains(e.RaceId))
+                        .MaxAsync(e => (DateTime?)e.UpdatedAt)
+                    : null;
+                var maxJockeyRefresh = await db.Database
+                    .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM jockeys")
+                    .FirstOrDefaultAsync();
+                var maxTrainerRefresh = await db.Database
+                    .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
+                    .FirstOrDefaultAsync();
+                var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
+                etag = $"\"races-v5-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                _cache.Set(EtagCacheKey, etag,
+                    new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
+            }
+            else
+            {
+                etag = fastEtag!; // body was evicted but ETag is still valid
             }
 
-            // Phase 14 follow-up: warm response cache. ETag is a content fingerprint, so
-            // when the ETag matches the cached entry we can skip all 8+ heavy queries and
-            // return the pre-serialized bytes directly. Cache miss: fall through to full load.
-            if (_cache.TryGetValue(RacesCacheKey, out (string Tag, byte[] Bytes) cached)
-                && cached.Tag == etag)
-            {
-                return File(cached.Bytes, "application/json; charset=utf-8");
-            }
+            Response.Headers["Cache-Control"] = "no-cache";
+            Response.Headers["ETag"] = etag;
+            if (Request.Headers["If-None-Match"].ToString() == etag)
+                return StatusCode(StatusCodes.Status304NotModified);
+            if (_cache.TryGetValue<(string Tag, byte[] Bytes)>(RacesCacheKey, out var cachedBody) && cachedBody.Tag == etag)
+                return File(cachedBody.Bytes, "application/json; charset=utf-8");
+
+            // ── Full build ────────────────────────────────────────────────────────────
+            var raceIds = races.Select(r => r.RaceId).ToHashSet();
 
             var allEntries = await db.RaceEntries.AsNoTracking()
                 .Where(e => raceIds.Contains(e.RaceId))
