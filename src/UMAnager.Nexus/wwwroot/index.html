@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260522-10">
+    <link rel="stylesheet" href="/static/style.css?v=20260522-13">
 </head>
 <body>
 
@@ -247,7 +247,8 @@
             <h3 id="voting-main-title">Voting Workspace</h3>
             <div class="voting-main-head-actions">
                 <button id="btn-orepro-open" onclick="openOreProCompanion()" class="toolbar-btn toolbar-btn-muted">🌐 Open OrePro</button>
-                <button id="btn-orepro-auto-day" onclick="autoBetActiveDay()" class="toolbar-btn toolbar-btn-primary" title="Auto-pick the rest of the day with the current risk slider, then apply those marks to OrePro">⚡ Auto Bet Day</button>
+                <button id="btn-orepro-auto-day" onclick="autoBetActiveDay()" class="toolbar-btn toolbar-btn-primary" title="Auto-pick the rest of the day with the current risk slider. Only updates marks within UMAnager — nothing is sent to OrePro until you click Apply Day Votes.">⚡ Auto Bet Day</button>
+                <button id="btn-orepro-apply-day" onclick="applyAllDayVotesToOrePro()" class="toolbar-btn toolbar-btn-primary" title="Send all unsubmitted voted races for the selected day to OrePro (apply + submit each one).">📤 Apply Day Votes</button>
                 <button id="btn-orepro-clear-day" onclick="clearActiveDayBets()" class="toolbar-btn toolbar-btn-muted" title="Clear all saved marks for the selected day so you can re-evaluate the card">🧹 Clear Day Bets</button>
                 <button id="btn-reestimate-day" onclick="reEstimateActiveDay()" class="toolbar-btn toolbar-btn-muted">🧮 Re-estimate Day</button>
             </div>
@@ -342,6 +343,13 @@
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-highlightAutoBets" onchange="updateSidebarSettings()">
                             <span>💡 Highlight Auto-Bets</span>
+                        </label>
+                        <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
+                            <span>🎯 Voting Mark Mode</span>
+                            <select id="setting-votingMarkMode" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:170px;">
+                                <option value="BOX_OPTIMIZATION">Box Optimization</option>
+                                <option value="TRADITIONAL_ROLES">Traditional Roles</option>
+                            </select>
                         </label>
                         <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
                             <span>📺 TV Mode Split %</span>
@@ -561,6 +569,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260522-9"></script>
+<script src="/static/script.js?v=20260522-18"></script>
 </body>
 </html>

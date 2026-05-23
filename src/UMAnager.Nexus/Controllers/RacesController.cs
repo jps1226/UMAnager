@@ -21,15 +21,44 @@ public sealed class RacesController : ControllerBase
     // Phase 7: recency weights (most-recent first), f(pos) = 1/pos for top-5 else 0.
     private static readonly double[] FormWeights = { 0.5, 0.3, 0.2 };
 
+    // Phase 28: U+2460–U+2471 = ①–⑱ (circled digits 1-18, covers max JRA field size).
+    private static string CircledRank(int? rank) =>
+        rank is >= 1 and <= 18 ? ((char)(0x245F + rank.Value)).ToString() : "";
+
+    // Phase 28 v2: Ninki-to-Finish Delta scoring. Replaces the earlier
+    // field-strength discount. Delta = favRank - finish.
+    //   Pattern A (Δ > 3): under-the-radar overachiever bonus.
+    //   Pattern B (Δ < 0 AND favRank ≤ 5): burned-favorite penalty.
+    //     Gated on favRank so a 13th-fav finishing 16th doesn't get punished —
+    //     a longshot running like a longshot isn't a market betrayal.
+    // Recency weights below amplify the most-recent run by ~2.5× vs run #3.
+    private const double DeltaBonusThreshold     = 3.0;
+    private const double DeltaBonusPerUnit       = 0.10;
+    private const double DeltaPenaltyPerUnit     = 0.08;
+    private const int    BurnedFavoriteMaxNinki  = 5;
+
+    private static double RunScore(int fin, int? favRank)
+    {
+        if (fin <= 0) return 0.0;
+        double raw = (fin <= 5) ? (1.0 / fin) : 0.0;
+        if (favRank is null or < 1) return raw;
+        double delta = favRank.Value - fin;
+        if (delta > DeltaBonusThreshold)
+            raw += (delta - DeltaBonusThreshold) * DeltaBonusPerUnit;
+        else if (delta < 0 && favRank.Value <= BurnedFavoriteMaxNinki)
+            raw += delta * DeltaPenaltyPerUnit;
+        return raw;
+    }
+
     private static (string last3Str, double formScore) ComputeLast3(
-        List<(DateTime Date, int Finish)>? hist, DateTime raceDate)
+        List<(DateTime Date, int Finish, int? FavRank)>? hist, DateTime raceDate)
     {
         if (hist == null || hist.Count == 0) return ("—-—-—", 0.0);
-        var picks = new List<int>(3);
+        var picks = new List<(int Finish, int? FavRank)>(3);
         foreach (var h in hist)
         {
             if (h.Date >= raceDate) continue;
-            picks.Add(h.Finish);
+            picks.Add((h.Finish, h.FavRank));
             if (picks.Count == 3) break;
         }
         if (picks.Count == 0) return ("—-—-—", 0.0);
@@ -39,8 +68,9 @@ public sealed class RacesController : ControllerBase
         {
             if (i < picks.Count)
             {
-                parts[i] = picks[i].ToString();
-                if (picks[i] >= 1 && picks[i] <= 5) score += FormWeights[i] * (1.0 / picks[i]);
+                var (fin, favRank) = picks[i];
+                parts[i] = fin.ToString() + CircledRank(favRank);
+                score += FormWeights[i] * RunScore(fin, favRank);
             }
             else parts[i] = "—";
         }
@@ -85,7 +115,7 @@ public sealed class RacesController : ControllerBase
             // ── FAST PATH: ETag string still fresh (< 30 s) — zero DB queries ─────────
             // Caching the computed ETag string avoids all 5 ETag-related DB round-trips
             // on every request. The 30 s TTL is well below the 5-minute live-odds floor.
-            const string EtagCacheKey = "races-etag-v5";
+            const string EtagCacheKey = "races-etag-v6";
             if (_cache.TryGetValue<string>(EtagCacheKey, out var fastEtag))
             {
                 Response.Headers["Cache-Control"] = "no-cache";
@@ -130,7 +160,7 @@ public sealed class RacesController : ControllerBase
                     .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                     .FirstOrDefaultAsync();
                 var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                etag = $"\"races-v5-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                etag = $"\"races-v6-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                 _cache.Set(EtagCacheKey, etag,
                     new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
             }
@@ -200,13 +230,13 @@ public sealed class RacesController : ControllerBase
                 from e in db.RaceEntries.AsNoTracking()
                 join r in db.Races.AsNoTracking() on e.RaceId equals r.RaceId
                 where entryHorseIds.Contains(e.HorseId!) && e.FinishPos != null && e.FinishPos > 0
-                select new { e.HorseId, r.RaceDate, Finish = e.FinishPos!.Value }
+                select new { e.HorseId, r.RaceDate, Finish = e.FinishPos!.Value, e.FavRank }
             ).ToListAsync();
             var finishesByHorse = horseFinishHistory
                 .GroupBy(x => x.HorseId!)
                 .ToDictionary(
                     g => g.Key,
-                    g => g.OrderByDescending(x => x.RaceDate).Select(x => (x.RaceDate, x.Finish)).ToList()
+                    g => g.OrderByDescending(x => x.RaceDate).Select(x => (x.RaceDate, x.Finish, x.FavRank)).ToList()
                 );
 
             // Race class is now stored on the races table (Oracle Q20: JyokenCD slot 5

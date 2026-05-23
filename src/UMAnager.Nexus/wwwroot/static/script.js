@@ -63,7 +63,7 @@ const RACE_COLUMN_META = {
     PP: { label: "PP", sortable: true, sortKey: "PP", initialAsc: true },
     Horse: { label: "Horse", sortable: true, sortKey: "Horse", initialAsc: true },
     Record: { label: "W/S", sortable: true, sortKey: "Record", initialAsc: true },
-    Last3: { label: "Form", sortable: true, sortKey: "Last3", initialAsc: false },
+    Last3: { label: "Form (fav)", sortable: true, sortKey: "Last3", initialAsc: false },
     "J%": { label: "J%", sortable: true, sortKey: "J%", initialAsc: false },
     "T%": { label: "T%", sortable: true, sortKey: "T%", initialAsc: false },
     Sire: { label: "Sire", sortable: true, sortKey: "Sire", initialAsc: true },
@@ -206,6 +206,50 @@ function isAutoLockPastVotesEnabled() {
 
 function isAutoBetHighlightingEnabled() {
     return appConfig.ui?.highlightAutoBets ?? false;
+}
+
+// Phase 28 v3: BOX_OPTIMIZATION (default) takes top-4 by power score.
+// TRADITIONAL_ROLES assigns ◎〇▲△ by role with the risk slider as an intensity filter.
+function getVotingMarkMode() {
+    const m = String(appConfig.ui?.votingMarkMode || 'BOX_OPTIMIZATION').toUpperCase();
+    return m === 'TRADITIONAL_ROLES' ? 'TRADITIONAL_ROLES' : 'BOX_OPTIMIZATION';
+}
+
+// Slider 0-100 → SAFE (<40), CHAOS (>60), BLEND (40-60).
+// BLEND defers to BOX_OPTIMIZATION for divergent role assignments.
+function riskZone(riskValue) {
+    if (riskValue < 40) return 'SAFE';
+    if (riskValue > 60) return 'CHAOS';
+    return 'BLEND';
+}
+
+// Parse Last3 string ("2⑧-1③-—") into structured runs, most-recent first.
+function parseLast3Runs(last3Str) {
+    if (!last3Str || last3Str === '—-—-—') return [];
+    return String(last3Str).split('-').map(p => {
+        const m = p.match(/^(\d+)([①-⑱])?$/);
+        if (!m) return null;
+        const fin = parseInt(m[1], 10);
+        const favRank = m[2] ? (m[2].codePointAt(0) - 0x245F) : null;
+        const delta = (favRank !== null && Number.isFinite(fin)) ? (favRank - fin) : null;
+        return { fin, favRank, delta };
+    }).filter(Boolean);
+}
+
+// Max positive NinkiFinishDelta across last-3 runs (0 if none qualify).
+function ninkiDeltaMaxPositive(runs) {
+    let max = 0;
+    for (const r of runs) if (r.delta !== null && r.delta > max) max = r.delta;
+    return max;
+}
+
+// If most-recent run was a "burned favorite" (favRank ≤ 5 AND delta < 0), return that delta; else null.
+function mostRecentBurnedDelta(runs) {
+    if (runs.length === 0) return null;
+    const r = runs[0];
+    if (r.delta === null || r.favRank === null) return null;
+    if (r.favRank <= 5 && r.delta < 0) return r.delta;
+    return null;
 }
 
 function raceStatusEmoji(race) {
@@ -1696,14 +1740,17 @@ function buildTableBody(r_id, entries) {
                 const raw = String(row.Last3 || "—-—-—");
                 const parts = raw.split('-');
                 const cells = parts.map(p => {
-                    const n = parseInt(p, 10);
+                    const m = p.match(/^(\d+)([①-⑱])?$/);
+                    const n = m ? parseInt(m[1], 10) : NaN;
+                    const favRank = m?.[2] ? (m[2].codePointAt(0) - 0x245F) : null;
                     let cls = 'last3-cell';
                     if (n === 1) cls += ' last3-win';
                     else if (n === 2 || n === 3) cls += ' last3-place';
                     else if (Number.isFinite(n) && n >= 4 && n <= 5) cls += ' last3-show';
                     else if (Number.isFinite(n)) cls += ' last3-out';
                     else cls += ' last3-none';
-                    return `<span class="${cls}">${p}</span>`;
+                    const rankHtml = favRank !== null ? `<span class="last3-rank">${favRank}</span>` : '';
+                    return `<span class="${cls}">${Number.isFinite(n) ? m[1] : p}${rankHtml}</span>`;
                 }).join('');
                 return `<td class="last3-strip" title="Form score: ${(parseFloat(row.Form_Score) || 0).toFixed(3)}">${cells}</td>`;
             })(),
@@ -2141,7 +2188,7 @@ function explainPowerScore(row, riskVal) {
         const formScoreVal = parseFloat(row.Form_Score) || 0;
         const last3Contrib = formScoreVal * fw.formWeight;
         baseFormScore += last3Contrib;
-        formLines.push({ label: `Last-3 form ${formScoreVal.toFixed(3)} × ${fw.formWeight}`, value: last3Contrib });
+        formLines.push({ label: `Form (Ninki-Δ) ${formScoreVal.toFixed(3)} × ${fw.formWeight}`, value: last3Contrib });
     } else {
         formLines.push({ label: 'Last-3 skipped (debut race)', value: 0 });
     }
@@ -2328,10 +2375,11 @@ function renderScoreExplain(row, anchor) {
         const last3 = row.Last3 && row.Last3 !== '—-—-—'
             ? ' (' + String(row.Last3).replace(/-/g, '–') + ')' : '';
         if (b.raceClass?.isDebut) return 'First career start — no race history';
-        if (formScore >= 0.65) return `Excellent recent form${last3}`;
+        if (formScore >= 0.65) return `Excellent form, beating expectations${last3}`;
         if (formScore >= 0.35) return `Solid recent form${last3}`;
-        if (formScore >= 0.1)  return `Mixed recent form${last3}`;
-        return `Poor / no recent form${last3}`;
+        if (formScore >= 0.10) return `Mixed recent form${last3}`;
+        if (formScore >= 0.00) return `Weak recent form${last3}`;
+        return `Burned favorite — under-performed market${last3}`;
     }
     function aeDesc(ae, name) {
         const nameStr = name ? `${name} — ` : '';
@@ -2742,8 +2790,7 @@ function updateAllRiskBadges() {
 }
 
 // Returns the engine's unconditional top-4 picks for a race, ignoring any existing marks.
-// Used by updateAutoBetHighlighting so the highlight always shows the engine's opinion
-// even when the user has manually overridden some or all marks.
+// Used by the Engine Picks sidebar and agreement-% stats — intentionally mark-blind.
 function getUnconditionalAutoBetRankingsForRace(r_id) {
     const entries = globalRaceEntries[r_id];
     if (!entries || entries.length === 0) return [];
@@ -2756,13 +2803,163 @@ function getUnconditionalAutoBetRankingsForRace(r_id) {
         .map((e, i) => ({ h_id: e.h_id, symbol: symbols[i] }));
 }
 
+// Returns engine suggestions that respect any marks the user has already set.
+// - Symbols already assigned by the user are skipped (their horse is done).
+// - Remaining symbols are filled by the highest-scoring completely-unmarked horses.
+// This means: if the user gives 〇 to a horse the engine wanted ◎ for, the engine
+// accepts the 〇, moves on, and suggests ◎ for the next best unmarked horse.
+function getMarkAwareAutoBetRankingsForRace(r_id) {
+    const entries = globalRaceEntries[r_id];
+    if (!entries || entries.length === 0) return [];
+    const symbols = ['◎', '〇', '▲', '△'];
+    const currentRisk = getCurrentAutoPickRisk();
+
+    // Which symbols already have a user-assigned horse, and which horses have any mark.
+    const takenSymbols = new Set();
+    const markedHorses = new Set();
+    entries.forEach(row => {
+        const h_id = String(row.Horse_ID).split('.')[0];
+        const mark = globalMarks[`${r_id}_${h_id}`];
+        if (mark) {
+            markedHorses.add(h_id);
+            if (symbols.includes(mark)) takenSymbols.add(mark);
+        }
+    });
+
+    // All symbols are user-assigned — nothing for the engine to suggest.
+    if (takenSymbols.size === symbols.length) return [];
+
+    // Horses ranked by power score, excluding any that already have a mark.
+    const pool = entries
+        .map(row => ({ h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, currentRisk) }))
+        .filter(e => !markedHorses.has(e.h_id))
+        .sort((a, b) => b.power - a.power);
+
+    const result = [];
+    let poolIdx = 0;
+    for (const symbol of symbols) {
+        if (takenSymbols.has(symbol)) continue;       // user already assigned this symbol
+        if (poolIdx >= pool.length) break;             // no more unmarked horses
+        result.push({ h_id: pool[poolIdx++].h_id, symbol });
+    }
+    return result;
+}
+
+// TRADITIONAL_ROLES: assign each mark by structural role rather than linear power rank.
+//   Slider zones: SAFE (<40) / BLEND (40-60) / CHAOS (>60). BLEND defers to BOX_OPT.
+//   Fallback per spec: if a role filter finds no candidate, use the BOX_OPT pick for that slot.
+function getTraditionalRoleAssignments(r_id) {
+    const entries = globalRaceEntries[r_id];
+    if (!entries || entries.length === 0) return [];
+
+    const risk = getCurrentAutoPickRisk();
+    const zone = riskZone(risk);
+
+    // BLEND zone: SAFE and CHAOS rules diverge — defer to BOX_OPT (mark-aware) for the whole race.
+    if (zone === 'BLEND') return getMarkAwareAutoBetRankingsForRace(r_id);
+
+    const symbols = ['◎', '〇', '▲', '△'];
+
+    // Score every entry once. NinkiDelta + burned-fav signals come from parsed Last3 runs.
+    const scored = entries.map(row => {
+        const runs = parseLast3Runs(row.Last3);
+        return {
+            h_id: String(row.Horse_ID).split('.')[0],
+            row,
+            power: calculatePowerScore(row, risk),
+            favRank: parseInt(row.Fav, 10) || null,
+            runs,
+            deltaPos: ninkiDeltaMaxPositive(runs),
+            burnedDelta: mostRecentBurnedDelta(runs),
+        };
+    });
+
+    // Track user-applied marks so the engine doesn't overwrite the user's hand-picks.
+    const takenSymbols = new Set();
+    const markedHorses = new Set();
+    entries.forEach(row => {
+        const h_id = String(row.Horse_ID).split('.')[0];
+        const mark = globalMarks[`${r_id}_${h_id}`];
+        if (mark) {
+            markedHorses.add(h_id);
+            if (symbols.includes(mark)) takenSymbols.add(mark);
+        }
+    });
+    if (takenSymbols.size === symbols.length) return [];
+
+    const assigned = new Set();
+    const result = [];
+    const pool = () => scored.filter(e => !markedHorses.has(e.h_id) && !assigned.has(e.h_id));
+
+    // The BOX_OPT fallback pick — highest unassigned power score.
+    const topByPower = (p) => p.slice().sort((a, b) => b.power - a.power)[0] || null;
+
+    const pick = (symbol, picker) => {
+        if (takenSymbols.has(symbol)) return;
+        const p = pool();
+        let candidate = picker(p);
+        if (!candidate) candidate = topByPower(p); // graceful fall-through to BOX_OPT
+        if (candidate) {
+            assigned.add(candidate.h_id);
+            result.push({ h_id: candidate.h_id, symbol });
+        }
+    };
+
+    // ◎ Honmei
+    pick('◎', p => {
+        if (zone === 'SAFE') return p.find(e => e.favRank === 1) || null;
+        // CHAOS: absolute highest raw score from our custom Form/Pedigree model.
+        return topByPower(p);
+    });
+
+    // 〇 Taiko
+    pick('〇', p => {
+        if (zone === 'SAFE') return p.find(e => e.favRank === 2) || null;
+        return topByPower(p);
+    });
+
+    // ▲ Dark Horse — value sleeper via positive NinkiFinishDelta.
+    // CHAOS doubles the delta weight to aggressively fish for longshot snipers.
+    pick('▲', p => {
+        const mult = zone === 'CHAOS' ? 2.0 : 1.0;
+        const ranked = p
+            .map(e => ({ ref: e, score: e.deltaPos * mult }))
+            .filter(x => x.score > 0)
+            .sort((a, b) => b.score - a.score);
+        return ranked[0]?.ref || null;
+    });
+
+    // △ Longshot
+    pick('△', p => {
+        if (zone === 'SAFE') return topByPower(p); // safe ticket filler
+        // CHAOS: redemption-arc longshot — outside top-5 fav today, burned-fav in most-recent
+        // run, with high rolling jockey or trainer place% (latent ability the market dropped).
+        const candidates = p
+            .filter(e => e.favRank !== null && e.favRank > 5)
+            .filter(e => e.burnedDelta !== null)
+            .map(e => {
+                const j = parseFloat(e.row.Jockey_Place_Pct) || 0;
+                const t = parseFloat(e.row.Trainer_Place_Pct) || 0;
+                return { ref: e, consistency: Math.max(j, t) };
+            })
+            .filter(x => x.consistency > 0)
+            .sort((a, b) => b.consistency - a.consistency);
+        return candidates[0]?.ref || null;
+    });
+
+    return result;
+}
+
 function updateAutoBetHighlighting() {
     document.querySelectorAll('.mark-btn.auto-bet-preview').forEach(btn => btn.classList.remove('auto-bet-preview'));
 
     if (!isAutoBetHighlightingEnabled()) return;
 
+    const mode = getVotingMarkMode();
     Object.keys(globalRaceEntries).forEach(r_id => {
-        const assignments = getUnconditionalAutoBetRankingsForRace(r_id);
+        const assignments = mode === 'TRADITIONAL_ROLES'
+            ? getTraditionalRoleAssignments(r_id)
+            : getMarkAwareAutoBetRankingsForRace(r_id);
         assignments.forEach(({ h_id, symbol }) => {
             const btn = document.getElementById(`btn_${r_id}_${h_id}_${symbol}`);
             if (btn) btn.classList.add('auto-bet-preview');
@@ -3184,11 +3381,12 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
 async function loadRaces() {
     const t0 = performance.now();
     appendDebugLine('loadRaces started');
-    // cache: 'no-store' bypasses any browser-side cached body — defends against
-    // stale responses on profiles that cached an older Cache-Control regime.
-    // The server still keeps a warm in-memory cache keyed by ETag for speed.
+    // cache: 'no-cache' re-validates every time (sends If-None-Match) but allows
+    // 304 short-circuits — browser skips response.json() when ETag matches, saving
+    // 2-4s of V8 JSON.parse on unchanged data. ETag v5 + 30s server cache makes
+    // the ETag trustworthy. 'no-store' was overkill and blocked all 304s.
     const _fetchT0 = performance.now();
-    const racesRes = await fetch('/api/races', { cache: 'no-store' });
+    const racesRes = await fetch('/api/races', { cache: 'no-cache' });
     const _headersMs = Math.round(performance.now() - _fetchT0);
     appendDebugLine(`/api/races status=${racesRes.status}`);
     const data = applyTimeDisplayToRacesPayload(await racesRes.json().catch(() => ({})));
@@ -5997,6 +6195,152 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
     }
 }
 
+/// Apply Day Votes (bulk) — iterates every unsubmitted voted race for the active day,
+/// pushing each through the proven single-race endpoint with submit_after_apply. Two
+/// confirmations: first only if the day has any unbet races (incomplete coverage),
+/// second always (final "you sure?" gate before anything hits OrePro).
+async function applyAllDayVotesToOrePro() {
+    const date = String(currentActiveDate || '').trim();
+    if (!date) {
+        setOreProSessionStatus('Select a day first, then apply day votes.', 'warn');
+        return;
+    }
+
+    const racesForDay = Array.isArray(globalRacesByDate[date]) ? globalRacesByDate[date] : [];
+    const allIds = racesForDay.map(r => String(r?.info?.race_id || '').trim()).filter(Boolean);
+    if (!allIds.length) {
+        setOreProSessionStatus(`No races found for ${date}.`, 'warn');
+        return;
+    }
+
+    // A race "has votes" if any of ◎〇▲△ is assigned to one of its horses.
+    const symbols = ['◎', '〇', '▲', '△'];
+    const hasMarks = (r_id) => {
+        const entries = globalRaceEntries[r_id] || [];
+        return entries.some(row => {
+            const h_id = String(row.Horse_ID).split('.')[0];
+            const m = globalMarks[`${r_id}_${h_id}`];
+            return m && symbols.includes(m);
+        });
+    };
+
+    const eligible = allIds.filter(r_id => hasMarks(r_id) && !isRaceLocked(r_id));
+    const lockedCount = allIds.filter(r_id => isRaceLocked(r_id)).length;
+    const unbetCount = allIds.length - eligible.length - lockedCount;
+
+    if (!eligible.length) {
+        setOreProSessionStatus(`No unsubmitted races with votes for ${date}.`, 'warn');
+        return;
+    }
+
+    // First confirm: only if some races on the day have no marks at all.
+    if (unbetCount > 0) {
+        const first = window.confirm(
+            `⚠️ ${unbetCount} of ${allIds.length} race(s) for ${date} have no votes yet.\n\n` +
+            `Apply votes for the ${eligible.length} race(s) that DO have marks and skip the rest?`
+        );
+        if (!first) return;
+    }
+
+    // Second confirm: final sanity check before anything hits OrePro.
+    const second = window.confirm(
+        `📤 About to APPLY + SUBMIT ${eligible.length} race(s) to OrePro for ${date}.\n\n` +
+        `Each race will be staged and committed one by one. This is final — proceed?`
+    );
+    if (!second) return;
+
+    const btn = document.getElementById('btn-orepro-apply-day');
+    const prevLabel = btn?.textContent || '📤 Apply Day Votes';
+
+    try {
+        if (btn) { btn.disabled = true; btn.textContent = '⏳ Preparing...'; }
+
+        setOreProSessionStatus('Preparing OrePro companion session...', 'info');
+        const companion = await controlOreProCompanion('open', eligible[0]);
+        if (!companion || companion.status !== 'ok') {
+            setOreProSessionStatus(
+                companion?.message || 'Could not initialize companion OrePro session. Click Open OrePro and retry.',
+                'warn'
+            );
+            return;
+        }
+
+        let okCount = 0;
+        let failCount = 0;
+        const failureLines = [];
+
+        for (let i = 0; i < eligible.length; i++) {
+            const r_id = eligible[i];
+            if (btn) btn.textContent = `⏳ Applying ${i + 1}/${eligible.length}`;
+            setOreProSessionStatus(`Applying race ${i + 1}/${eligible.length} (${r_id})...`, 'info');
+
+            const payload = buildOreProApplyVotesPayloadForRace(r_id);
+            if (!payload.races.length) {
+                failCount++;
+                failureLines.push(`[skip] ${r_id}: no resolvable marks`);
+                continue;
+            }
+            payload.submit_after_apply = true;
+            payload.go_next_race = (i < eligible.length - 1);
+
+            try {
+                const res = await fetch('/api/orepro/votes/apply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                const result = Array.isArray(data?.results) ? data.results[0] : (data?.result?.results?.[0] || null);
+                const topStatus = String(data?.status || '').trim().toLowerCase();
+                const rowStatus = String(result?.status || '').trim().toLowerCase();
+                if (topStatus !== 'error' && rowStatus !== 'error') {
+                    okCount++;
+                } else {
+                    failCount++;
+                    failureLines.push(`[${rowStatus || topStatus || 'error'}] ${r_id}: ${result?.message || data?.message || 'unknown'}`);
+                }
+            } catch (err) {
+                failCount++;
+                failureLines.push(`[exception] ${r_id}: ${err?.message || err}`);
+            }
+        }
+
+        // Lock every race on the day once (idempotent — covers any that succeeded).
+        if (okCount > 0) lockAllRacesForRaceDay(eligible[0]);
+
+        await loadOreProApplyState();
+        try { renderLiveViewPanel(); } catch (_) {}
+
+        const mode = failCount === 0 ? 'ok' : (okCount > 0 ? 'warn' : 'error');
+        setOreProSessionStatus(`Bulk apply complete for ${date}: ${okCount} ok, ${failCount} failed.`, mode);
+
+        // The bulk run takes a few seconds and the operator usually tabs away — pop a
+        // modal alert so they get a clear signal when it's done.
+        const alertIcon = failCount === 0 ? '✅' : (okCount > 0 ? '⚠️' : '❌');
+        const alertTail = failCount === 0
+            ? 'All votes submitted successfully.'
+            : (okCount > 0
+                ? `${okCount} succeeded, ${failCount} failed (see diagnostics panel).`
+                : `All ${failCount} submission(s) failed (see diagnostics panel).`);
+        window.alert(`${alertIcon} Apply Day Votes finished for ${date}.\n\n${alertTail}`);
+
+        // Drop any failure detail into the diagnostics panel so the operator can see what didn't go through.
+        if (failureLines.length) {
+            const out = document.getElementById('orepro-sync-results');
+            if (out) {
+                out.innerHTML = `
+                    <div class="orepro-sync-title">Apply Day Votes — Failures (${failCount})</div>
+                    <div class="orepro-sync-list" style="font-family:monospace; font-size:11px;">
+                        ${failureLines.map(l => `<div>${escapeHtml(l)}</div>`).join('')}
+                    </div>
+                `;
+            }
+        }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = prevLabel; }
+    }
+}
+
 function setOreProSessionStatus(message, mode = 'info') {
     const statusEl = document.getElementById('orepro-session-status');
     if (!statusEl) return;
@@ -6967,6 +7311,7 @@ async function showSettingsModal() {
     // 🎤 Uma Musume mode — theme state is client-side (localStorage).
     document.getElementById('setting-umamusumeMode').checked = localStorage.getItem(UMM_STORAGE_KEY) === '1';
     document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
+    document.getElementById('setting-votingMarkMode').value = getVotingMarkMode();
     document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     document.getElementById('setting-tvModeSplitPercent').value = Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent))
         ? Number(appConfig.ui?.tvModeSplitPercent)
@@ -7093,6 +7438,7 @@ async function updateSidebarSettings() {
         cleanPastRaceCards: document.getElementById('setting-cleanPastRaceCards').checked,
         showConsole: document.getElementById('setting-showConsole').checked,
         highlightAutoBets: document.getElementById('setting-highlightAutoBets').checked,
+        votingMarkMode: (document.getElementById('setting-votingMarkMode').value === 'TRADITIONAL_ROLES') ? 'TRADITIONAL_ROLES' : 'BOX_OPTIMIZATION',
         tvModeSplitPercent: parseClampedPercent('setting-tvModeSplitPercent', Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent)) ? Number(appConfig.ui?.tvModeSplitPercent) : 50),
         tvModePanelsFlipped: document.getElementById('setting-tvModePanelsFlipped').checked,
         formulaWeights: {

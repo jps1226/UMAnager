@@ -226,17 +226,41 @@
         body.overlay-mode #split-handle { display: none; }
         body.overlay-mode #toggle-gch-size,
         body.overlay-mode #flip-panels-btn { display: none; }
+        /* The GreenChannel banner has no purpose once the user has chosen
+           overlay mode — hide it so the video and the race-list panel can
+           reach up to the results ticker. (M key still toggles back to
+           split, which restores the banner and its controls.) */
+        body.overlay-mode #gch-header { display: none; }
         body.overlay-mode #racelist-panel {
             position: absolute;
-            top: 10px;
+            top: 4px;
             right: 10px;
             bottom: 10px;
-            width: 380px;
+            /* Width follows content (longest horse name + badges) so the left
+               edge of the overlay hugs the right side of the video. */
+            width: fit-content;
             max-width: 38vw;
-            min-width: 280px;
-            background: transparent;
-            border: none;
-            box-shadow: none;
+            min-width: 220px;
+            /* Flat frosted-glass fill; the mask-image below fades the entire
+               panel (bg + border + shadow) to transparent at the bottom so it
+               matches the existing scroll-content fade. */
+            background: rgba(11, 12, 16, 0.42);
+            backdrop-filter: blur(8px) saturate(140%);
+            -webkit-backdrop-filter: blur(8px) saturate(140%);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+            padding: 4px 2px;
+            /* Same gradient as #racelist-scroll's mask so background and
+               content fade together as you read downward. */
+            mask-image: linear-gradient(to bottom,
+                rgba(0,0,0,1) 0%,
+                rgba(0,0,0,1) 12%,
+                rgba(0,0,0,0) 60%);
+            -webkit-mask-image: linear-gradient(to bottom,
+                rgba(0,0,0,1) 0%,
+                rgba(0,0,0,1) 12%,
+                rgba(0,0,0,0) 60%);
             z-index: 20;
             transition: transform 240ms ease, opacity 240ms ease;
         }
@@ -1245,6 +1269,18 @@ async function bootGchEmbed() {
             showVolumeControl: true,
             pictureInPicture: true,
             scrubBehavior: 'play',
+            // VPN-jitter mitigation. video.js/VHS hints — start ABR with a
+            // conservative bandwidth estimate and refuse to grab renditions
+            // that vastly exceed the player's visible dimensions. Streaks may
+            // or may not honor these; the loadeddata cap below is the hard
+            // backstop either way.
+            html5: {
+                vhs: {
+                    bandwidth: 2_500_000,
+                    limitRenditionByPlayerDimensions: true,
+                    useBandwidthFromLocalStorage: true,
+                },
+            },
         };
 
         // Dispose old player instance if present before re-initializing.
@@ -1274,6 +1310,35 @@ async function bootGchEmbed() {
         if (inner && typeof inner.one === 'function') {
             inner.one('loadeddata', function() {
                 status.textContent = 'Live stream ready';
+                // Hard-cap HLS rendition at 720p so 1080p variants never engage
+                // — buys headroom against VPN jitter at negligible visual cost
+                // for a sidebar-sized window. Falls through silently if Streaks
+                // doesn't expose the qualityLevels API.
+                try {
+                    const levels = typeof inner.qualityLevels === 'function' ? inner.qualityLevels() : null;
+                    if (levels && levels.length) {
+                        let anyEnabled = false;
+                        for (let i = 0; i < levels.length; i++) {
+                            const h = levels[i].height || 0;
+                            const keep = h > 0 && h <= 720;
+                            levels[i].enabled = keep;
+                            if (keep) anyEnabled = true;
+                        }
+                        // Fallback: if every advertised level was > 720p, re-enable the lowest
+                        // available so playback isn't accidentally killed.
+                        if (!anyEnabled) {
+                            let lowestIdx = 0;
+                            let lowestH = Infinity;
+                            for (let i = 0; i < levels.length; i++) {
+                                const h = levels[i].height || Infinity;
+                                if (h < lowestH) { lowestH = h; lowestIdx = i; }
+                            }
+                            levels[lowestIdx].enabled = true;
+                        }
+                    }
+                } catch (capErr) {
+                    console.warn('HLS quality cap skipped:', capErr);
+                }
             });
         }
 

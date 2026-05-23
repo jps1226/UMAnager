@@ -1405,10 +1405,11 @@ td.finish-pos-3 { color: #cd7f32; }
 body:not(.dev-mode) .dev-only { display: none !important; }
 
 /* --- LAST-3 FORM STRIP (Phase 7) --- */
-td.last3-strip { text-align: center; white-space: nowrap; min-width: 60px; padding: 4px 6px; }
+td.last3-strip { text-align: center; white-space: nowrap; min-width: 72px; padding: 0 4px; vertical-align: middle; }
 td.last3-strip .last3-cell {
-    display: inline-block; min-width: 16px; padding: 1px 4px; margin: 0 1px;
-    border-radius: 3px; font-weight: bold; font-size: 12px; line-height: 16px;
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 20px; padding: 0 3px; margin: 0 1px;
+    border-radius: 3px; font-weight: bold; font-size: 15px; line-height: 1;
     background: rgba(255,255,255,0.04);
 }
 td.last3-strip .last3-win   { color: #1a1a1a; background: #ffd700; }
@@ -1416,6 +1417,7 @@ td.last3-strip .last3-place { color: #1a1a1a; background: #c0c0c0; }
 td.last3-strip .last3-show  { color: #fff;    background: #cd7f32; }
 td.last3-strip .last3-out   { color: #888; }
 td.last3-strip .last3-none  { color: #555; background: transparent; }
+td.last3-strip .last3-rank  { font-size: 0.72em; opacity: 0.6; margin-left: 2px; font-weight: normal; color: inherit; }
 
 /* --- AUTO-PICK SCORE EXPLAIN POPOVER (Phase 18) ---
    ⓘ trigger lives inside the Horse cell; popover anchors next to the row. */
