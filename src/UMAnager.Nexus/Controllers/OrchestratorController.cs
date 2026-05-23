@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using UMAnager.Nexus.Data;
 using UMAnager.Nexus.Services;
 
 namespace UMAnager.Nexus.Controllers;
@@ -10,12 +12,17 @@ public sealed class OrchestratorController : ControllerBase
     private readonly LiveOrchestrator _orchestrator;
     private readonly PhaseService _phase;
     private readonly SettingsService _settings;
+    private readonly DayRecapNotifier _dayRecap;
+    private readonly IDbContextFactory<AppDbContext> _dbFactory;
 
-    public OrchestratorController(LiveOrchestrator orchestrator, PhaseService phase, SettingsService settings)
+    public OrchestratorController(LiveOrchestrator orchestrator, PhaseService phase, SettingsService settings,
+        DayRecapNotifier dayRecap, IDbContextFactory<AppDbContext> dbFactory)
     {
         _orchestrator = orchestrator;
         _phase = phase;
         _settings = settings;
+        _dayRecap = dayRecap;
+        _dbFactory = dbFactory;
     }
 
     [HttpGet("status")]
@@ -53,5 +60,32 @@ public sealed class OrchestratorController : ControllerBase
         await _phase.SetLivePollPausedAsync(false);
         _orchestrator.RequestForceTick(); // immediate catch-up
         return Ok(new { paused = false });
+    }
+
+    /// <summary>
+    /// Manually trigger the day recap for a specific JST date (yyyy-MM-dd).
+    /// Use this if the automated recap missed the window (e.g. HR records arrived
+    /// in a batch with no RA records before this fix was deployed).
+    /// POST /api/orchestrator/trigger-recap?date=2026-05-23
+    /// </summary>
+    [HttpPost("trigger-recap")]
+    public async Task<IActionResult> TriggerRecap([FromQuery] string date, CancellationToken ct)
+    {
+        if (!DateTime.TryParseExact(date, "yyyy-MM-dd", null,
+                System.Globalization.DateTimeStyles.None, out var parsed))
+            return BadRequest(new { error = "date must be yyyy-MM-dd" });
+
+        var utcMidnight = DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var raceIds = await db.Races.AsNoTracking()
+            .Where(r => r.RaceDate == utcMidnight)
+            .Select(r => r.RaceId)
+            .ToListAsync(ct);
+
+        if (raceIds.Count == 0)
+            return NotFound(new { error = $"No races found for {date}", hint = "Check date is JST calendar date in yyyy-MM-dd" });
+
+        await _dayRecap.EvaluateAndNotifyAsync(raceIds, ct);
+        return Accepted(new { triggered_for = date, race_count = raceIds.Count });
     }
 }

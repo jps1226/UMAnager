@@ -160,7 +160,7 @@ public sealed class DayRecapNotifier
                 };
             })
             .GroupBy(x => x.RaceId)
-            .ToDictionary(g => g.Key, g => g.ToDictionary(x => x.Finish, x => x));
+            .ToDictionary(g => g.Key, g => g.GroupBy(x => x.Finish).ToDictionary(f => f.Key, f => f.First()));
 
         int honmei = 0, qBox = 0, tBox = 0, totalWon = 0, marked = 0;
         var winningLines = new List<string>();

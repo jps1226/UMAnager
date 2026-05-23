@@ -242,6 +242,7 @@ public sealed class NexusPipeServer : BackgroundService
                                 using var scope = _scopeFactory.CreateScope();
                                 // RA record raceId is bytes 11..26 (0-indexed), length 16.
                                 List<string> raceIds;
+                                List<string> hrRaceIds;
                                 await using (var snapshotDb = await _dbFactory.CreateDbContextAsync(CancellationToken.None))
                                 {
                                     var raRaw = await snapshotDb.RawStagingRecords
@@ -249,6 +250,20 @@ public sealed class NexusPipeServer : BackgroundService
                                         .Select(r => r.RawBytes)
                                         .ToListAsync(CancellationToken.None);
                                     raceIds = raRaw
+                                        .Where(b => b.Length >= 27)
+                                        .Select(b => Encoding.ASCII.GetString(b, 11, 16).Trim())
+                                        .Where(s => !string.IsNullOrWhiteSpace(s))
+                                        .Distinct()
+                                        .ToList();
+
+                                    // HR payout records arrive in a separate batch after RA/SE finish
+                                    // records. Capture their raceIds so DayRecapNotifier can fire once
+                                    // ResultsJson is populated, even when raceIds (RA-only) is empty.
+                                    var hrRaw = await snapshotDb.RawStagingRecords
+                                        .Where(r => r.RecordType == "HR" && !r.IsProcessed)
+                                        .Select(r => r.RawBytes)
+                                        .ToListAsync(CancellationToken.None);
+                                    hrRaceIds = hrRaw
                                         .Where(b => b.Length >= 27)
                                         .Select(b => Encoding.ASCII.GetString(b, 11, 16).Trim())
                                         .Where(s => !string.IsNullOrWhiteSpace(s))
@@ -269,13 +284,22 @@ public sealed class NexusPipeServer : BackgroundService
                                     // races are tracked in app_state.
                                     var betWin = scope.ServiceProvider.GetRequiredService<Services.BetWinNotifier>();
                                     await betWin.EvaluateAndNotifyAsync(raceIds, CancellationToken.None);
+                                }
 
-                                    // Phase 16: once a JST race-day's results are fully in, fire a
-                                    // single Discord recap with hit counts + estimated ¥ won.
-                                    // Idempotent via app_state.day_recap_sent_dates.
+                                // Phase 16: once a JST race-day's results are fully in, fire a
+                                // single Discord recap with hit counts + estimated ¥ won.
+                                // Uses RA ∪ HR raceIds: RA records carry finish positions, HR records
+                                // carry payouts (ResultsJson). Both sets are needed to satisfy the
+                                // ≥80%-finished + all-ResultsJson gate in DayRecapNotifier.
+                                var recapIds = raceIds.Union(hrRaceIds).ToList();
+                                if (recapIds.Count > 0)
+                                {
                                     var dayRecap = scope.ServiceProvider.GetRequiredService<Services.DayRecapNotifier>();
-                                    await dayRecap.EvaluateAndNotifyAsync(raceIds, CancellationToken.None);
+                                    await dayRecap.EvaluateAndNotifyAsync(recapIds, CancellationToken.None);
+                                }
 
+                                if (raceIds.Count > 0)
+                                {
                                     // Phase 9: refresh sire_performance MV after new finishes land.
                                     // CONCURRENTLY — readers never block, ~sub-second on ~10K rows.
                                     // Fire-and-forget so a slow refresh can't stall the pipe.

@@ -888,7 +888,6 @@
         <div id="racelist-header">
             <h2>🏇 Live View</h2>
             <span id="racelist-date-label">Loading…</span>
-            <button id="reload-btn" onclick="loadRaces()">⟳ Refresh</button>
             <button id="hide-overlay-btn" onclick="setOverlayVisible(false)" title="Hide overlay (O)">×</button>
         </div>
         <div id="racelist-scroll">
@@ -1378,7 +1377,6 @@ function esc(str) {
 
 /* ── Data loading ── */
 async function loadRaces() {
-    document.getElementById('reload-btn').textContent = '…';
     forceScrollOnNextCollapse = true;
     try {
         await loadTvDisplayLocalTime();
@@ -1391,8 +1389,6 @@ async function loadRaces() {
         renderAll();
     } catch (e) {
         showError('Failed to load race data: ' + e.message);
-    } finally {
-        document.getElementById('reload-btn').textContent = '⟳ Refresh';
     }
 }
 
@@ -1737,7 +1733,9 @@ function renderAll() {
 }
 
 function renderRaceList() {
-    const races = (racesData.races_by_date || {})[activeDate] || [];
+    const races = ((racesData.races_by_date || {})[activeDate] || [])
+        .slice()
+        .sort((a, b) => String((a.info || {}).sort_time || '').localeCompare(String((b.info || {}).sort_time || '')));
     const marks = (marksData && marksData.marks) || {};
     const body  = document.getElementById('race-list-body');
 
@@ -1816,8 +1814,16 @@ function renderRaceList() {
         html = '<div id="status-msg">No marks set for this date. Set marks in the main app first.</div>';
     }
 
+    // Freeze the overlay panel width during the innerHTML swap so fit-content
+    // doesn't snap to min-width for one frame while the old content is gone.
+    const panel = document.getElementById('racelist-panel');
+    const frozenW = panel ? panel.offsetWidth : 0;
+    if (frozenW > 0) panel.style.minWidth = frozenW + 'px';
+
     body.innerHTML = html;
     autoCollapseRacesTv();
+
+    if (frozenW > 0) requestAnimationFrame(() => { if (panel) panel.style.minWidth = ''; });
 }
 
 function toggleRaceBody(raceId) {
@@ -2154,11 +2160,11 @@ setInterval(pollOrchestratorNextTick, 10000);
 setInterval(tickNextTickCountdown, 1000);
 
 /* ── Live updates via SignalR (matches main dashboard /hubs/live) ── */
-let liveRefreshScheduled = false;
-function scheduleLiveRefresh() {
-    if (liveRefreshScheduled) return;
-    liveRefreshScheduled = true;
-    setTimeout(() => { liveRefreshScheduled = false; loadRaces(); }, 750);
+let oddsRefreshScheduled = false;
+function scheduleOddsRefresh() {
+    if (oddsRefreshScheduled) return;
+    oddsRefreshScheduled = true;
+    setTimeout(() => { oddsRefreshScheduled = false; loadRaces(); }, 750);
 }
 async function bootLiveHub() {
     try {
@@ -2168,10 +2174,11 @@ async function bootLiveHub() {
             .withUrl('/hubs/live')
             .withAutomaticReconnect()
             .build();
-        // Either event reshapes the ticker or table — coalesce repeated bursts
-        // (12-race results batch fires one event per race) into a single reload.
-        conn.on('ResultsUpdated', scheduleLiveRefresh);
-        conn.on('OddsUpdated',    scheduleLiveRefresh);
+        // Results are rare and time-sensitive — fetch immediately so the ticker
+        // lands at the same time as the Discord notification.
+        // Odds fire frequently; coalesce bursts with a short debounce instead.
+        conn.on('ResultsUpdated', loadRaces);
+        conn.on('OddsUpdated',    scheduleOddsRefresh);
         await conn.start();
     } catch (_) { /* fall back to 60s polling */ }
 }
