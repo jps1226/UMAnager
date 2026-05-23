@@ -10,6 +10,7 @@ public interface IDiscordNotifier
     Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default);
     Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, CancellationToken ct = default);
+    Task NotifyPostPositionsConfirmedAsync(string raceDate, int raceCount, CancellationToken ct = default);
     Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default);
     Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default);
@@ -56,6 +57,9 @@ public sealed class DiscordNotifier : IDiscordNotifier
         };
         return SendAsync($":checkered_flag: **Race plan loaded** for `{raceDate}`: {raceCount} races across {trackList}.", ct);
     }
+
+    public Task NotifyPostPositionsConfirmedAsync(string raceDate, int raceCount, CancellationToken ct = default)
+        => SendAsync($":horse_racing: **Post positions confirmed** for `{raceDate}` — {raceCount} races locked in. Awaiting odds.", ct);
 
     public Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default)
     {

@@ -348,12 +348,15 @@ async function refreshPhaseBadge() {
         if (!badge || !sub) return;
 
         const phase = data.phase || 'WAITING_FOR_RACES';
-        badge.classList.remove('phase-waiting', 'phase-upcoming', 'phase-live');
+        badge.classList.remove('phase-waiting', 'phase-posts', 'phase-upcoming', 'phase-live');
         const labelEl = badge.querySelector('.phase-badge-label');
 
         if (phase === 'LIVE_OPERATIONS') {
             badge.classList.add('phase-live');
             labelEl.textContent = '🔴 LIVE';
+        } else if (phase === 'AWAITING_POSTS') {
+            badge.classList.add('phase-posts');
+            labelEl.textContent = '🎫 Awaiting posts';
         } else if (phase === 'AWAITING_ODDS') {
             badge.classList.add('phase-upcoming');
             labelEl.textContent = '⏳ Awaiting odds';
@@ -376,7 +379,9 @@ async function refreshPhaseBadge() {
                 sub.textContent = 'Tick imminent';
             }
         } else {
-            sub.textContent = phase === 'WAITING_FOR_RACES' ? 'No upcoming races' : '';
+            sub.textContent = phase === 'WAITING_FOR_RACES' ? 'No upcoming races'
+                            : phase === 'AWAITING_POSTS'   ? 'Draw pending'
+                            : '';
         }
     } catch { /* silently ignore network errors */ }
 }

@@ -1293,6 +1293,11 @@ th {
     border-color: rgba(255, 255, 255, 0.1);
     color: #777;
 }
+.phase-posts {
+    background: rgba(255, 220, 0, 0.09);
+    border-color: rgba(255, 220, 0, 0.3);
+    color: #e6c800;
+}
 .phase-upcoming {
     background: rgba(255, 165, 0, 0.09);
     border-color: rgba(255, 165, 0, 0.3);

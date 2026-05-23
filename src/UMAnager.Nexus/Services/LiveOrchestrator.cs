@@ -22,6 +22,7 @@ public sealed class LiveOrchestrator : BackgroundService
     private readonly IDiscordNotifier _discord;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly AppStateService _appState;
+    private readonly RaceCardRefreshService _raceCardRefresh;
     private readonly ILogger<LiveOrchestrator> _logger;
 
     private readonly Channel<bool> _forceTickChannel = Channel.CreateBounded<bool>(
@@ -40,17 +41,19 @@ public sealed class LiveOrchestrator : BackgroundService
         IDiscordNotifier discord,
         IDbContextFactory<AppDbContext> dbFactory,
         AppStateService appState,
+        RaceCardRefreshService raceCardRefresh,
         ILogger<LiveOrchestrator> logger)
     {
-        _phase     = phase;
-        _settings  = settings;
-        _odds      = odds;
-        _results   = results;
-        _bridge    = bridge;
-        _discord   = discord;
-        _dbFactory = dbFactory;
-        _appState  = appState;
-        _logger    = logger;
+        _phase           = phase;
+        _settings        = settings;
+        _odds            = odds;
+        _results         = results;
+        _bridge          = bridge;
+        _discord         = discord;
+        _dbFactory       = dbFactory;
+        _appState        = appState;
+        _raceCardRefresh = raceCardRefresh;
+        _logger          = logger;
     }
 
     public void RequestForceTick() => _forceTickChannel.Writer.TryWrite(true);
@@ -96,11 +99,20 @@ public sealed class LiveOrchestrator : BackgroundService
             _ = _discord.NotifyPhaseChangedAsync(previousPhase, desired);
 
             // Race plan landed: fire the "populated" notification on the first transition
-            // out of WAITING_FOR_RACES. Usually that's → AWAITING_ODDS (cards published before
-            // odds), but if odds happen to land in the same poll we go straight to RACES_POPULATED.
+            // out of WAITING_FOR_RACES. Now lands in AWAITING_POSTS (Thu evening JST) since
+            // post positions are not yet drawn. If posts + odds arrive simultaneously (rare),
+            // the transition may skip directly to AWAITING_ODDS or RACES_POPULATED.
             if (previousPhase == AppPhase.WAITING_FOR_RACES
-                && (desired == AppPhase.AWAITING_ODDS || desired == AppPhase.RACES_POPULATED))
+                && (desired == AppPhase.AWAITING_POSTS
+                    || desired == AppPhase.AWAITING_ODDS
+                    || desired == AppPhase.RACES_POPULATED))
                 _ = NotifyRacePlanPopulatedAsync();
+
+            // Post positions confirmed: AWAITING_POSTS → AWAITING_ODDS (or RACES_POPULATED if
+            // odds land in the same batch — G1 early draw scenario).
+            if (previousPhase == AppPhase.AWAITING_POSTS
+                && (desired == AppPhase.AWAITING_ODDS || desired == AppPhase.RACES_POPULATED))
+                _ = NotifyPostPositionsConfirmedAsync();
         }
 
         var paused = await _phase.IsLivePollPausedAsync();
@@ -124,6 +136,12 @@ public sealed class LiveOrchestrator : BackgroundService
             var datesEnqueued = await _odds.EnqueueForUpcomingDatesAsync(ct);
             _logger.LogInformation("[Orchestrator] {Phase} tick: odds enqueued for {Count} date(s).", desired, datesEnqueued);
         }
+        else if (!paused && _bridge.IsConnected && desired == AppPhase.AWAITING_POSTS)
+        {
+            // Poll TOKURACESNPN until SE records arrive with PostPosition > 0.
+            var result = await _raceCardRefresh.TriggerNowAsync(ct);
+            _logger.LogInformation("[Orchestrator] AWAITING_POSTS tick: race card refresh → {Result}", result);
+        }
         else
         {
             _logger.LogDebug("[Orchestrator] {Phase} tick (paused={Paused}, connected={Connected}) — no fetch.",
@@ -146,7 +164,7 @@ public sealed class LiveOrchestrator : BackgroundService
 
     private async Task<TimeSpan> ClampForLiveBoundaryAsync(AppPhase phase, TimeSpan interval)
     {
-        if (phase != AppPhase.RACES_POPULATED && phase != AppPhase.AWAITING_ODDS) return interval;
+        if (phase != AppPhase.RACES_POPULATED && phase != AppPhase.AWAITING_ODDS && phase != AppPhase.AWAITING_POSTS) return interval;
 
         var liveWindowMinutes = await _settings.GetIntAsync(
             SettingsService.Keys.LiveWindowMinutes,
@@ -174,16 +192,19 @@ public sealed class LiveOrchestrator : BackgroundService
 
     private async Task<TimeSpan> GetIntervalForPhaseAsync(AppPhase phase) => phase switch
     {
-        AppPhase.LIVE_OPERATIONS  => await _settings.GetLiveOddsIntervalAsync(),
-        AppPhase.RACES_POPULATED  => await _settings.GetTimeSpanAsync(
-                                        SettingsService.Keys.OddsPollIntervalPrelive,
-                                        SettingsService.Defaults.OddsPollIntervalPrelive),
-        AppPhase.AWAITING_ODDS    => await _settings.GetTimeSpanAsync(
-                                        SettingsService.Keys.OddsPollIntervalAwaiting,
-                                        SettingsService.Defaults.OddsPollIntervalAwaiting),
+        AppPhase.LIVE_OPERATIONS   => await _settings.GetLiveOddsIntervalAsync(),
+        AppPhase.RACES_POPULATED   => await _settings.GetTimeSpanAsync(
+                                         SettingsService.Keys.OddsPollIntervalPrelive,
+                                         SettingsService.Defaults.OddsPollIntervalPrelive),
+        AppPhase.AWAITING_ODDS     => await _settings.GetTimeSpanAsync(
+                                         SettingsService.Keys.OddsPollIntervalAwaiting,
+                                         SettingsService.Defaults.OddsPollIntervalAwaiting),
+        AppPhase.AWAITING_POSTS    => await _settings.GetTimeSpanAsync(
+                                         SettingsService.Keys.PostsPollInterval,
+                                         SettingsService.Defaults.PostsPollInterval),
         AppPhase.WAITING_FOR_RACES => await _settings.GetTimeSpanAsync(
-                                        SettingsService.Keys.PopulatePollInterval,
-                                        SettingsService.Defaults.PopulatePollInterval),
+                                         SettingsService.Keys.PopulatePollInterval,
+                                         SettingsService.Defaults.PopulatePollInterval),
         _ => TimeSpan.FromMinutes(5),
     };
 
@@ -228,6 +249,35 @@ public sealed class LiveOrchestrator : BackgroundService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[Orchestrator] RacePlanPopulated summary failed (notification skipped).");
+        }
+    }
+
+    private async Task NotifyPostPositionsConfirmedAsync()
+    {
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync();
+            var jstNowUnspec = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, JstZone);
+            var jstNow       = DateTime.SpecifyKind(jstNowUnspec, DateTimeKind.Utc);
+
+            var today = DateTime.UtcNow.Date;
+            var upcomingDay = await db.Races.AsNoTracking()
+                .Where(r => r.RaceDate >= today && r.SortTime != null && r.SortTime > jstNow)
+                .OrderBy(r => r.RaceDate)
+                .Select(r => r.RaceDate)
+                .FirstOrDefaultAsync();
+
+            if (upcomingDay == default) return;
+
+            var raceCount = await db.Races.AsNoTracking()
+                .Where(r => r.RaceDate >= upcomingDay && r.SortTime != null && r.SortTime > jstNow)
+                .CountAsync();
+
+            await _discord.NotifyPostPositionsConfirmedAsync(upcomingDay.ToString("yyyy-MM-dd"), raceCount);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Orchestrator] NotifyPostPositionsConfirmed failed (notification skipped).");
         }
     }
 

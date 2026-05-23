@@ -6,7 +6,8 @@ namespace UMAnager.Nexus.Services;
 public enum AppPhase
 {
     WAITING_FOR_RACES,
-    AWAITING_ODDS,
+    AWAITING_POSTS,    // Race plan ingested but no post positions drawn yet (Thu evening JST)
+    AWAITING_ODDS,     // Posts confirmed (PostPosition > 0) but no odds published yet (Fri morning JST)
     RACES_POPULATED,
     LIVE_OPERATIONS,
 }
@@ -87,9 +88,19 @@ public sealed class PhaseService
 
         if (!anyFuture) return AppPhase.WAITING_FOR_RACES;
 
-        // Split RACES_POPULATED: if no upcoming-race entry has odds yet, we're still
-        // waiting on JRA to publish them (Thu evening JST → Fri morning JST). Poll
-        // tighter in that window so first-odds-publish is picked up promptly.
+        // Phase 34: split the pre-live window into two phases.
+        // AWAITING_POSTS  — race plan exists but SE records still have PostPosition = 0 (Thu ~8 PM JST).
+        // AWAITING_ODDS   — post positions drawn (any entry PostPosition > 0) but odds not published yet.
+        // RACES_POPULATED — both posts AND odds are present.
+        var anyUpcomingPosts = await ctx.RaceEntries
+            .AsNoTracking()
+            .AnyAsync(e => e.PostPosition != null && e.PostPosition > 0
+                        && ctx.Races.Any(r => r.RaceId == e.RaceId
+                                           && r.SortTime != null
+                                           && r.SortTime > jstNow));
+
+        if (!anyUpcomingPosts) return AppPhase.AWAITING_POSTS;
+
         var anyUpcomingOdds = await ctx.RaceEntries
             .AsNoTracking()
             .AnyAsync(e => e.Odds != null

@@ -18,6 +18,11 @@ public sealed class SettingsService
         // TimeSpan — odds refresh cadence during RACES_POPULATED (Thu/Fri).
         public const string OddsPollIntervalPrelive = "odds_poll_interval_prelive";
 
+        // TimeSpan — TOKURACESNPN refresh cadence during AWAITING_POSTS (race plan ingested
+        // but post positions not yet drawn). Polls the race card until any SE record
+        // has PostPosition > 0, then transitions to AWAITING_ODDS.
+        public const string PostsPollInterval = "posts_poll_interval";
+
         // TimeSpan — odds refresh cadence during AWAITING_ODDS (races present, JRA has
         // not published any odds yet). Tighter than prelive so first-publish is picked
         // up promptly; falls back to prelive cadence once any upcoming-race entry has odds.
@@ -66,6 +71,7 @@ public sealed class SettingsService
     public static class Defaults
     {
         public static readonly TimeSpan PopulatePollInterval     = TimeSpan.FromHours(1);
+        public static readonly TimeSpan PostsPollInterval        = TimeSpan.FromHours(1);
         public static readonly TimeSpan OddsPollIntervalPrelive  = TimeSpan.FromHours(1);
         public static readonly TimeSpan OddsPollIntervalAwaiting = TimeSpan.FromMinutes(15);
         public static readonly TimeSpan OddsPollIntervalLive     = TimeSpan.FromMinutes(5);
@@ -163,6 +169,7 @@ public sealed class SettingsService
         }
 
         AddIfMissing(Keys.PopulatePollInterval,    Defaults.PopulatePollInterval.ToString());
+        AddIfMissing(Keys.PostsPollInterval,       Defaults.PostsPollInterval.ToString());
         AddIfMissing(Keys.OddsPollIntervalPrelive,  Defaults.OddsPollIntervalPrelive.ToString());
         AddIfMissing(Keys.OddsPollIntervalAwaiting, Defaults.OddsPollIntervalAwaiting.ToString());
         AddIfMissing(Keys.OddsPollIntervalLive,    Defaults.OddsPollIntervalLive.ToString());
