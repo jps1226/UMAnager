@@ -56,8 +56,12 @@ public sealed class OddsApplyService
 
                     if (entry is null) continue;
 
-                    entry.Odds    = slot.WinOdds > 0 ? slot.WinOdds : entry.Odds;
-                    entry.FavRank = slot.FavRank > 0 ? slot.FavRank : entry.FavRank;
+                    if (slot.WinOdds > 0 && slot.WinOdds != entry.Odds)
+                    {
+                        entry.PrevOdds = entry.Odds; // snapshot before overwrite for ↑↓ indicator
+                        entry.Odds     = slot.WinOdds;
+                    }
+                    if (slot.FavRank > 0) entry.FavRank = slot.FavRank;
                     entriesUpdated++;
                     anyEntryTouched = true;
                 }

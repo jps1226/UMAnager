@@ -37,6 +37,9 @@ public class RaceEntryConfiguration : IEntityTypeConfiguration<RaceEntry>
         builder.Property(e => e.Odds)
             .HasPrecision(10, 2);
 
+        builder.Property(e => e.PrevOdds)
+            .HasPrecision(10, 2);
+
         builder.Property(e => e.FavRank);
 
         builder.Property(e => e.FinishPos);

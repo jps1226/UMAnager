@@ -2326,6 +2326,10 @@ td[data-cell="odds"].upset-mild        { background: rgba(72, 187, 120, 0.14) !i
 td[data-cell="odds"].chalk-fail-mild   { background: rgba(220, 80, 80, 0.14) !important; color: #f1c4c4 !important; }
 td[data-cell="odds"].chalk-fail-strong { background: rgba(220, 80, 80, 0.28) !important; color: #ffd6d6 !important; font-weight: 700; }
 
+/* Phase 35: live odds delta indicators — ↓ shortening (green), ↑ drifting (orange) */
+.odds-short { color: #4caf50; font-size: 0.72em; margin-left: 2px; vertical-align: super; line-height: 1; cursor: default; }
+.odds-drift { color: #ff8c42; font-size: 0.72em; margin-left: 2px; vertical-align: super; line-height: 1; cursor: default; }
+
 /* ── Phase 19b: Top-3 finish row marker — quiet left-edge stripe only ── */
 tr[data-finish="1"] > td:first-child { border-left: 3px solid #d4af37; }  /* gold */
 tr[data-finish="2"] > td:first-child { border-left: 3px solid #aaaab4; }  /* silver */

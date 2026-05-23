@@ -190,23 +190,68 @@ public sealed class LiveOrchestrator : BackgroundService
         return untilFlip < interval ? untilFlip : interval;
     }
 
-    private async Task<TimeSpan> GetIntervalForPhaseAsync(AppPhase phase) => phase switch
+    private async Task<TimeSpan> GetIntervalForPhaseAsync(AppPhase phase)
     {
-        AppPhase.LIVE_OPERATIONS   => await _settings.GetLiveOddsIntervalAsync(),
-        AppPhase.RACES_POPULATED   => await _settings.GetTimeSpanAsync(
-                                         SettingsService.Keys.OddsPollIntervalPrelive,
-                                         SettingsService.Defaults.OddsPollIntervalPrelive),
-        AppPhase.AWAITING_ODDS     => await _settings.GetTimeSpanAsync(
-                                         SettingsService.Keys.OddsPollIntervalAwaiting,
-                                         SettingsService.Defaults.OddsPollIntervalAwaiting),
-        AppPhase.AWAITING_POSTS    => await _settings.GetTimeSpanAsync(
-                                         SettingsService.Keys.PostsPollInterval,
-                                         SettingsService.Defaults.PostsPollInterval),
-        AppPhase.WAITING_FOR_RACES => await _settings.GetTimeSpanAsync(
-                                         SettingsService.Keys.PopulatePollInterval,
-                                         SettingsService.Defaults.PopulatePollInterval),
-        _ => TimeSpan.FromMinutes(5),
-    };
+        return phase switch
+        {
+            AppPhase.LIVE_OPERATIONS   => await _settings.GetLiveOddsIntervalAsync(),
+            AppPhase.RACES_POPULATED   => await GetRacesPopulatedIntervalAsync(),
+            AppPhase.AWAITING_ODDS     => await _settings.GetTimeSpanAsync(
+                                             SettingsService.Keys.OddsPollIntervalAwaiting,
+                                             SettingsService.Defaults.OddsPollIntervalAwaiting),
+            AppPhase.AWAITING_POSTS    => await _settings.GetTimeSpanAsync(
+                                             SettingsService.Keys.PostsPollInterval,
+                                             SettingsService.Defaults.PostsPollInterval),
+            AppPhase.WAITING_FOR_RACES => await _settings.GetTimeSpanAsync(
+                                             SettingsService.Keys.PopulatePollInterval,
+                                             SettingsService.Defaults.PopulatePollInterval),
+            _ => TimeSpan.FromMinutes(5),
+        };
+    }
+
+    /// <summary>
+    /// Returns the RACES_POPULATED polling interval, switching to the faster ramp cadence when
+    /// JST-now is within <c>prelive_ramp_window_minutes</c> of the first upcoming race post time.
+    /// This lets odds refresh tighten from 1h → 15m in the ~2h window before the card opens,
+    /// without requiring live-window proximity (which is handled separately by ClampForLiveBoundaryAsync).
+    /// </summary>
+    private async Task<TimeSpan> GetRacesPopulatedIntervalAsync()
+    {
+        var normalInterval = await _settings.GetTimeSpanAsync(
+            SettingsService.Keys.OddsPollIntervalPrelive,
+            SettingsService.Defaults.OddsPollIntervalPrelive);
+
+        var rampWindow = await _settings.GetIntAsync(
+            SettingsService.Keys.PreliveRampWindowMinutes,
+            SettingsService.Defaults.PreliveRampWindowMinutes);
+
+        var rampInterval = await _settings.GetTimeSpanAsync(
+            SettingsService.Keys.OddsPollIntervalPreliveRamp,
+            SettingsService.Defaults.OddsPollIntervalPreliveRamp);
+
+        var jstNowUnspec = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, JstZone);
+        var jstNow       = DateTime.SpecifyKind(jstNowUnspec, DateTimeKind.Utc);
+
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var nextRaceSortTime = await db.Races.AsNoTracking()
+            .Where(r => r.SortTime != null && r.SortTime > jstNow)
+            .OrderBy(r => r.SortTime)
+            .Select(r => r.SortTime!.Value)
+            .FirstOrDefaultAsync();
+
+        if (nextRaceSortTime == default) return normalInterval;
+
+        var minutesUntilFirst = (nextRaceSortTime - jstNow).TotalMinutes;
+        if (minutesUntilFirst <= rampWindow)
+        {
+            _logger.LogDebug(
+                "[Orchestrator] Pre-live ramp active: {Min:F0}m until first race (window={Window}m). Using {Ramp} interval.",
+                minutesUntilFirst, rampWindow, rampInterval);
+            return rampInterval;
+        }
+
+        return normalInterval;
+    }
 
     private async Task MaybeEnqueueUmRefreshAsync(CancellationToken ct)
     {

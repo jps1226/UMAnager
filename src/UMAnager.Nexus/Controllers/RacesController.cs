@@ -115,7 +115,7 @@ public sealed class RacesController : ControllerBase
             // ── FAST PATH: ETag string still fresh (< 30 s) — zero DB queries ─────────
             // Caching the computed ETag string avoids all 5 ETag-related DB round-trips
             // on every request. The 30 s TTL is well below the 5-minute live-odds floor.
-            const string EtagCacheKey = "races-etag-v6";
+            const string EtagCacheKey = "races-etag-v7";
             if (_cache.TryGetValue<string>(EtagCacheKey, out var fastEtag))
             {
                 Response.Headers["Cache-Control"] = "no-cache";
@@ -160,7 +160,7 @@ public sealed class RacesController : ControllerBase
                     .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                     .FirstOrDefaultAsync();
                 var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                etag = $"\"races-v6-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                etag = $"\"races-v7-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                 _cache.Set(EtagCacheKey, etag,
                     new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
             }
@@ -372,6 +372,7 @@ public sealed class RacesController : ControllerBase
                             BMS = ResolveAncestorName(horse?.BmsId),
                             BMS_ID = horse?.BmsId ?? "",
                             Odds = e.Odds?.ToString("F1") ?? "",
+                            Prev_Odds = e.PrevOdds?.ToString("F1") ?? "",
                             Fav = e.FavRank?.ToString() ?? "",
                             Finish = e.FinishPos?.ToString() ?? "",
                             Jockey      = jStat?.NameEn ?? jStat?.NameJa ?? e.JockeyName ?? "",

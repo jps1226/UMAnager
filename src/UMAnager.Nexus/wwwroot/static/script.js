@@ -1832,7 +1832,14 @@ function buildTableBody(r_id, entries) {
                     openTag = `<td data-cell="odds"${fb}`;
                 }
                 const tip = upsetCls ? ` title="Finish ${finishN} vs market rank ${favN} (Δ${(finishN - favN > 0 ? '+' : '')}${finishN - favN})"` : '';
-                return `${openTag}${tip}>${dispNum(row.Odds)}</td>`;
+                const curOdds = parseFloat(row.Odds), prevOdds = parseFloat(row.Prev_Odds);
+                let oddsDelta = '';
+                if (!isNaN(prevOdds) && prevOdds > 0 && !isNaN(curOdds) && curOdds > 0 && Math.abs(curOdds - prevOdds) >= 0.2) {
+                    oddsDelta = curOdds < prevOdds
+                        ? `<span class="odds-short" title="Shortened from ${prevOdds.toFixed(1)}">↓</span>`
+                        : `<span class="odds-drift" title="Drifted from ${prevOdds.toFixed(1)}">↑</span>`;
+                }
+                return `${openTag}${tip}>${dispNum(row.Odds)}${oddsDelta}</td>`;
             })(),
             Fav: `<td data-cell="fav"${fallbackCellAttrs('Fav')}>${dispNum(row.Fav)}</td>`,
             Finish: (() => { const f = Number(row.Finish); const shown = (Number.isFinite(f) && f > 0) ? f : ''; return `<td data-cell="finish" class="finish-pos finish-pos-${shown}">${shown}</td>`; })()

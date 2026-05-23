@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using UMAnager.Nexus.Data;
@@ -11,9 +12,11 @@ using UMAnager.Nexus.Data;
 namespace UMAnager.Nexus.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260523150019_Phase35_OddsDelta")]
+    partial class Phase35_OddsDelta
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,6 +24,25 @@ namespace UMAnager.Nexus.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("UMAnager.Nexus.Data.Entities.AppSetting", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Value")
+                        .HasColumnType("text");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("app_settings", (string)null);
+                });
 
             modelBuilder.Entity("UMAnager.Nexus.Data.Entities.AppState", b =>
                 {
@@ -39,6 +61,31 @@ namespace UMAnager.Nexus.Migrations
                     b.HasKey("Key");
 
                     b.ToTable("app_state", (string)null);
+                });
+
+            modelBuilder.Entity("UMAnager.Nexus.Data.Entities.BreedingHorse", b =>
+                {
+                    b.Property<string>("HansyokuNum")
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)");
+
+                    b.Property<DateTime>("LastUpdated")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("NameEn")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("NameJa")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.HasKey("HansyokuNum");
+
+                    b.ToTable("breeding_horses", (string)null);
                 });
 
             modelBuilder.Entity("UMAnager.Nexus.Data.Entities.Horse", b =>
@@ -118,6 +165,13 @@ namespace UMAnager.Nexus.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
+                    b.Property<string>("OddsJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("RaceClass")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
                     b.Property<DateTime>("RaceDate")
                         .HasColumnType("timestamp with time zone");
 
@@ -178,6 +232,9 @@ namespace UMAnager.Nexus.Migrations
                     b.Property<int?>("HorseWeight")
                         .HasColumnType("integer");
 
+                    b.Property<string>("JockeyCode")
+                        .HasColumnType("text");
+
                     b.Property<string>("JockeyName")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
@@ -203,6 +260,9 @@ namespace UMAnager.Nexus.Migrations
                         .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
+
+                    b.Property<string>("TrainerCode")
+                        .HasColumnType("text");
 
                     b.Property<DateTime>("UpdatedAt")
                         .ValueGeneratedOnAdd()

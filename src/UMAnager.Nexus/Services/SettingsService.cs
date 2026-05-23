@@ -49,6 +49,16 @@ public sealed class SettingsService
         // to /bet/bet_complete.html?race_id=... to show the receipt page. Mirrors v1 UX.
         public const string OreProNavToCompleteAfterSubmit = "orepro_nav_to_complete_after_submit";
 
+        // Int — minutes before first race start when RACES_POPULATED switches from the hourly
+        // prelive cadence to the faster ramp cadence. Lets odds updates tighten in the ~2h
+        // window before the first post without waiting for the full hourly tick.
+        public const string PreliveRampWindowMinutes = "prelive_ramp_window_minutes";
+
+        // TimeSpan — odds refresh cadence during RACES_POPULATED when within the ramp window
+        // (i.e. within prelive_ramp_window_minutes of first post). Typically matches
+        // odds_poll_interval_awaiting (15m) so the transition feels seamless.
+        public const string OddsPollIntervalPreliveRamp = "odds_poll_interval_prelive_ramp";
+
         // Bool ("true"/"false") — show race times in the operator's local timezone with
         // AM/PM (e.g. "8:55 PM ET") instead of the default JST 24h ("09:55"). The clean_date
         // and sort_time fields are unchanged; only the display string is converted.
@@ -75,7 +85,9 @@ public sealed class SettingsService
         public static readonly TimeSpan OddsPollIntervalPrelive  = TimeSpan.FromHours(1);
         public static readonly TimeSpan OddsPollIntervalAwaiting = TimeSpan.FromMinutes(15);
         public static readonly TimeSpan OddsPollIntervalLive     = TimeSpan.FromMinutes(5);
+        public static readonly TimeSpan OddsPollIntervalPreliveRamp = TimeSpan.FromMinutes(15);
         public const int                LiveWindowMinutes        = 90;
+        public const int                PreliveRampWindowMinutes = 120;
         public const string?            DiscordWebhookUrl        = null;
         public const string?            OreProSessionCookie      = null;
         public const string             OreProUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -170,7 +182,9 @@ public sealed class SettingsService
 
         AddIfMissing(Keys.PopulatePollInterval,    Defaults.PopulatePollInterval.ToString());
         AddIfMissing(Keys.PostsPollInterval,       Defaults.PostsPollInterval.ToString());
-        AddIfMissing(Keys.OddsPollIntervalPrelive,  Defaults.OddsPollIntervalPrelive.ToString());
+        AddIfMissing(Keys.OddsPollIntervalPrelive,     Defaults.OddsPollIntervalPrelive.ToString());
+        AddIfMissing(Keys.OddsPollIntervalPreliveRamp, Defaults.OddsPollIntervalPreliveRamp.ToString());
+        AddIfMissing(Keys.PreliveRampWindowMinutes,    Defaults.PreliveRampWindowMinutes.ToString());
         AddIfMissing(Keys.OddsPollIntervalAwaiting, Defaults.OddsPollIntervalAwaiting.ToString());
         AddIfMissing(Keys.OddsPollIntervalLive,    Defaults.OddsPollIntervalLive.ToString());
         AddIfMissing(Keys.LiveWindowMinutes,       Defaults.LiveWindowMinutes.ToString());

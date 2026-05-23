@@ -13,6 +13,7 @@ public class RaceEntry
     public string? JockeyCode { get; set; }    // 5-digit ASCII KisyuCode, SE offset 297 len 5 (Oracle Q21)
     public string? TrainerCode { get; set; }   // 5-digit ASCII ChokyosiCode, SE offset 86 len 5 (Oracle Q21)
     public decimal? Odds { get; set; }         // Win odds (converted from raw)
+    public decimal? PrevOdds { get; set; }    // Win odds from the previous fetch cycle (for ↑↓ delta indicator)
     public int? FavRank { get; set; }          // Favorite rank (1-18, where 1 is favorite)
     public int? FinishPos { get; set; }        // Finishing position (0 = withdrew/disqualified)
     public string? PerformanceJson { get; set; } // Finish time, margins, etc. (JSONB)
