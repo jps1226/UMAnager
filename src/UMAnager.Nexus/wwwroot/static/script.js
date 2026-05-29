@@ -1882,7 +1882,12 @@ function buildTableBody(r_id, entries) {
                         ? `<span class="odds-short" title="Shortened from ${prevOdds.toFixed(1)}">↓</span>`
                         : `<span class="odds-drift" title="Drifted from ${prevOdds.toFixed(1)}">↑</span>`;
                 }
-                return `${openTag}${tip}>${dispNum(row.Odds)}${oddsDelta}</td>`;
+                // Phase 37: clickable odds → single-horse trend graph (upcoming/live only).
+                const ohClickable = (globalRaceInfo[r_id]?._timeline !== 'past');
+                const ohAttr = ohClickable
+                    ? ` onclick="event.stopPropagation(); showOddsHistory('${r_id}','${h_id}')" style="cursor:pointer" title="Click for odds trend"`
+                    : '';
+                return `${openTag}${tip}${ohAttr}>${dispNum(row.Odds)}${oddsDelta}</td>`;
             })(),
             Fav: `<td data-cell="fav"${fallbackCellAttrs('Fav')}>${dispNum(row.Fav)}</td>`,
             Finish: (() => { const f = Number(row.Finish); const shown = (Number.isFinite(f) && f > 0) ? f : ''; return `<td data-cell="finish" class="finish-pos finish-pos-${shown}">${shown}</td>`; })()
@@ -3364,12 +3369,17 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         const historyBtnHtml = dateTimeline === 'past' && !raceHasHistoryData(race)
             ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Fetch finish positions and result data for this race">📜 Update History</button>`
             : "";
+        // Odds-trend graph (Phase 37): only for upcoming/live cards, where odds history accrues.
+        const trendsBtnHtml = dateTimeline !== 'past'
+            ? `<button class="btn-odds-trends" onclick="event.stopPropagation(); showOddsHistory('${r_id}')" title="Odds over time for every runner">📈 Trends</button>`
+            : "";
 
         html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
             <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
                 <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> <span id="header-meta-${r_id}">${raceStatusEmoji(race)} ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName} ${winBadgesHtml}</span>
 
                 ${historyBtnHtml}
+                ${trendsBtnHtml}
 
                 <button class="btn-autopick-safe auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20" ${isLocked ? 'disabled' : ''}>🛡️ Safe Bet</button>
                 <button class="btn-autopick auto-group-${r_id}" style="${autoStyle}; margin-left: 8px;" onclick="autoPick(event, '${r_id}', null)" title="Use Sidebar Slider" ${isLocked ? 'disabled' : ''}>🎲 Auto</button>
@@ -7392,6 +7402,272 @@ async function showExportModal() {
 
 function closeExportModal() {
     document.getElementById('export-modal').style.display = "none";
+}
+
+// ── Phase 37: Odds-history trend graph ──────────────────────────────────────
+// Modal with a hand-rolled SVG line chart (no chart-lib dependency). Field mode
+// (one line per horse) opens from the race-header 📈 button; single-horse mode
+// opens from clicking a horse's odds cell. Data: GET /api/races/{id}/odds-history.
+let _oddsHistoryState = null;   // { raceId, series:[{horse_id,name,post_position,points:[{t,odds}]}], single }
+let _oddsHistoryHidden = new Set();
+let _oddsHistoryGeom = null;    // geometry snapshot for the hover crosshair
+
+function oddsHistoryHorseMeta(raceId, horseId) {
+    const entries = globalRaceEntries[raceId] || [];
+    const row = entries.find(e => String(e.Horse_ID ?? '').split('.')[0] === String(horseId));
+    return {
+        name: row ? (row.Horse || String(horseId)) : String(horseId),
+        pp:   row ? parseInt(row.PP, 10) : NaN
+    };
+}
+
+async function showOddsHistory(raceId, horseId = null) {
+    const modal = document.getElementById('odds-history-modal');
+    const body  = document.getElementById('odds-history-body');
+    const titleEl = document.getElementById('odds-history-title');
+    if (!modal || !body) return;
+
+    const info = globalRaceInfo[raceId] || {};
+    const trackTxt = trackName(info.place) || info.place || '';
+    const rNum = info.race_number || '?';
+    if (horseId) {
+        const meta = oddsHistoryHorseMeta(raceId, horseId);
+        titleEl.textContent = `📈 ${meta.name} — Odds Trend (${trackTxt} R${rNum})`;
+    } else {
+        titleEl.textContent = `📈 Odds Trends — ${trackTxt} R${rNum}`;
+    }
+
+    _oddsHistoryHidden = new Set();
+    body.innerHTML = '<div class="odds-history-empty">Loading…</div>';
+    modal.style.display = 'flex';
+
+    try {
+        const res = await fetch(`/api/races/${encodeURIComponent(raceId)}/odds-history`, { cache: 'no-store' });
+        const data = await res.json();
+        let series = Array.isArray(data.series) ? data.series : [];
+        if (horseId) series = series.filter(s => String(s.horse_id) === String(horseId));
+        series.forEach(s => {
+            const meta = oddsHistoryHorseMeta(raceId, s.horse_id);
+            s.name = meta.name;
+            if (!Number.isFinite(s.post_position) && Number.isFinite(meta.pp)) s.post_position = meta.pp;
+        });
+        _oddsHistoryState = { raceId, series, single: !!horseId };
+        renderOddsHistory();
+    } catch (e) {
+        body.innerHTML = '<div class="odds-history-empty">Failed to load odds history.</div>';
+    }
+}
+
+function closeOddsHistoryModal() {
+    const m = document.getElementById('odds-history-modal');
+    if (m) m.style.display = 'none';
+    _oddsHistoryState = null;
+    _oddsHistoryGeom = null;
+}
+
+function _ohColor(i, n) { return `hsl(${Math.round(i * 360 / Math.max(n, 1))}, 70%, 56%)`; }
+function _ohJstClock(ms) {
+    const d = new Date(ms + 9 * 3600 * 1000); // UTC → JST wall clock
+    const hh = String(d.getUTCHours()).padStart(2, '0');
+    const mm = String(d.getUTCMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+}
+
+function renderOddsHistory() {
+    const body = document.getElementById('odds-history-body');
+    const st = _oddsHistoryState;
+    if (!body || !st) return;
+
+    const drawable = st.series.filter(s => Array.isArray(s.points) && s.points.length > 0);
+    if (!drawable.length) {
+        body.innerHTML = '<div class="odds-history-empty">No odds history recorded for this race yet. '
+            + 'Trends start building once live odds polling captures changes.</div>';
+        return;
+    }
+
+    // Geometry (fixed internal coords; CSS scales width to fit).
+    const VBW = 860, VBH = 380, padL = 52, padR = 18, padT = 16, padB = 34;
+    const plotW = VBW - padL - padR, plotH = VBH - padT - padB;
+
+    // Domains.
+    let tMin = Infinity, tMax = -Infinity, oMin = Infinity, oMax = -Infinity;
+    drawable.forEach(s => s.points.forEach(p => {
+        const ms = Date.parse(p.t);
+        if (ms < tMin) tMin = ms; if (ms > tMax) tMax = ms;
+        if (p.odds < oMin) oMin = p.odds; if (p.odds > oMax) oMax = p.odds;
+    }));
+    if (!(tMax > tMin)) tMax = tMin + 1;          // single timestamp guard
+    if (!(oMax > oMin)) { oMin = Math.max(1, oMin * 0.9); oMax = oMax * 1.1 || oMin + 1; }
+    const lMin = Math.log(oMin), lMax = Math.log(oMax);
+
+    const xOf = ms => padL + (ms - tMin) / (tMax - tMin) * plotW;
+    // Low odds (favorite) at the BOTTOM so "shortening" trends downward.
+    const yOf = od => padT + (1 - (Math.log(od) - lMin) / (lMax - lMin)) * plotH;
+
+    // Y gridlines at "nice" odds values inside the range.
+    const niceTicks = [1.2, 1.5, 2, 3, 5, 7, 10, 15, 20, 30, 50, 70, 100, 150, 200, 300, 500];
+    let yTicks = niceTicks.filter(v => v >= oMin * 0.999 && v <= oMax * 1.001);
+    if (yTicks.length < 2) yTicks = [oMin, oMax];
+
+    let svg = `<svg id="odds-history-svg" viewBox="0 0 ${VBW} ${VBH}" preserveAspectRatio="none" class="odds-history-svg">`;
+    // Y grid + labels.
+    yTicks.forEach(v => {
+        const y = yOf(v).toFixed(1);
+        svg += `<line x1="${padL}" y1="${y}" x2="${padL + plotW}" y2="${y}" class="oh-grid"/>`;
+        svg += `<text x="${padL - 6}" y="${y}" class="oh-ylabel">${v}</text>`;
+    });
+    // X axis end labels (JST) + a midpoint.
+    [tMin, (tMin + tMax) / 2, tMax].forEach((ms, i) => {
+        const x = xOf(ms).toFixed(1);
+        const anchor = i === 0 ? 'start' : (i === 2 ? 'end' : 'middle');
+        svg += `<text x="${x}" y="${VBH - 10}" class="oh-xlabel" text-anchor="${anchor}">${_ohJstClock(ms)} JST</text>`;
+    });
+
+    // Lines.
+    const n = drawable.length;
+    const geomSeries = [];
+    drawable.forEach((s, i) => {
+        if (_oddsHistoryHidden.has(String(s.horse_id))) return;
+        const color = _ohColor(i, n);
+        const pts = s.points.map(p => ({ x: xOf(Date.parse(p.t)), y: yOf(p.odds), odds: p.odds, fav: p.fav, ms: Date.parse(p.t) }));
+        const path = pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+        svg += `<polyline id="oh-line-${i}" points="${path}" fill="none" stroke="${color}" stroke-width="2" class="oh-line"/>`;
+        // Dot on the latest point.
+        const last = pts[pts.length - 1];
+        svg += `<circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="3.2" fill="${color}"/>`;
+        if (st.single) {
+            pts.forEach(p => { svg += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.2" fill="${color}"/>`; });
+        }
+        geomSeries.push({ idx: i, horseId: String(s.horse_id), name: s.name, color, pts, pp: s.post_position });
+    });
+
+    // Crosshair guide + hover capture rect.
+    svg += `<line id="oh-crosshair" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}" class="oh-crosshair" style="display:none"/>`;
+    svg += `<rect id="oh-hover" x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" fill="transparent"/>`;
+    svg += `</svg>`;
+
+    // Legend (sorted by current odds asc — favorites first). Click toggles a line.
+    const legendItems = drawable.map((s, i) => {
+        const lastPt = s.points[s.points.length - 1];
+        const cur = lastPt.odds;
+        const first = s.points[0].odds;
+        const fav = lastPt.fav;
+        const hidden = _oddsHistoryHidden.has(String(s.horse_id));
+        return { s, i, cur, first, fav, color: _ohColor(i, n), hidden };
+    }).sort((a, b) => a.cur - b.cur);
+
+    let legend = '<div class="odds-history-legend">';
+    legendItems.forEach(it => {
+        const ppTxt = Number.isFinite(it.s.post_position) ? it.s.post_position : '–';
+        const popTxt = (it.fav !== null && it.fav !== undefined && it.fav > 0) ? `#${it.fav}` : '';
+        const move = it.cur < it.first ? `▼ ${it.first.toFixed(1)}→${it.cur.toFixed(1)}`
+                   : it.cur > it.first ? `▲ ${it.first.toFixed(1)}→${it.cur.toFixed(1)}`
+                   : `${it.cur.toFixed(1)}`;
+        const moveCls = it.cur < it.first ? 'oh-move-short' : (it.cur > it.first ? 'oh-move-drift' : '');
+        legend += `<span class="oh-legend-item${it.hidden ? ' oh-legend-off' : ''}" `
+                + `onclick="toggleOddsHistoryLine('${escapeHtml(String(it.s.horse_id))}')">`
+                + `<span class="oh-swatch" style="background:${it.color}"></span>`
+                + `<span class="oh-leg-pp">${ppTxt}</span> `
+                + `<span class="oh-leg-name">${escapeHtml(it.s.name)}</span> `
+                + `<span class="oh-leg-odds ${moveCls}">${move}</span>`
+                + (popTxt ? ` <span class="oh-leg-pop" title="Current popularity rank">${popTxt}</span>` : '')
+                + `</span>`;
+    });
+    legend += '</div>';
+
+    const hint = st.single ? '' : '<div class="odds-history-hint">Tap a horse in the legend to show/hide its line.</div>';
+    body.innerHTML = `<div class="odds-history-chart-wrap"><div id="oh-tooltip" class="odds-history-tooltip" style="display:none"></div>${svg}</div>${legend}${hint}`;
+
+    // Stash geometry + wire the hover crosshair.
+    _oddsHistoryGeom = { padL, padT, plotW, plotH, tMin, tMax, VBW, VBH, series: geomSeries };
+    _wireOddsHistoryHover();
+}
+
+function toggleOddsHistoryLine(horseId) {
+    const k = String(horseId);
+    if (_oddsHistoryHidden.has(k)) _oddsHistoryHidden.delete(k);
+    else _oddsHistoryHidden.add(k);
+    renderOddsHistory();
+}
+
+function _ohSetLineEmphasis(hoverIdx) {
+    const g = _oddsHistoryGeom;
+    if (!g) return;
+    g.series.forEach(s => {
+        const el = document.getElementById('oh-line-' + s.idx);
+        if (!el) return;
+        if (hoverIdx === null) {                 // reset
+            el.style.opacity = '1'; el.style.strokeWidth = '2';
+        } else if (s.idx === hoverIdx) {          // emphasize hovered
+            el.style.opacity = '1'; el.style.strokeWidth = '3.4';
+        } else {                                  // dim the rest
+            el.style.opacity = '0.18'; el.style.strokeWidth = '1.5';
+        }
+    });
+}
+
+function _wireOddsHistoryHover() {
+    const svg = document.getElementById('odds-history-svg');
+    const rect = document.getElementById('oh-hover');
+    const cross = document.getElementById('oh-crosshair');
+    const tip = document.getElementById('oh-tooltip');
+    const g = _oddsHistoryGeom;
+    if (!svg || !rect || !cross || !tip || !g) return;
+
+    const NEAR = 16; // viewBox units: how close (vertically) the cursor must be to "hover" a line
+
+    const onMove = (evt) => {
+        const r = svg.getBoundingClientRect();
+        const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+        const clientY = evt.touches ? evt.touches[0].clientY : evt.clientY;
+        const vx = Math.max(g.padL, Math.min(g.padL + g.plotW, ((clientX - r.left) / r.width) * g.VBW));
+        const vy = ((clientY - r.top) / r.height) * g.VBH;
+        const frac = (vx - g.padL) / g.plotW;
+        const ms = g.tMin + frac * (g.tMax - g.tMin);
+
+        // Time crosshair always tracks the cursor.
+        cross.setAttribute('x1', vx.toFixed(1));
+        cross.setAttribute('x2', vx.toFixed(1));
+        cross.style.display = '';
+
+        // Find the line whose nearest-in-time point is vertically closest to the cursor.
+        let best = null, bestDy = Infinity;
+        g.series.forEach(s => {
+            let np = s.pts[0], nd = Infinity;
+            for (const p of s.pts) { const d = Math.abs(p.ms - ms); if (d < nd) { nd = d; np = p; } }
+            const dy = Math.abs(np.y - vy);
+            if (dy < bestDy) { bestDy = dy; best = { s, np }; }
+        });
+
+        if (!best || bestDy > NEAR) {     // not near any line → just the time guide
+            tip.style.display = 'none';
+            _ohSetLineEmphasis(null);
+            return;
+        }
+
+        _ohSetLineEmphasis(best.s.idx);
+
+        const ppTxt = Number.isFinite(best.s.pp) ? `${best.s.pp} ` : '';
+        const favTxt = (best.np.fav !== null && best.np.fav !== undefined && best.np.fav > 0)
+            ? ` · <span class="oh-tip-pop">#${best.np.fav} pop</span>` : '';
+        tip.innerHTML = `<div class="oh-tip-time">${_ohJstClock(ms)} JST</div>`
+            + `<div class="oh-tip-row"><span class="oh-swatch" style="background:${best.s.color}"></span>`
+            + `<span class="oh-tip-pp">${ppTxt}</span>${escapeHtml(best.s.name)} `
+            + `<b>${best.np.odds.toFixed(1)}</b>${favTxt}</div>`;
+        tip.style.display = '';
+
+        // Anchor the (small) tooltip near the cursor, clamped inside the chart wrap.
+        const wrap = svg.parentElement.getBoundingClientRect();
+        const px = clientX - wrap.left, py = clientY - wrap.top;
+        tip.style.left = Math.min(px + 14, wrap.width - tip.offsetWidth - 8) + 'px';
+        tip.style.top = Math.max(8, py - tip.offsetHeight - 10) + 'px';
+    };
+    const onLeave = () => { cross.style.display = 'none'; tip.style.display = 'none'; _ohSetLineEmphasis(null); };
+
+    rect.addEventListener('mousemove', onMove);
+    rect.addEventListener('mouseleave', onLeave);
+    rect.addEventListener('touchmove', onMove, { passive: true });
+    rect.addEventListener('touchend', onLeave);
 }
 
 const OREPRO_URL = 'https://orepro.netkeiba.com/bet/race_list.html';

@@ -35,6 +35,8 @@ public sealed class OddsApplyService
         int entriesUpdated = 0;
         var processedIds   = new List<long>(o1Records.Count);
         var touchedRaces   = new HashSet<string>(StringComparer.Ordinal);
+        var historyRows    = new List<Data.Entities.OddsHistory>();
+        var capturedAt     = DateTime.UtcNow; // one timestamp for this apply batch
 
         foreach (var staging in o1Records)
         {
@@ -60,6 +62,18 @@ public sealed class OddsApplyService
                     {
                         entry.PrevOdds = entry.Odds; // snapshot before overwrite for ↑↓ indicator
                         entry.Odds     = slot.WinOdds;
+
+                        // Phase 37: append a time-series point only when the value actually
+                        // changed (this branch). Auto-dedupes consecutive identical odds.
+                        historyRows.Add(new Data.Entities.OddsHistory
+                        {
+                            RaceId       = raceId,
+                            HorseId      = entry.HorseId,
+                            PostPosition = entry.PostPosition,
+                            Odds         = slot.WinOdds,
+                            FavRank      = slot.FavRank > 0 ? slot.FavRank : entry.FavRank,
+                            CapturedAt   = capturedAt,
+                        });
                     }
                     if (slot.FavRank > 0) entry.FavRank = slot.FavRank;
                     entriesUpdated++;
@@ -76,6 +90,9 @@ public sealed class OddsApplyService
             }
         }
 
+        // Append odds-history snapshots in the same transaction as the entry updates.
+        if (historyRows.Count > 0) db.OddsHistory.AddRange(historyRows);
+
         // Flush entry updates.
         await db.SaveChangesAsync(ct);
 
@@ -85,8 +102,8 @@ public sealed class OddsApplyService
             .Where(r => processedIds.Contains(r.Id))
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.IsProcessed, true), ct);
 
-        _logger.LogInformation("[OddsApply] Done. Records={Records}, EntriesUpdated={Entries}, Races={Races}",
-            processedIds.Count, entriesUpdated, touchedRaces.Count);
+        _logger.LogInformation("[OddsApply] Done. Records={Records}, EntriesUpdated={Entries}, Races={Races}, HistoryPoints={History}",
+            processedIds.Count, entriesUpdated, touchedRaces.Count, historyRows.Count);
 
         return new OddsApplyResult(processedIds.Count, entriesUpdated, touchedRaces);
     }

@@ -127,6 +127,34 @@ using (var scope = app.Services.CreateScope())
     }
 }
 
+// Phase 37: odds-history time-series table (idempotent). Created via raw SQL — same
+// pattern as breeding_horses — so we never fight EF migrations for this additive table.
+using (var scope = app.Services.CreateScope())
+{
+    try
+    {
+        var factory = scope.ServiceProvider.GetRequiredService<Microsoft.EntityFrameworkCore.IDbContextFactory<UMAnager.Nexus.Data.AppDbContext>>();
+        using var db = await factory.CreateDbContextAsync();
+        await db.Database.ExecuteSqlRawAsync(@"
+            CREATE TABLE IF NOT EXISTS odds_history (
+                ""Id""           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                ""RaceId""       VARCHAR(16)   NOT NULL,
+                ""HorseId""      VARCHAR(10)   NOT NULL,
+                ""PostPosition"" INT,
+                ""Odds""         NUMERIC(10,2) NOT NULL,
+                ""FavRank""      INT,
+                ""CapturedAt""   TIMESTAMPTZ   NOT NULL DEFAULT now()
+            );
+            ALTER TABLE odds_history ADD COLUMN IF NOT EXISTS ""FavRank"" INT;
+            CREATE INDEX IF NOT EXISTS ix_odds_history_race_time ON odds_history (""RaceId"", ""CapturedAt"");
+        ");
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "[Startup] Phase 37 odds_history table ensure failed (non-fatal).");
+    }
+}
+
 // Phase 9: ensure the sire_performance MV exists (idempotent). First-run also kicks
 // off an initial population so /api/races has data immediately; subsequent restarts
 // no-op since the MV already holds rows.

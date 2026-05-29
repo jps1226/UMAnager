@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260523-2">
+    <link rel="stylesheet" href="/static/style.css?v=20260529-2">
 </head>
 <body>
 
@@ -269,6 +269,19 @@
         </div>
         <div id="export-display"></div>
         <button onclick="closeExportModal()" class="btn-full modal-close-btn">Close</button>
+    </div>
+</div>
+
+<div id="odds-history-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content modal-content-wide">
+        <div class="modal-header">
+            <h3 class="modal-title" id="odds-history-title">📈 Odds Trends</h3>
+            <div class="modal-header-actions">
+                <button onclick="closeOddsHistoryModal()" class="close-btn">✖</button>
+            </div>
+        </div>
+        <div id="odds-history-body"></div>
+        <button onclick="closeOddsHistoryModal()" class="btn-full modal-close-btn">Close</button>
     </div>
 </div>
 
@@ -573,6 +586,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260523-6"></script>
+<script src="/static/script.js?v=20260529-2"></script>
 </body>
 </html>

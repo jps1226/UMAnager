@@ -438,6 +438,43 @@ public sealed class RacesController : ControllerBase
 
     // /api/config GET/POST is owned by ConfigController — don't duplicate here.
 
+    // Phase 37: odds-over-time series for one race. Returns one entry per horse with the
+    // ordered list of (timestamp, odds) snapshots captured while betting was open. The
+    // frontend draws a multi-line trend graph; names are joined client-side from the
+    // already-loaded race entries, so we keep this payload lean.
+    [HttpGet("{raceId}/odds-history")]
+    public async Task<IActionResult> GetOddsHistory(string raceId)
+    {
+        if (string.IsNullOrWhiteSpace(raceId)) return BadRequest(new { error = "raceId required" });
+
+        using var db = await _dbFactory.CreateDbContextAsync();
+        var rows = await db.OddsHistory.AsNoTracking()
+            .Where(h => h.RaceId == raceId)
+            .OrderBy(h => h.CapturedAt)
+            .Select(h => new { h.HorseId, h.PostPosition, h.Odds, h.FavRank, h.CapturedAt })
+            .ToListAsync();
+
+        var series = rows
+            .GroupBy(r => r.HorseId)
+            .Select(g => new
+            {
+                horse_id      = g.Key,
+                post_position = g.Select(x => x.PostPosition).LastOrDefault(),
+                points        = g.Select(x => new
+                {
+                    t    = x.CapturedAt.ToUniversalTime().ToString("o"),
+                    odds = (double)x.Odds,
+                    fav  = x.FavRank
+                }).ToList()
+            })
+            .OrderBy(s => s.post_position ?? 999)
+            .ToList();
+
+        // no-store: live-ish data, cheap query, and we never want a stale trend served.
+        Response.Headers["Cache-Control"] = "no-store";
+        return Ok(new { race_id = raceId, series });
+    }
+
     [HttpGet("../marks")]
     public IActionResult GetMarks() => Ok(new
     {

@@ -1544,6 +1544,67 @@ td.jt-rate-none   { color: #444; }
     color: #000;
 }
 
+/* Phase 37: odds-trend header button + chart modal */
+.btn-odds-trends {
+    background: transparent;
+    border: 1px solid #6ea8ff;
+    color: #6ea8ff;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 8px;
+    transition: 0.2s;
+    vertical-align: middle;
+}
+.btn-odds-trends:hover { background: #6ea8ff; color: #000; }
+
+.odds-history-empty { padding: 30px 12px; color: #888; text-align: center; font-size: 14px; }
+.odds-history-chart-wrap { position: relative; width: 100%; }
+.odds-history-svg {
+    width: 100%; height: 380px; display: block;
+    background: #14161c; border: 1px solid #2a2e38; border-radius: 6px;
+}
+.odds-history-svg .oh-grid { stroke: #2a2e38; stroke-width: 1; }
+.odds-history-svg .oh-ylabel { fill: #888; font-size: 11px; text-anchor: end; dominant-baseline: middle; }
+.odds-history-svg .oh-xlabel { fill: #888; font-size: 11px; }
+.odds-history-svg .oh-line { stroke-linejoin: round; stroke-linecap: round; }
+.odds-history-svg .oh-crosshair { stroke: #6ea8ff; stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+
+.odds-history-tooltip {
+    position: absolute; z-index: 5; pointer-events: none;
+    background: rgba(10,12,16,0.95); border: 1px solid #3a4150; border-radius: 6px;
+    padding: 6px 8px; font-size: 12px; color: #e6e6e6; min-width: 120px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+}
+.odds-history-tooltip .oh-tip-time { color: #6ea8ff; font-weight: bold; margin-bottom: 3px; }
+.odds-history-tooltip .oh-tip-row { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+
+.odds-history-legend {
+    display: flex; flex-wrap: wrap; gap: 6px 14px;
+    margin-top: 12px; max-height: 200px; overflow-y: auto;
+}
+.oh-legend-item {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; color: #ddd; cursor: pointer; padding: 2px 4px; border-radius: 4px;
+    user-select: none;
+}
+.oh-legend-item:hover { background: #20242e; }
+.oh-legend-off { opacity: 0.4; text-decoration: line-through; }
+.oh-swatch { width: 11px; height: 11px; border-radius: 2px; flex-shrink: 0; display: inline-block; }
+.oh-leg-pp { color: #888; min-width: 16px; text-align: right; }
+.oh-leg-name { color: #eee; }
+.oh-leg-odds { color: #aaa; font-variant-numeric: tabular-nums; }
+.oh-move-short { color: #1dd1a1; }   /* shortened = bet money */
+.oh-move-drift { color: #f5a623; }   /* drifted = drifting out */
+.oh-leg-pop {
+    color: #c8d8ff; background: rgba(77,112,197,0.18); border: 1px solid #4d70c5;
+    border-radius: 999px; padding: 0 6px; font-size: 10px; font-variant-numeric: tabular-nums;
+}
+.oh-tip-pp { color: #888; }
+.oh-tip-pop { color: #c8d8ff; }
+.odds-history-hint { margin-top: 8px; color: #666; font-size: 11px; text-align: center; }
+
 /* --- EXPORT MODAL --- */
 .modal-overlay {
     position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;

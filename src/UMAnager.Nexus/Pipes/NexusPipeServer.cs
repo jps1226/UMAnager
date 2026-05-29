@@ -212,6 +212,25 @@ public sealed class NexusPipeServer : BackgroundService
                                 await svc.ParseAllRecordsAsync(CancellationToken.None);
                                 _logger.LogInformation("[Nexus] TOKU auto-parse complete.");
 
+                                // Phase 37: purge odds-history for race days before today (JST).
+                                // A populate means a fresh card has landed; we keep the current
+                                // day's trend viewable but drop prior days so the table stays small.
+                                try
+                                {
+                                    await using var purgeDb = await _dbFactory.CreateDbContextAsync(CancellationToken.None);
+                                    var jstToday = DateTime.SpecifyKind(
+                                        TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, JstZone).Date, DateTimeKind.Utc);
+                                    var purged = await purgeDb.OddsHistory
+                                        .Where(h => purgeDb.Races.Any(r => r.RaceId == h.RaceId && r.RaceDate < jstToday))
+                                        .ExecuteDeleteAsync(CancellationToken.None);
+                                    if (purged > 0)
+                                        _logger.LogInformation("[Nexus] Purged {Count} stale odds_history rows (before {Date:yyyy-MM-dd} JST).", purged, jstToday);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogWarning(ex, "[Nexus] odds_history purge failed (non-fatal).");
+                                }
+
                                 var orchestrator = scope.ServiceProvider.GetRequiredService<LiveOrchestrator>();
                                 orchestrator.RequestForceTick();
                             });
@@ -236,12 +255,17 @@ public sealed class NexusPipeServer : BackgroundService
                                 // upcoming race date. Idempotent via app_state.odds_notified_dates.
                                 await NotifyOddsFirstAppearedAsync(scope);
 
-                                // Same reasoning as TOKU above: the orchestrator tick that
-                                // pulled these odds evaluated phase BEFORE the data landed, so
-                                // an AWAITING_ODDS → RACES_POPULATED flip would otherwise wait
-                                // up to a full poll interval. Force-tick wakes it immediately.
+                                // Force-tick ONLY while in AWAITING_ODDS — the single phase where
+                                // an odds arrival changes the phase (→ RACES_POPULATED). Doing it
+                                // unconditionally creates a self-perpetuating fetch loop: odds
+                                // fetches always return records, so every STREAM_ODDS_COMPLETE would
+                                // wake the orchestrator, which immediately re-fetches, etc. — pinning
+                                // the poll rate to the round-trip time (~50s) and blowing past the
+                                // JV-Link 5-minute rate-limit floor. Once in RACES_POPULATED/LIVE the
+                                // regular interval (and ClampForLiveBoundaryAsync) owns the cadence.
                                 var orchestrator = scope.ServiceProvider.GetRequiredService<LiveOrchestrator>();
-                                orchestrator.RequestForceTick();
+                                if (orchestrator.LastObservedPhase == AppPhase.AWAITING_ODDS)
+                                    orchestrator.RequestForceTick();
                             });
                         }
 
