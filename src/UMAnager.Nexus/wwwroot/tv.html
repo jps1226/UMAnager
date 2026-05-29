@@ -2166,6 +2166,41 @@ function scheduleOddsRefresh() {
     oddsRefreshScheduled = true;
     setTimeout(() => { oddsRefreshScheduled = false; loadRaces(); }, 750);
 }
+
+// Patch finish positions into racesData in-place so the ticker re-renders
+// immediately (no API round-trip), then schedule a deferred full reload
+// to pick up payout data / results_json / any other metadata.
+let _resultsReloadScheduled = false;
+function patchResultsLive(payload) {
+    if (!payload?.raceId || !Array.isArray(payload.entries)) {
+        loadRaces();
+        return;
+    }
+    // Patch every date bucket so racesData stays fully consistent.
+    const allBuckets = Object.values(racesData?.races_by_date || {});
+    for (const bucket of allBuckets) {
+        const race = bucket.find(r => String(r.info?.race_id || '').trim() === String(payload.raceId).trim());
+        if (!race || !Array.isArray(race.entries)) continue;
+        const byHorse = {};
+        payload.entries.forEach(e => { byHorse[String(e.horseId || '')] = e; });
+        race.entries.forEach(e => {
+            const hid = String(e.Horse_ID ?? '').split('.')[0].trim();
+            const patch = byHorse[hid];
+            if (!patch) return;
+            const f = Number(patch.finish);
+            if (Number.isFinite(f) && f > 0) e.Finish = String(f);
+        });
+        break; // race IDs are unique across all dates
+    }
+    // Re-render the ticker immediately from the patched data — no API wait.
+    renderResultsTicker();
+    // Deferred full reload to pull in payout data (results_json) and race metadata.
+    if (!_resultsReloadScheduled) {
+        _resultsReloadScheduled = true;
+        setTimeout(() => { _resultsReloadScheduled = false; loadRaces(); }, 4000);
+    }
+}
+
 async function bootLiveHub() {
     try {
         await loadExternalScript('https://cdn.jsdelivr.net/npm/@microsoft/signalr@7/dist/browser/signalr.min.js');
@@ -2177,7 +2212,7 @@ async function bootLiveHub() {
         // Results are rare and time-sensitive — fetch immediately so the ticker
         // lands at the same time as the Discord notification.
         // Odds fire frequently; coalesce bursts with a short debounce instead.
-        conn.on('ResultsUpdated', loadRaces);
+        conn.on('ResultsUpdated', patchResultsLive);
         conn.on('OddsUpdated',    scheduleOddsRefresh);
         await conn.start();
     } catch (_) { /* fall back to 60s polling */ }

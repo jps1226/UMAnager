@@ -195,7 +195,7 @@ public sealed class ClaudeRecapWriter
                 Races: racePayloads
             );
 
-            var path = Path.GetFullPath("recap_data.json");
+            var path = ResolveRecapPath();
             await File.WriteAllTextAsync(path, JsonSerializer.Serialize(payload, JsonOpts), ct);
             _logger.LogInformation("[ClaudeRecap] Wrote {Path} ({Races} races, {Marked} marked)", path, racePayloads.Count, recap.RacesMarked);
         }
@@ -203,6 +203,27 @@ public sealed class ClaudeRecapWriter
         {
             _logger.LogWarning(ex, "[ClaudeRecap] Failed to write recap_data.json");
         }
+    }
+
+    /// <summary>
+    /// Find the project root and return the recap_data.json path there. The Claude routine
+    /// reads from <c>C:\…\UMAnager2\recap_data.json</c>, but the Nexus process's
+    /// <c>Environment.CurrentDirectory</c> is the EXE output dir (<c>bin/Release/net8.0</c>)
+    /// because <c>AppContext.BaseDirectory</c> is pinned there. Walking up from BaseDirectory
+    /// looking for CLAUDE.md as a marker reliably locates the project root regardless of
+    /// where the EXE is launched from. Falls back to CWD if no marker is found (preserves
+    /// the prior behavior for dev environments without the marker).
+    /// </summary>
+    private static string ResolveRecapPath()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "CLAUDE.md")))
+                return Path.Combine(dir.FullName, "recap_data.json");
+            dir = dir.Parent;
+        }
+        return Path.GetFullPath("recap_data.json");
     }
 
     private static int FindPayout(JsonElement root, string betType, int[] combo)

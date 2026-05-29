@@ -82,7 +82,7 @@ public sealed class SettingsService
     {
         public static readonly TimeSpan PopulatePollInterval     = TimeSpan.FromHours(1);
         public static readonly TimeSpan PostsPollInterval        = TimeSpan.FromHours(1);
-        public static readonly TimeSpan OddsPollIntervalPrelive  = TimeSpan.FromHours(1);
+        public static readonly TimeSpan OddsPollIntervalPrelive  = TimeSpan.FromMinutes(30);
         public static readonly TimeSpan OddsPollIntervalAwaiting = TimeSpan.FromMinutes(15);
         public static readonly TimeSpan OddsPollIntervalLive     = TimeSpan.FromMinutes(5);
         public static readonly TimeSpan OddsPollIntervalPreliveRamp = TimeSpan.FromMinutes(15);

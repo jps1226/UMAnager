@@ -204,6 +204,10 @@ function isAutoLockPastVotesEnabled() {
     return appConfig.ui?.autoLockPastVotes ?? false;
 }
 
+function isAutoLockAfterSubmitEnabled() {
+    return appConfig.ui?.autoLockAfterSubmit ?? true;
+}
+
 function isAutoBetHighlightingEnabled() {
     return appConfig.ui?.highlightAutoBets ?? false;
 }
@@ -368,25 +372,45 @@ async function refreshPhaseBadge() {
             labelEl.textContent = '⏸ Waiting';
         }
 
-        if (data.next_tick_eta_utc) {
-            const eta = new Date(data.next_tick_eta_utc);
-            const diffMs = eta - Date.now();
-            if (diffMs > 0) {
-                const mins = Math.floor(diffMs / 60000);
-                const secs = Math.floor((diffMs % 60000) / 1000);
-                sub.textContent = `Next tick: ${mins}m ${secs}s`;
-            } else {
-                sub.textContent = 'Tick imminent';
-            }
-        } else {
-            sub.textContent = phase === 'WAITING_FOR_RACES' ? 'No upcoming races'
-                            : phase === 'AWAITING_POSTS'   ? 'Draw pending'
-                            : '';
-        }
+        _phaseBadgeState.eta = data.next_tick_eta_utc ? new Date(data.next_tick_eta_utc) : null;
+        _phaseBadgeState.phase = phase;
+        _updateTickCountdown();
     } catch { /* silently ignore network errors */ }
 }
+
+const _phaseBadgeState = { eta: null, phase: '' };
+const _tickActionLabel = {
+    LIVE_OPERATIONS:   'odds refresh',
+    RACES_POPULATED:   'odds refresh',
+    AWAITING_ODDS:     'odds check',
+    AWAITING_POSTS:    'post draw check',
+    WAITING_FOR_RACES: 'race plan poll',
+};
+function _updateTickCountdown() {
+    const sub = document.getElementById('phase-badge-sub');
+    if (!sub) return;
+    const { eta, phase } = _phaseBadgeState;
+    if (!eta) {
+        sub.textContent = phase === 'WAITING_FOR_RACES' ? 'No upcoming races'
+                        : phase === 'AWAITING_POSTS'   ? 'Draw pending'
+                        : '';
+        return;
+    }
+    const diffMs = eta - Date.now();
+    const action = _tickActionLabel[phase] || 'tick';
+    if (diffMs <= 0) {
+        sub.textContent = `${action} imminent`;
+        return;
+    }
+    const mins = Math.floor(diffMs / 60000);
+    const secs = Math.floor((diffMs % 60000) / 1000);
+    const timeStr = mins > 0 ? `${mins}m ${String(secs).padStart(2, '0')}s` : `${secs}s`;
+    sub.textContent = `Next ${action}: ${timeStr}`;
+}
+
 refreshPhaseBadge();
 setInterval(refreshPhaseBadge, 30000);
+setInterval(_updateTickCountdown, 1000);
 
 function applyRiskSliderValue(value) {
     const slider = document.getElementById('risk-slider');
@@ -1507,6 +1531,7 @@ function compareRecordValues(a, b, asc = true) {
 function applySortLogic(r_id, col, asc) {
     const entries = globalRaceEntries[r_id];
     const sMap = {"◎": 1, "〇": 2, "▲": 3, "△": 4, "☆": 5, "消": 6, "X": 99};
+    applySortLogic._autoCache = null;
 
     entries.sort((a, b) => {
         // Our Custom Default (Votes at top, unmarked middle, X at bottom)
@@ -1535,10 +1560,28 @@ function applySortLogic(r_id, col, asc) {
 
         let comparison = 0;
         if (col === 'Shirushi') {
-            const keyA = `${r_id}_${String(a.Horse_ID).split('.')[0]}`;
-            const keyB = `${r_id}_${String(b.Horse_ID).split('.')[0]}`;
-            const valA = sMap[globalMarks[keyA]] || 50;
-            const valB = sMap[globalMarks[keyB]] || 50;
+            const hIdA = String(a.Horse_ID).split('.')[0];
+            const hIdB = String(b.Horse_ID).split('.')[0];
+            const markA = globalMarks[`${r_id}_${hIdA}`];
+            const markB = globalMarks[`${r_id}_${hIdB}`];
+            let valA = sMap[markA] || 50;
+            let valB = sMap[markB] || 50;
+            if (valA === 50 || valB === 50) {
+                if (!applySortLogic._autoCache) applySortLogic._autoCache = {};
+                const cacheKey = r_id;
+                if (!applySortLogic._autoCache[cacheKey]) {
+                    const mode = typeof getVotingMarkMode === 'function' ? getVotingMarkMode() : 'BOX_OPTIMIZATION';
+                    const auto = mode === 'TRADITIONAL_ROLES'
+                        ? getTraditionalRoleAssignments(r_id)
+                        : getMarkAwareAutoBetRankingsForRace(r_id);
+                    const m = {};
+                    auto.forEach(a => { m[a.h_id] = sMap[a.symbol] || 50; });
+                    applySortLogic._autoCache[cacheKey] = m;
+                }
+                const ac = applySortLogic._autoCache[cacheKey];
+                if (valA === 50 && ac[hIdA]) valA = ac[hIdA] + 0.5;
+                if (valB === 50 && ac[hIdB]) valB = ac[hIdB] + 0.5;
+            }
             comparison = comparePrimitiveValues(valA, valB, asc);
             if (comparison === 0) comparison = comparePrimitiveValues(parseRaceNumber(a.Fav), parseRaceNumber(b.Fav), true);
         } else if (col === 'BK') {
@@ -2384,14 +2427,23 @@ function renderScoreExplain(row, anchor) {
         return `${tier} at ${oddsVal.toFixed(1)}×`;
     }
     function formDesc() {
-        const last3 = row.Last3 && row.Last3 !== '—-—-—'
-            ? ' (' + String(row.Last3).replace(/-/g, '–') + ')' : '';
         if (b.raceClass?.isDebut) return 'First career start — no race history';
-        if (formScore >= 0.65) return `Excellent form, beating expectations${last3}`;
-        if (formScore >= 0.35) return `Solid recent form${last3}`;
-        if (formScore >= 0.10) return `Mixed recent form${last3}`;
-        if (formScore >= 0.00) return `Weak recent form${last3}`;
-        return `Burned favorite — under-performed market${last3}`;
+        const runs = parseLast3Runs(row.Last3);
+        const parts = [];
+        if (formScore >= 0.65) parts.push('Excellent form');
+        else if (formScore >= 0.35) parts.push('Solid recent form');
+        else if (formScore >= 0.10) parts.push('Mixed recent form');
+        else if (formScore >= 0.00) parts.push('Weak recent form');
+        else parts.push('Burned favorite');
+        if (runs.length > 0) {
+            const deltas = runs.map((r, i) => {
+                if (r.delta === null) return null;
+                const label = r.delta > 3 ? '↑sleeper' : (r.delta < 0 && r.favRank <= 5) ? '↓burned' : null;
+                return label ? `R${i+1}: Δ${r.delta > 0 ? '+' : ''}${r.delta} ${label}` : null;
+            }).filter(Boolean);
+            if (deltas.length > 0) parts.push(deltas.join(', '));
+        }
+        return parts.join(' · ');
     }
     function aeDesc(ae, name) {
         const nameStr = name ? `${name} — ` : '';
@@ -2411,7 +2463,7 @@ function renderScoreExplain(row, anchor) {
 
     // Verdict: one sentence explaining the mark.
     function verdictSentence() {
-        if (!mark) return 'Not selected by auto-pick at this Risk level.';
+        if (!mark) return 'Not selected — engine abstained or no clear edge at this Risk level.';
         const markOrder = ['◎', '〇', '▲', '△'];
         const strength = markOrder.indexOf(mark);
         const oddsPct = b.mix.odds;
@@ -2847,11 +2899,24 @@ function getMarkAwareAutoBetRankingsForRace(r_id) {
         .filter(e => !markedHorses.has(e.h_id))
         .sort((a, b) => b.power - a.power);
 
+    // Abstention: skip lower-tier marks when scores are too clustered to differentiate.
+    // ◎ always assigned if there's a pool. For each subsequent mark, require a minimum
+    // gap between that candidate and the next-ranked horse (proves it's a real tier break).
     const result = [];
     let poolIdx = 0;
     for (const symbol of symbols) {
-        if (takenSymbols.has(symbol)) continue;       // user already assigned this symbol
-        if (poolIdx >= pool.length) break;             // no more unmarked horses
+        if (takenSymbols.has(symbol)) continue;
+        if (poolIdx >= pool.length) break;
+        if (poolIdx > 0 && pool.length >= 4) {
+            const fieldSpread = pool[0].power - pool[Math.min(pool.length - 1, 5)].power;
+            if (fieldSpread > 0) {
+                const gapFromNext = pool[poolIdx - 1].power - pool[poolIdx].power;
+                if (gapFromNext / fieldSpread < 0.03) {
+                    poolIdx++;
+                    continue;
+                }
+            }
+        }
         result.push({ h_id: pool[poolIdx++].h_id, symbol });
     }
     return result;
@@ -2906,11 +2971,22 @@ function getTraditionalRoleAssignments(r_id) {
     // The BOX_OPT fallback pick — highest unassigned power score.
     const topByPower = (p) => p.slice().sort((a, b) => b.power - a.power)[0] || null;
 
+    // Field spread for abstention: if role picker returns null and the remaining pool
+    // is too tightly clustered, skip the mark rather than forcing a weak BOX_OPT pick.
+    const allPower = scored.map(e => e.power).sort((a, b) => b - a);
+    const fieldSpread = allPower.length >= 2 ? allPower[0] - allPower[Math.min(allPower.length - 1, 5)] : 0;
+
     const pick = (symbol, picker) => {
         if (takenSymbols.has(symbol)) return;
         const p = pool();
         let candidate = picker(p);
-        if (!candidate) candidate = topByPower(p); // graceful fall-through to BOX_OPT
+        if (!candidate) {
+            if (fieldSpread > 0) {
+                const sorted = p.slice().sort((a, b) => b.power - a.power);
+                if (sorted.length >= 2 && (sorted[0].power - sorted[1].power) / fieldSpread < 0.03) return;
+            }
+            candidate = topByPower(p);
+        }
         if (candidate) {
             assigned.add(candidate.h_id);
             result.push({ h_id: candidate.h_id, symbol });
@@ -3430,8 +3506,26 @@ async function loadRaces() {
     const _stateT0 = performance.now();
     ["upcoming", "past"].forEach(timeline => {
         Object.keys(globalAllRacesByDate[timeline]).forEach(date => {
-            globalRacesByDate[date] = globalAllRacesByDate[timeline][date];
-            globalDateTimelineByDate[date] = timeline;
+            if (!globalRacesByDate[date]) {
+                globalRacesByDate[date] = globalAllRacesByDate[timeline][date];
+                globalDateTimelineByDate[date] = timeline;
+            } else {
+                // Same JST date appears in both timelines (race day: some past, some upcoming).
+                // Append without duplicating; keep 'upcoming' as the date-level label.
+                const existingIds = new Set(globalRacesByDate[date].map(r => r.info.race_id));
+                globalAllRacesByDate[timeline][date].forEach(r => {
+                    if (!existingIds.has(r.info.race_id)) globalRacesByDate[date].push(r);
+                });
+            }
+
+            // Sort merged array so earlier races (finished) appear first.
+            if (globalRacesByDate[date].length > 1) {
+                globalRacesByDate[date].sort((a, b) => {
+                    const tA = a.info.sort_time_iso || a.info.sort_time || '';
+                    const tB = b.info.sort_time_iso || b.info.sort_time || '';
+                    return tA < tB ? -1 : tA > tB ? 1 : 0;
+                });
+            }
 
             globalAllRacesByDate[timeline][date].forEach(race => {
                 const r_id = race.info.race_id;
@@ -6158,9 +6252,7 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
         await loadOreProApplyState();
         try { renderLiveViewPanel(); } catch (_) {}
 
-        // Single-race apply also locks every race on the same JST day so the
-        // operator can't accidentally edit marks for races already in OrePro.
-        if (requestCompleted || rowStatus === 'ok') {
+        if ((requestCompleted || rowStatus === 'ok') && isAutoLockAfterSubmitEnabled()) {
             lockAllRacesForRaceDay(raceId);
         }
 
@@ -6317,8 +6409,7 @@ async function applyAllDayVotesToOrePro() {
             }
         }
 
-        // Lock every race on the day once (idempotent — covers any that succeeded).
-        if (okCount > 0) lockAllRacesForRaceDay(eligible[0]);
+        if (okCount > 0 && isAutoLockAfterSubmitEnabled()) lockAllRacesForRaceDay(eligible[0]);
 
         await loadOreProApplyState();
         try { renderLiveViewPanel(); } catch (_) {}
@@ -7319,6 +7410,7 @@ async function showSettingsModal() {
     document.getElementById('setting-devMode').checked = isDevModeEnabled();
     document.getElementById('setting-debugConsole').checked = isDebugConsoleEnabled();
     document.getElementById('setting-autoLockPastVotes').checked = isAutoLockPastVotesEnabled();
+    document.getElementById('setting-autoLockAfterSubmit').checked = isAutoLockAfterSubmitEnabled();
     document.getElementById('setting-cleanPastRaceCards').checked = appConfig.ui?.cleanPastRaceCards ?? true;
     // 🎤 Uma Musume mode — theme state is client-side (localStorage).
     document.getElementById('setting-umamusumeMode').checked = localStorage.getItem(UMM_STORAGE_KEY) === '1';
@@ -7447,6 +7539,7 @@ async function updateSidebarSettings() {
         devMode: document.getElementById('setting-devMode').checked,
         debugConsole: document.getElementById('setting-debugConsole').checked,
         autoLockPastVotes: document.getElementById('setting-autoLockPastVotes').checked,
+        autoLockAfterSubmit: document.getElementById('setting-autoLockAfterSubmit').checked,
         cleanPastRaceCards: document.getElementById('setting-cleanPastRaceCards').checked,
         showConsole: document.getElementById('setting-showConsole').checked,
         highlightAutoBets: document.getElementById('setting-highlightAutoBets').checked,
@@ -7861,7 +7954,14 @@ function patchRaceEntries(raceId, entries, fields) {
                     cell.textContent = shown;
                     cell.className = `finish-pos finish-pos-${shown}`;
                 } else if (f === 'odds') {
-                    cell.textContent = e.odds || '';
+                    const cur = parseFloat(e.odds), prev = parseFloat(e.prevOdds);
+                    let delta = '';
+                    if (!isNaN(prev) && prev > 0 && !isNaN(cur) && cur > 0 && Math.abs(cur - prev) >= 0.2) {
+                        delta = cur < prev
+                            ? `<span class="odds-short" title="Shortened from ${prev.toFixed(1)}">↓</span>`
+                            : `<span class="odds-drift" title="Drifted from ${prev.toFixed(1)}">↑</span>`;
+                    }
+                    cell.innerHTML = (e.odds || '') + delta;
                 } else if (f === 'fav') {
                     cell.textContent = e.fav || '';
                 }
@@ -7874,7 +7974,10 @@ function patchRaceEntries(raceId, entries, fields) {
             const memRow = inMemEntries.find(x => String(x.Horse_ID ?? '').split('.')[0] === String(e.horseId));
             if (memRow) {
                 if (fields.includes('finish')) memRow.Finish = (Number(e.finish) > 0) ? String(e.finish) : '';
-                if (fields.includes('odds'))   memRow.Odds   = e.odds ?? '';
+                if (fields.includes('odds')) {
+                    memRow.Prev_Odds = e.prevOdds ?? '';
+                    memRow.Odds      = e.odds ?? '';
+                }
                 if (fields.includes('fav'))    memRow.Fav    = e.fav ?? '';
             }
         }

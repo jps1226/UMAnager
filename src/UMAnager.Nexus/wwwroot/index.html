@@ -321,6 +321,10 @@
                             <span>🔒 Auto-Lock Past Race Votes</span>
                         </label>
                         <label class="settings-option-row">
+                            <input type="checkbox" id="setting-autoLockAfterSubmit" onchange="updateSidebarSettings()">
+                            <span>🔒 Auto-Lock Day After OrePro Submit</span>
+                        </label>
+                        <label class="settings-option-row">
                             <input type="checkbox" id="setting-cleanPastRaceCards" onchange="updateSidebarSettings()">
                             <span>🧹 Clean Past Race Cards <small style="color:#666;">(hide Record &amp; %s)</small></span>
                         </label>
@@ -569,6 +573,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260523-2"></script>
+<script src="/static/script.js?v=20260523-6"></script>
 </body>
 </html>

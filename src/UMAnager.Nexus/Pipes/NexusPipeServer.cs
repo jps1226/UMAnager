@@ -198,7 +198,11 @@ public sealed class NexusPipeServer : BackgroundService
                         }
 
                         // After TOKU stream completes, parse newly-staged RA + SE records so
-                        // upcoming races appear in the UI.
+                        // upcoming races appear in the UI. Then nudge the orchestrator to
+                        // re-evaluate phase immediately — the tick that triggered this pull
+                        // evaluated phase BEFORE the new data landed, so a fresh AWAITING_POSTS
+                        // → AWAITING_ODDS transition would otherwise wait up to a full
+                        // posts_poll_interval (1h) before firing its Discord ping.
                         if (eventType == "STREAM_TOKU_COMPLETE" && recordCount > 0)
                         {
                             _ = Task.Run(async () =>
@@ -207,6 +211,9 @@ public sealed class NexusPipeServer : BackgroundService
                                 var svc = scope.ServiceProvider.GetRequiredService<Services.Parsing.DifnRecordParsingService>();
                                 await svc.ParseAllRecordsAsync(CancellationToken.None);
                                 _logger.LogInformation("[Nexus] TOKU auto-parse complete.");
+
+                                var orchestrator = scope.ServiceProvider.GetRequiredService<LiveOrchestrator>();
+                                orchestrator.RequestForceTick();
                             });
                         }
 
@@ -228,6 +235,13 @@ public sealed class NexusPipeServer : BackgroundService
                                 // Notify Discord the first time odds reach ≥50% coverage on an
                                 // upcoming race date. Idempotent via app_state.odds_notified_dates.
                                 await NotifyOddsFirstAppearedAsync(scope);
+
+                                // Same reasoning as TOKU above: the orchestrator tick that
+                                // pulled these odds evaluated phase BEFORE the data landed, so
+                                // an AWAITING_ODDS → RACES_POPULATED flip would otherwise wait
+                                // up to a full poll interval. Force-tick wakes it immediately.
+                                var orchestrator = scope.ServiceProvider.GetRequiredService<LiveOrchestrator>();
+                                orchestrator.RequestForceTick();
                             });
                         }
 

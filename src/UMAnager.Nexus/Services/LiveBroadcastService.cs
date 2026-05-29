@@ -41,6 +41,7 @@ public sealed class LiveBroadcastService
                 horseId    = e.HorseId,
                 pp         = e.PostPosition,
                 odds       = e.Odds,
+                prevOdds   = e.PrevOdds,
                 fav        = e.FavRank,
                 finish     = e.FinishPos
             })
@@ -54,6 +55,7 @@ public sealed class LiveBroadcastService
                 horseId = e.horseId ?? "",
                 pp      = e.pp ?? 0,
                 odds    = e.odds?.ToString("F1") ?? "",
+                prevOdds = e.prevOdds?.ToString("F1") ?? "",
                 fav     = e.fav?.ToString() ?? "",
                 finish  = e.finish?.ToString() ?? ""
             }).ToList();

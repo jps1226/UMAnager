@@ -88,27 +88,56 @@ public sealed class PhaseService
 
         if (!anyFuture) return AppPhase.WAITING_FOR_RACES;
 
-        // Phase 34: split the pre-live window into two phases.
-        // AWAITING_POSTS  — race plan exists but SE records still have PostPosition = 0 (Thu ~8 PM JST).
-        // AWAITING_ODDS   — post positions drawn (any entry PostPosition > 0) but odds not published yet.
-        // RACES_POPULATED — both posts AND odds are present.
-        var anyUpcomingPosts = await ctx.RaceEntries
+        // Phase 34 (revised): split the pre-live window into two phases, scoped to the
+        // NEAREST upcoming race day. JRA publishes posts/odds per race day, not per weekend
+        // — Sunday's posts don't draw until ~12 PM JST Saturday (after Saturday's card runs).
+        // Scoping to "the next race day with any upcoming race" lets the cycle progress as:
+        //   Saturday's posts land  → AWAITING_ODDS
+        //   Saturday's odds land   → RACES_POPULATED
+        //   Saturday races run     → LIVE_OPERATIONS
+        //   Saturday's last race finishes → next-upcoming-day becomes Sunday → AWAITING_POSTS
+        //   Sunday's posts land    → AWAITING_ODDS  (cycle repeats)
+        //
+        // AWAITING_POSTS  — nearest upcoming race day has at least one race with no post drawn yet.
+        // AWAITING_ODDS   — every race on the nearest upcoming day has posts, but no odds yet.
+        // RACES_POPULATED — every race on the nearest upcoming day has both posts AND odds.
+        var nearestDay = await ctx.Races
             .AsNoTracking()
-            .AnyAsync(e => e.PostPosition != null && e.PostPosition > 0
-                        && ctx.Races.Any(r => r.RaceId == e.RaceId
-                                           && r.SortTime != null
-                                           && r.SortTime > jstNow));
+            .Where(r => r.SortTime != null && r.SortTime > jstNow)
+            .OrderBy(r => r.SortTime)
+            .Select(r => (DateTime?)r.RaceDate)
+            .FirstOrDefaultAsync();
 
-        if (!anyUpcomingPosts) return AppPhase.AWAITING_POSTS;
+        if (nearestDay == null) return AppPhase.AWAITING_POSTS; // shouldn't happen given anyFuture above
 
-        var anyUpcomingOdds = await ctx.RaceEntries
+        var nearestDayRaceCount = await ctx.Races
+            .AsNoTracking()
+            .CountAsync(r => r.RaceDate == nearestDay && r.SortTime != null && r.SortTime > jstNow);
+
+        var nearestDayRacesWithPostsCount = await ctx.RaceEntries
+            .AsNoTracking()
+            .Where(e => e.PostPosition != null && e.PostPosition > 0
+                     && ctx.Races.Any(r => r.RaceId == e.RaceId
+                                       && r.RaceDate == nearestDay
+                                       && r.SortTime != null
+                                       && r.SortTime > jstNow))
+            .Select(e => e.RaceId)
+            .Distinct()
+            .CountAsync();
+
+        var allRacesHavePosts = nearestDayRaceCount > 0
+                                && nearestDayRacesWithPostsCount >= nearestDayRaceCount;
+        if (!allRacesHavePosts) return AppPhase.AWAITING_POSTS;
+
+        var anyNearestDayOdds = await ctx.RaceEntries
             .AsNoTracking()
             .AnyAsync(e => e.Odds != null
                         && ctx.Races.Any(r => r.RaceId == e.RaceId
+                                           && r.RaceDate == nearestDay
                                            && r.SortTime != null
                                            && r.SortTime > jstNow));
 
-        return anyUpcomingOdds ? AppPhase.RACES_POPULATED : AppPhase.AWAITING_ODDS;
+        return anyNearestDayOdds ? AppPhase.RACES_POPULATED : AppPhase.AWAITING_ODDS;
     }
 
     public async Task<bool> IsLivePollPausedAsync()
