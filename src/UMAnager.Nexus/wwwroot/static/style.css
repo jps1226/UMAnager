@@ -1581,11 +1581,12 @@ td.jt-rate-none   { color: #444; }
 .odds-history-tooltip .oh-tip-row { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 
 .odds-history-legend {
-    display: flex; flex-wrap: wrap; gap: 6px 14px;
-    margin-top: 12px; max-height: 200px; overflow-y: auto;
+    column-width: 210px; column-gap: 18px;
+    margin-top: 12px; max-height: 230px; overflow-y: auto;
 }
 .oh-legend-item {
-    display: inline-flex; align-items: center; gap: 5px;
+    display: flex; align-items: center; gap: 5px;
+    break-inside: avoid; margin-bottom: 3px;
     font-size: 12px; color: #ddd; cursor: pointer; padding: 2px 4px; border-radius: 4px;
     user-select: none;
 }
@@ -1603,6 +1604,8 @@ td.jt-rate-none   { color: #444; }
 }
 .oh-tip-pp { color: #888; }
 .oh-tip-pop { color: #c8d8ff; }
+.odds-history-svg .oh-rankmark { font-size: 9px; font-weight: bold; }
+.oh-rankmark-key { color: #9aa7bd; }
 .odds-history-hint { margin-top: 8px; color: #666; font-size: 11px; text-align: center; }
 
 /* --- EXPORT MODAL --- */

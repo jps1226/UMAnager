@@ -7409,15 +7409,27 @@ function closeExportModal() {
 // (one line per horse) opens from the race-header 📈 button; single-horse mode
 // opens from clicking a horse's odds cell. Data: GET /api/races/{id}/odds-history.
 let _oddsHistoryState = null;   // { raceId, series:[{horse_id,name,post_position,points:[{t,odds}]}], single }
-let _oddsHistoryHidden = new Set();
+let _oddsHistoryFocus = new Set();  // horseIds explicitly shown; EMPTY = show the whole field
 let _oddsHistoryGeom = null;    // geometry snapshot for the hover crosshair
+
+// Empty focus = show everything; otherwise show only the focused horses.
+function _ohIsShown(horseId) {
+    return _oddsHistoryFocus.size === 0 || _oddsHistoryFocus.has(String(horseId));
+}
+// Step-hold lookup: odds in effect at time `ms` (last change at-or-before ms).
+function _ohOddsAtMs(pts, ms) {
+    let v = (pts && pts.length) ? pts[0].odds : null;
+    if (pts) for (const p of pts) { if (p.ms <= ms) v = p.odds; else break; }
+    return v;
+}
 
 function oddsHistoryHorseMeta(raceId, horseId) {
     const entries = globalRaceEntries[raceId] || [];
     const row = entries.find(e => String(e.Horse_ID ?? '').split('.')[0] === String(horseId));
     return {
         name: row ? (row.Horse || String(horseId)) : String(horseId),
-        pp:   row ? parseInt(row.PP, 10) : NaN
+        pp:   row ? parseInt(row.PP, 10) : NaN,
+        fav:  row ? parseInt(row.Fav, 10) : NaN   // current popularity rank (live fallback)
     };
 }
 
@@ -7437,21 +7449,22 @@ async function showOddsHistory(raceId, horseId = null) {
         titleEl.textContent = `📈 Odds Trends — ${trackTxt} R${rNum}`;
     }
 
-    _oddsHistoryHidden = new Set();
+    _oddsHistoryFocus = new Set();
     body.innerHTML = '<div class="odds-history-empty">Loading…</div>';
     modal.style.display = 'flex';
 
     try {
         const res = await fetch(`/api/races/${encodeURIComponent(raceId)}/odds-history`, { cache: 'no-store' });
         const data = await res.json();
-        let series = Array.isArray(data.series) ? data.series : [];
-        if (horseId) series = series.filter(s => String(s.horse_id) === String(horseId));
+        // Always keep the FULL field in memory — popularity is a field-wide rank, so even
+        // single-horse view needs every runner's odds to compute it. `single` just controls display.
+        const series = Array.isArray(data.series) ? data.series : [];
         series.forEach(s => {
             const meta = oddsHistoryHorseMeta(raceId, s.horse_id);
             s.name = meta.name;
             if (!Number.isFinite(s.post_position) && Number.isFinite(meta.pp)) s.post_position = meta.pp;
         });
-        _oddsHistoryState = { raceId, series, single: !!horseId };
+        _oddsHistoryState = { raceId, series, single: horseId ? String(horseId) : null };
         renderOddsHistory();
     } catch (e) {
         body.innerHTML = '<div class="odds-history-empty">Failed to load odds history.</div>';
@@ -7489,9 +7502,14 @@ function renderOddsHistory() {
     const VBW = 860, VBH = 380, padL = 52, padR = 18, padT = 16, padB = 34;
     const plotW = VBW - padL - padR, plotH = VBH - padT - padB;
 
-    // Domains.
+    // Which lines to draw: single mode → just that horse; else the focus set (empty = all).
+    const showThis = (hid) => st.single ? String(hid) === st.single : _ohIsShown(hid);
+    const shown = drawable.filter(s => showThis(s.horse_id));
+
+    // Axis domains scale to the SHOWN series only, so isolating one horse zooms in
+    // (the full field is still kept in memory below, but only for popularity ranking).
     let tMin = Infinity, tMax = -Infinity, oMin = Infinity, oMax = -Infinity;
-    drawable.forEach(s => s.points.forEach(p => {
+    shown.forEach(s => s.points.forEach(p => {
         const ms = Date.parse(p.t);
         if (ms < tMin) tMin = ms; if (ms > tMax) tMax = ms;
         if (p.odds < oMin) oMin = p.odds; if (p.odds > oMax) oMax = p.odds;
@@ -7501,8 +7519,8 @@ function renderOddsHistory() {
     const lMin = Math.log(oMin), lMax = Math.log(oMax);
 
     const xOf = ms => padL + (ms - tMin) / (tMax - tMin) * plotW;
-    // Low odds (favorite) at the BOTTOM so "shortening" trends downward.
-    const yOf = od => padT + (1 - (Math.log(od) - lMin) / (lMax - lMin)) * plotH;
+    // Low odds (favorite) at the TOP so a horse being bet (odds shortening) trends UP = good.
+    const yOf = od => padT + ((Math.log(od) - lMin) / (lMax - lMin)) * plotH;
 
     // Y gridlines at "nice" odds values inside the range.
     const niceTicks = [1.2, 1.5, 2, 3, 5, 7, 10, 15, 20, 30, 50, 70, 100, 150, 200, 300, 500];
@@ -7523,71 +7541,149 @@ function renderOddsHistory() {
         svg += `<text x="${x}" y="${VBH - 10}" class="oh-xlabel" text-anchor="${anchor}">${_ohJstClock(ms)} JST</text>`;
     });
 
+    // Full-field odds-by-time, for computing popularity (= rank of win odds) at any
+    // instant — independent of which lines are currently shown.
+    const allOdds = drawable.map(s => ({
+        horseId: String(s.horse_id),
+        pts: s.points.map(p => ({ ms: Date.parse(p.t), odds: p.odds }))
+    }));
+
     // Lines.
     const n = drawable.length;
     const geomSeries = [];
     drawable.forEach((s, i) => {
-        if (_oddsHistoryHidden.has(String(s.horse_id))) return;
+        if (!showThis(s.horse_id)) return;
         const color = _ohColor(i, n);
-        const pts = s.points.map(p => ({ x: xOf(Date.parse(p.t)), y: yOf(p.odds), odds: p.odds, fav: p.fav, ms: Date.parse(p.t) }));
+        const pts = s.points.map(p => ({ x: xOf(Date.parse(p.t)), y: yOf(p.odds), odds: p.odds, ms: Date.parse(p.t) }));
+        // Carry the last value flat to the right edge: odds persist until they change,
+        // so a horse whose odds last moved earlier than the field shouldn't look cut off.
+        const lastReal = pts[pts.length - 1];
+        if (lastReal.ms < tMax) {
+            pts.push({ x: xOf(tMax), y: lastReal.y, odds: lastReal.odds, ms: tMax, synthetic: true });
+        }
         const path = pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
         svg += `<polyline id="oh-line-${i}" points="${path}" fill="none" stroke="${color}" stroke-width="2" class="oh-line"/>`;
-        // Dot on the latest point.
+        // Dot at the right edge (current value).
         const last = pts[pts.length - 1];
         svg += `<circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="3.2" fill="${color}"/>`;
         if (st.single) {
-            pts.forEach(p => { svg += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.2" fill="${color}"/>`; });
+            pts.forEach(p => { if (!p.synthetic) svg += `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.2" fill="${color}"/>`; });
         }
         geomSeries.push({ idx: i, horseId: String(s.horse_id), name: s.name, color, pts, pp: s.post_position });
     });
+
+    // Popularity-change markers: only when exactly one horse is on screen (single mode or
+    // an isolated line), otherwise the field would be a confetti of labels. A horse's rank
+    // can shift even when its own odds are flat (a rival's money moves past it), so we
+    // evaluate rank at EVERY field timestamp, not just this horse's own points.
+    if (geomSeries.length === 1) {
+        const horse = geomSeries[0];
+        const mine = allOdds.find(o => o.horseId === horse.horseId);
+        if (mine) {
+            const times = [...new Set(allOdds.flatMap(o => o.pts.map(p => p.ms)))].sort((a, b) => a - b);
+            let prevRank = null;
+            times.forEach(ms => {
+                const myOdds = _ohOddsAtMs(mine.pts, ms);
+                if (myOdds === null) return;
+                let rank = 1;
+                allOdds.forEach(o => {
+                    if (o.horseId === horse.horseId) return;
+                    const ov = _ohOddsAtMs(o.pts, ms);
+                    if (ov !== null && ov < myOdds) rank++;
+                });
+                if (prevRank !== null && rank !== prevRank) {
+                    const x = xOf(ms), y = yOf(myOdds);
+                    const improved = rank < prevRank;           // lower number = more popular
+                    const col = improved ? '#1dd1a1' : '#f5a623';
+                    svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${col}" stroke="#11141a" stroke-width="1"/>`;
+                    svg += `<text x="${x.toFixed(1)}" y="${(y - 7).toFixed(1)}" class="oh-rankmark" fill="${col}" text-anchor="middle">${improved ? '▲' : '▼'}#${rank}</text>`;
+                }
+                prevRank = rank;
+            });
+        }
+    }
 
     // Crosshair guide + hover capture rect.
     svg += `<line id="oh-crosshair" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}" class="oh-crosshair" style="display:none"/>`;
     svg += `<rect id="oh-hover" x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" fill="transparent"/>`;
     svg += `</svg>`;
 
-    // Legend (sorted by current odds asc — favorites first). Click toggles a line.
+    // Legend (sorted by current odds asc — favorites first). Popularity = rank of
+    // current win odds (computed, not stored). Click isolates / builds a focus set.
     const legendItems = drawable.map((s, i) => {
-        const lastPt = s.points[s.points.length - 1];
-        const cur = lastPt.odds;
+        const cur = s.points[s.points.length - 1].odds;
         const first = s.points[0].odds;
-        const fav = lastPt.fav;
-        const hidden = _oddsHistoryHidden.has(String(s.horse_id));
-        return { s, i, cur, first, fav, color: _ohColor(i, n), hidden };
+        return { s, i, cur, first, color: _ohColor(i, n) };
     }).sort((a, b) => a.cur - b.cur);
 
     let legend = '<div class="odds-history-legend">';
     legendItems.forEach(it => {
+        if (st.single && String(it.s.horse_id) !== st.single) return;  // single mode: that horse only
         const ppTxt = Number.isFinite(it.s.post_position) ? it.s.post_position : '–';
-        const popTxt = (it.fav !== null && it.fav !== undefined && it.fav > 0) ? `#${it.fav}` : '';
+        const pop = 1 + legendItems.filter(o => o.cur < it.cur).length;  // rank by current odds
         const move = it.cur < it.first ? `▼ ${it.first.toFixed(1)}→${it.cur.toFixed(1)}`
                    : it.cur > it.first ? `▲ ${it.first.toFixed(1)}→${it.cur.toFixed(1)}`
                    : `${it.cur.toFixed(1)}`;
         const moveCls = it.cur < it.first ? 'oh-move-short' : (it.cur > it.first ? 'oh-move-drift' : '');
-        legend += `<span class="oh-legend-item${it.hidden ? ' oh-legend-off' : ''}" `
-                + `onclick="toggleOddsHistoryLine('${escapeHtml(String(it.s.horse_id))}')">`
+        const off = !showThis(it.s.horse_id);
+        const click = st.single ? '' : ` onclick="toggleOddsHistoryLine('${escapeHtml(String(it.s.horse_id))}')"`;
+        legend += `<span class="oh-legend-item${off ? ' oh-legend-off' : ''}"${click}>`
                 + `<span class="oh-swatch" style="background:${it.color}"></span>`
                 + `<span class="oh-leg-pp">${ppTxt}</span> `
                 + `<span class="oh-leg-name">${escapeHtml(it.s.name)}</span> `
                 + `<span class="oh-leg-odds ${moveCls}">${move}</span>`
-                + (popTxt ? ` <span class="oh-leg-pop" title="Current popularity rank">${popTxt}</span>` : '')
+                + ` <span class="oh-leg-pop" title="Popularity = rank by current odds">#${pop}</span>`
                 + `</span>`;
     });
     legend += '</div>';
 
-    const hint = st.single ? '' : '<div class="odds-history-hint">Tap a horse in the legend to show/hide its line.</div>';
+    const focusing = _oddsHistoryFocus.size > 0;
+    const markerNote = '<span class="oh-rankmark-key">▲▼ dots = popularity-rank changes</span>';
+    let hintText;
+    if (st.single)                          hintText = markerNote;
+    else if (_oddsHistoryFocus.size === 1)  hintText = `${markerNote} · tap more to compare · tap to drop`;
+    else if (focusing)                      hintText = 'Tap more horses to compare · tap a shown horse to drop it · clear all to show the field';
+    else                                    hintText = 'Tap a horse to isolate its line (then add others to compare)';
+    const hint = `<div class="odds-history-hint">${hintText}</div>`;
     body.innerHTML = `<div class="odds-history-chart-wrap"><div id="oh-tooltip" class="odds-history-tooltip" style="display:none"></div>${svg}</div>${legend}${hint}`;
 
     // Stash geometry + wire the hover crosshair.
-    _oddsHistoryGeom = { padL, padT, plotW, plotH, tMin, tMax, VBW, VBH, series: geomSeries };
+    _oddsHistoryGeom = { padL, padT, plotW, plotH, tMin, tMax, VBW, VBH, series: geomSeries, allOdds };
     _wireOddsHistoryHover();
 }
 
+// Click model: from "whole field", a click isolates that horse; further clicks add
+// horses to compare; clicking a shown horse drops it; dropping the last one returns
+// to showing the whole field.
 function toggleOddsHistoryLine(horseId) {
     const k = String(horseId);
-    if (_oddsHistoryHidden.has(k)) _oddsHistoryHidden.delete(k);
-    else _oddsHistoryHidden.add(k);
+    const f = _oddsHistoryFocus;
+    if (f.size === 0)      f.add(k);        // field → isolate this one
+    else if (f.has(k))     f.delete(k);     // drop it (empty ⇒ back to whole field)
+    else                   f.add(k);        // add another to compare
     renderOddsHistory();
+}
+
+// Live-extend the open trend chart from a SignalR OddsUpdated push. Appends a fresh
+// point per horse whose odds changed (mirrors the server's change-only capture), then
+// re-renders. Popularity is computed from odds, so it updates for free. Focus/zoom are
+// module state, so the user's current isolation survives the refresh.
+function liveUpdateOddsHistory(payload) {
+    const st = _oddsHistoryState;
+    if (!st || !payload || String(st.raceId) !== String(payload.raceId)) return;
+    const nowIso = new Date().toISOString();
+    let changed = false;
+    (payload.entries || []).forEach(e => {
+        const odds = parseFloat(e.odds);
+        if (!Number.isFinite(odds) || odds <= 0) return;
+        const s = st.series.find(x => String(x.horse_id) === String(e.horseId));
+        if (!s || !Array.isArray(s.points) || !s.points.length) return;
+        const last = s.points[s.points.length - 1];
+        if (Math.abs(last.odds - odds) < 0.05) return;   // unchanged → skip (matches server dedup)
+        s.points.push({ t: nowIso, odds, fav: e.fav ? parseInt(e.fav, 10) : null });
+        changed = true;
+    });
+    if (changed) renderOddsHistory();
 }
 
 function _ohSetLineEmphasis(hoverIdx) {
@@ -7648,8 +7744,16 @@ function _wireOddsHistoryHover() {
         _ohSetLineEmphasis(best.s.idx);
 
         const ppTxt = Number.isFinite(best.s.pp) ? `${best.s.pp} ` : '';
-        const favTxt = (best.np.fav !== null && best.np.fav !== undefined && best.np.fav > 0)
-            ? ` · <span class="oh-tip-pop">#${best.np.fav} pop</span>` : '';
+        // Popularity at this instant = rank of this horse's odds among the full field.
+        const all = g.allOdds || [];
+        const myOdds = best.np.odds;
+        let rank = 1;
+        all.forEach(o => {
+            if (o.horseId === best.s.horseId) return;
+            const ov = _ohOddsAtMs(o.pts, ms);
+            if (ov !== null && ov < myOdds) rank++;
+        });
+        const favTxt = ` · <span class="oh-tip-pop">#${rank} pop</span>`;
         tip.innerHTML = `<div class="oh-tip-time">${_ohJstClock(ms)} JST</div>`
             + `<div class="oh-tip-row"><span class="oh-swatch" style="background:${best.s.color}"></span>`
             + `<span class="oh-tip-pp">${ppTxt}</span>${escapeHtml(best.s.name)} `
@@ -8275,6 +8379,7 @@ function startLiveHub() {
     conn.on('OddsUpdated', payload => {
         if (!payload) return;
         patchRaceEntries(payload.raceId, payload.entries, ['odds', 'fav']);
+        liveUpdateOddsHistory(payload);   // live-extend the trend chart if it's open for this race
     });
 
     conn.on('ResultsUpdated', payload => {
