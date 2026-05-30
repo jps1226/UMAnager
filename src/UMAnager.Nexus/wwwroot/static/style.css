@@ -2697,10 +2697,15 @@ td.bk-color-8 { background: #dc809a !important; color: #000 !important; font-wei
 .hover-action-btn.profile-btn { background: #2a2b3d; color: #a0c4ff; border-color: #3a4060; }
 .hover-action-btn.profile-btn:hover { background: #33355a; }
 
-/* Per-race modal opened from a history row — near-full-screen, scrollable, reuses race-card markup */
-.modal-content-race { width: 98vw; max-width: 98vw; max-height: 92vh; display: flex; flex-direction: column; }
+/* Per-race modal opened from a history row — sizes to the table's natural width
+   (tight, no cell wrapping), capped at 98vw where the body scrolls horizontally. */
+.modal-content-race { width: fit-content; max-width: 96vw; max-height: 92vh; box-sizing: border-box; display: flex; flex-direction: column; }
 .horse-race-modal-body { overflow: auto; margin-top: 8px; }
-.horse-race-modal-body table { width: 100%; border-collapse: collapse; }
+.horse-race-modal-body table { width: max-content; max-width: 100%; border-collapse: collapse; }
+/* Tight columns: don't let names/pedigree wrap, so each column is as wide as its
+   content needs and no wider. */
+.horse-race-modal-body th,
+.horse-race-modal-body td { white-space: nowrap; }
 /* The global `th` is sticky at top:36px to clear the main view's race-header, which
    the modal doesn't have — that pushed the header row down into the table. Re-anchor
    to the modal body's own scroll top. */
