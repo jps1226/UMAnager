@@ -1948,9 +1948,11 @@ function buildTableBody(r_id, entries) {
                 const curOdds = parseFloat(row.Odds), prevOdds = parseFloat(row.Prev_Odds);
                 let oddsDelta = '';
                 if (!isNaN(prevOdds) && prevOdds > 0 && !isNaN(curOdds) && curOdds > 0 && Math.abs(curOdds - prevOdds) >= 0.2) {
+                    // Arrow direction matches the trend graph: up = good (odds shortening),
+                    // down = bad (drifting). Colour class carries the meaning; glyph follows the graph.
                     oddsDelta = curOdds < prevOdds
-                        ? `<span class="odds-short" title="Shortened from ${prevOdds.toFixed(1)}">↓</span>`
-                        : `<span class="odds-drift" title="Drifted from ${prevOdds.toFixed(1)}">↑</span>`;
+                        ? `<span class="odds-short" title="Shortened from ${prevOdds.toFixed(1)}">↑</span>`
+                        : `<span class="odds-drift" title="Drifted from ${prevOdds.toFixed(1)}">↓</span>`;
                 }
                 // Phase 37: clickable odds → single-horse trend graph (upcoming/live only).
                 const ohClickable = (globalRaceInfo[r_id]?._timeline !== 'past');
@@ -8676,8 +8678,8 @@ function patchRaceEntries(raceId, entries, fields) {
                     let delta = '';
                     if (!isNaN(prev) && prev > 0 && !isNaN(cur) && cur > 0 && Math.abs(cur - prev) >= 0.2) {
                         delta = cur < prev
-                            ? `<span class="odds-short" title="Shortened from ${prev.toFixed(1)}">↓</span>`
-                            : `<span class="odds-drift" title="Drifted from ${prev.toFixed(1)}">↑</span>`;
+                            ? `<span class="odds-short" title="Shortened from ${prev.toFixed(1)}">↑</span>`
+                            : `<span class="odds-drift" title="Drifted from ${prev.toFixed(1)}">↓</span>`;
                     }
                     cell.innerHTML = (e.odds || '') + delta;
                 } else if (f === 'fav') {
