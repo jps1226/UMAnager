@@ -8325,12 +8325,29 @@ function exportRaceForTuning(r_id) {
     });
 
     const out = [
-        `TUNING SWEEP — ${track} R${info.race_number || '?'} — ${localName} [class: ${cls}] · ${entries.length} runners`,
-        `(engine top-4 by power score at each slider position; ◎〇▲△ = ranks 1-4)`,
+        "You are an expert in Japanese horse racing (JRA/keiba) and betting-model design. I'm tuning the risk slider on my betting assistant and need you to judge whether its behavior is sound. Be analytical and specific — this is a model review, not a betting tip.",
+        "",
+        "HOW THE TOOL WORKS:",
+        "- It scores every runner and assigns marks ◎ (top pick), 〇 (2nd), ▲ (3rd), △ (4th) — the top 4 by a 'power score'.",
+        "- A risk slider (0–100) shifts what the score rewards:",
+        "  • 0 = PURE CHALK: marks are strictly the 4 betting favorites (shortest odds), ignoring everything else. (Intentionally degenerate.)",
+        "  • 1–99 = a graded blend. As risk rises, the model should progressively favor VALUE/longshots (longer odds with some merit signal) over the favorites. This band must be 'defensible' — every pick should have a rational basis (form, sire fit, jockey/trainer, or sensible value).",
+        "  • 100 = PURE YOLO: marks are strictly the 4 LONGEST-odds horses (with any merit). Intentionally degenerate / 'revealed in a dream'. The mirror image of 0.",
+        "- Design goals: (a) picks should change SMOOTHLY and visibly across the slider — no big dead plateau where many positions give identical marks; (b) the model should NOT over-chase hopeless longshots in the 1–99 band, especially in MAIDEN/DEBUT races where every horse is unproven; (c) 99 should still be 'grounded' (a defensible longshot), while only 100 goes fully reckless.",
+        "",
+        "WHAT TO EVALUATE:",
+        "1. Does the sweep below progress smoothly from chalk → value → YOLO, or are there plateaus / abrupt jumps?",
+        "2. Are the mid-slider (40–70) picks defensible for the stated risk, given this race's data?",
+        "3. For this race's class, is the longshot-chasing appropriate or excessive at high risk?",
+        "4. Do the degenerate endpoints (0 = favorites, 100 = longest odds) look correct?",
+        "5. Suggest any concrete adjustment (e.g. 'value kicks in too early/late', 'risk 75 should still include the favorite').",
+        "",
+        `RACE: ${track} R${info.race_number || '?'} — ${localName} [class: ${cls}] · ${entries.length} runners`,
+        `SWEEP (engine's top-4 marks ◎〇▲△ at each slider position; shown as "#post Name (odds|favRank)"):`,
         '',
         ...sweep,
         '',
-        'RUNNERS (PP order):',
+        'RUNNERS (PP order — the raw inputs the score draws from):',
         ...ref,
     ].join('\n');
 
