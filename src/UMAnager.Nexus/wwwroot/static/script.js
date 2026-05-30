@@ -2290,19 +2290,49 @@ function calculatePowerScore(row, riskVal, raceClass) {
         return yoloOdds * 1000 + meritGate - (favRank * 0.0001);
     }
 
-    // --- Value term: rewards long odds (normalized log-odds), 0 for unposted ---
-    // log keeps it bounded so a 200:1 bomb doesn't swamp everything linearly.
+    // --- Value term: rewards long odds via odds^exponent, where the EXPONENT grows
+    // with risk (SLIDER_TUNING.md, 2nd iteration). The earlier log(odds)·weight only
+    // SCALED a fixed odds-ordering, so once value dominated (~75) the ranking froze =
+    // plateau. A growing exponent instead keeps re-stretching the gaps between longshots:
+    // at moderate risk the gaps are small enough that MERIT still decides order among
+    // longshots; as the exponent climbs toward 1.0 the odds gaps widen and merit's
+    // influence recedes, so progressively-longer-odds horses overtake SMOOTHLY across
+    // 75→99 instead of locking. SV_* constants are tunable from live sweeps.
+    // RISING-CEILING value: reward odds only UP TO a ceiling that climbs with risk, so the
+    // slider targets a moving "value sweet spot" instead of always preferring the longest
+    // price. Horses beyond the ceiling are clamped (no extra reward for being even longer),
+    // which (a) keeps 99 GROUNDED — the ceiling is ~120 at risk 0.99 so true 160-200:1 bombs
+    // only win at the degenerate risk-100 endpoint, and (b) lets MERIT break ties among the
+    // out-of-band longshots so the order keeps shifting (no plateau). SV_* are tunable.
+    const SV_CEIL_BASE = 10, SV_CEIL_SPAN = 115; // odds ceiling 10 → 125 as risk 0 → 1
+    const SV_COEF = 2.2;
     let baseValueScore = 0;
     if (!isNaN(odds) && odds > 1) {
-        baseValueScore = Math.log(odds) * 12; // ~×log: 5:1→19, 15:1→33, 50:1→47, 150:1→60
+        const ceil = SV_CEIL_BASE + SV_CEIL_SPAN * risk * risk; // quadratic: stays low early
+        baseValueScore = Math.min(odds, ceil) * SV_COEF;
     }
 
-    // Weights. Odds (favourite reward) fades linearly with risk. Form/ped (merit) is
-    // strongest in the middle and eases slightly at the very top so value can break through.
-    // Value grows like risk² — negligible below ~50, then ramps hard toward chaos.
-    const oddsWeight  = 1.0 - risk;
-    const meritWeight = risk * (1.0 - 0.35 * risk); // peaks ~mid, gently lower near 1.0
-    const valueWeight = risk * risk;
+    // Maiden/debut career-exposure penalty (soft). A winless horse with MANY starts is
+    // "exposed form" (known bad); a winless horse with FEW starts has "hidden upside".
+    // So in maiden-like races we scale the value term DOWN for heavily-raced winless
+    // horses, sparing lightly-raced ones — stops the engine chasing 0-for-8 bombs on
+    // sire-fit alone, per the external maiden review. ~1.0 at 0–1 starts → ~0.45 at 10+.
+    if (isMaidenLike && baseValueScore > 0 && row.Record) {
+        const recNums = String(row.Record).match(/\d+/g);
+        const wins0 = recNums ? (parseInt(recNums[0]) || 0) : 0;
+        const starts0 = recNums && recNums.length > 1 ? (parseInt(recNums[1]) || 0) : wins0;
+        if (wins0 === 0 && starts0 > 1) {
+            const exposure = Math.min(starts0, 10) / 10;       // 0..1
+            baseValueScore *= (1.0 - 0.55 * exposure);          // up to −55% at 10+ starts
+        }
+    }
+
+    // Weights. Odds (favourite reward) fades with risk but on a gentler curve (sqrt) so a
+    // strong favorite clings to a low mark into the 70s. Merit peaks mid, eases near top.
+    // Value grows like risk³ — stays dormant longer (favorite survives), then ramps hard.
+    const oddsWeight  = Math.pow(1.0 - risk, 0.7);           // gentler-than-linear favorite decay
+    const meritWeight = risk * (1.0 - 0.35 * risk);
+    const valueWeight = risk * risk * risk;                   // risk³: later, sharper value onset
 
     let totalScore = (baseOddsScore * oddsWeight)
                    + ((baseFormScore + basePedScore) * meritWeight)
@@ -2328,10 +2358,10 @@ function explainPowerScore(row, riskVal) {
     // risk, merit (form+ped) peaks mid and eases near the top, value (long-odds reward)
     // grows like risk². Endpoints 0/100 are degenerate in calculatePowerScore; the popover
     // shows the graded blend (it's only opened on real rows, not the endpoint sorts).
-    const oddsMix = 1.0 - risk;
+    const oddsMix = Math.pow(1.0 - risk, 0.7);
     const formMix = risk * (1.0 - 0.35 * risk);
     const pedMix  = risk * (1.0 - 0.35 * risk);
-    const valueMix = risk * risk;
+    const valueMix = risk * risk * risk;
 
     // ODDS branch
     let baseOddsScore = 0;
@@ -2416,12 +2446,26 @@ function explainPowerScore(row, riskVal) {
         pedLines.push({ label: 'Sire Fit — (no sample)', value: 0 });
     }
 
-    // VALUE branch (long-odds reward — the chaos dimension)
+    // VALUE branch (long-odds reward — the chaos dimension). Mirrors calculatePowerScore:
+    // min(odds, 10+115·risk²)·2.2 (rising ceiling), with a soft maiden career-exposure penalty.
     const valueLines = [];
     let baseValueScore = 0;
     if (!isNaN(odds) && odds > 1) {
-        baseValueScore = Math.log(odds) * 12;
-        valueLines.push({ label: `Value (long odds) log(${odds.toFixed(1)}) × 12`, value: baseValueScore });
+        const ceil = 10 + 115 * risk * risk;
+        baseValueScore = Math.min(odds, ceil) * 2.2;
+        let expoNote = '';
+        if (isMaidenLike && row.Record) {
+            const rn = String(row.Record).match(/\d+/g);
+            const w0 = rn ? (parseInt(rn[0]) || 0) : 0;
+            const s0 = rn && rn.length > 1 ? (parseInt(rn[1]) || 0) : w0;
+            if (w0 === 0 && s0 > 1) {
+                const mult = 1.0 - 0.55 * (Math.min(s0, 10) / 10);
+                baseValueScore *= mult;
+                expoNote = ` ×${mult.toFixed(2)} (0-for-${s0} exposed)`;
+            }
+        }
+        const capNote = odds > ceil ? ` (capped at ${ceil.toFixed(0)})` : '';
+        valueLines.push({ label: `Value min(${odds.toFixed(1)},${ceil.toFixed(0)}) × 2.2${capNote}${expoNote}`, value: baseValueScore });
     } else {
         valueLines.push({ label: 'Value — (odds ≤ 1 or unposted)', value: 0 });
     }
