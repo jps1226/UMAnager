@@ -95,7 +95,32 @@ public sealed class HorsesController : ControllerBase
 
         var horse = await db.Horses.AsNoTracking()
             .FirstOrDefaultAsync(h => h.HorseId == id, ct);
+
+        // The id may be a HansyokuNum (breeding ID space) rather than a KettoNum — e.g. a
+        // sire/dam name clicked from a race card, where Sire_ID/Dam_ID are HansyokuNums.
+        // Bridge to the JRA-runner KettoNum by NameJa (same heuristic as the pedigree
+        // links), then continue as if that runner had been requested.
+        if (horse == null)
+        {
+            var breed = await db.BreedingHorses.AsNoTracking()
+                .FirstOrDefaultAsync(b => b.HansyokuNum == id, ct);
+            if (breed != null && !string.IsNullOrEmpty(breed.NameJa))
+            {
+                horse = await db.Horses.AsNoTracking()
+                    .Where(h => h.NameJa == breed.NameJa && h.SireId != null && h.SireId != "")
+                    .OrderByDescending(h => h.BirthYear)
+                    .FirstOrDefaultAsync(ct)
+                    ?? await db.Horses.AsNoTracking()
+                        .Where(h => h.NameJa == breed.NameJa)
+                        .OrderByDescending(h => h.BirthYear)
+                        .FirstOrDefaultAsync(ct);
+            }
+        }
         if (horse == null) return NotFound(new { error = "Horse not found" });
+
+        // From here on, use the resolved runner's KettoNum so the history/vote lookups
+        // (which key on this id) line up even when the caller passed a HansyokuNum.
+        id = horse.HorseId;
 
         // ── All race entries for this horse joined to races ───────────────────
         var historyRaw = await (
