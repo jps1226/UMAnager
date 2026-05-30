@@ -176,49 +176,83 @@ public sealed class HorsesController : ControllerBase
             : new Dictionary<string, int>();
 
         // ── Pedigree resolution (3 generations) ──────────────────────────────
-        // Load gen-2 ancestors (sire, dam) from horses table
-        var gen2Ids = new List<string>();
-        if (!string.IsNullOrEmpty(horse.SireId)) gen2Ids.Add(horse.SireId);
-        if (!string.IsNullOrEmpty(horse.DamId))  gen2Ids.Add(horse.DamId);
-        var ancestorHorses = gen2Ids.Count > 0
-            ? await db.Horses.AsNoTracking()
-                .Where(h => gen2Ids.Contains(h.HorseId))
-                .ToDictionaryAsync(h => h.HorseId, h => h, ct)
-            : new Dictionary<string, Data.Entities.Horse>();
+        // The hard part: a runner's SireId/DamId/BmsId are HansyokuNums (breeding ID
+        // space), which never match the horses table's KettoNum PK. So the sire/dam
+        // resolve to a NAME via breeding_horses, but to get the GRANDPARENTS we must
+        // find the sire/dam again as JRA runners (in horses, by name) and read THEIR
+        // SireId/DamId. We bridge by NameJa, preferring a row that actually carries
+        // pedigree (SireId not null), and cross-verify the dam via the BMS:
+        //   dam's sire ≡ this horse's BMS, so a runner-dam whose SireId == BmsId is
+        //   the right mare even when the name is shared by multiple horses.
 
-        ancestorHorses.TryGetValue(horse.SireId ?? "", out var sireHorse);
-        ancestorHorses.TryGetValue(horse.DamId  ?? "", out var damHorse);
+        // Names of the gen-2 ancestors (and BMS) from breeding_horses.
+        var gen2BreedIds = new List<string>();
+        void AddBreedId(string? v) { if (!string.IsNullOrEmpty(v)) gen2BreedIds.Add(v); }
+        AddBreedId(horse.SireId); AddBreedId(horse.DamId); AddBreedId(horse.BmsId);
+        var breedNames = gen2BreedIds.Count > 0
+            ? await db.BreedingHorses.AsNoTracking()
+                .Where(b => gen2BreedIds.Contains(b.HansyokuNum))
+                .ToDictionaryAsync(b => b.HansyokuNum,
+                    b => (NameJa: b.NameJa, NameEn: b.NameEn), ct)
+            : new Dictionary<string, (string NameJa, string? NameEn)>();
 
-        // Collect all ancestor IDs we need names for (gen-2 + gen-3)
+        breedNames.TryGetValue(horse.SireId ?? "", out var sireBreed);
+        breedNames.TryGetValue(horse.DamId  ?? "", out var damBreed);
+
+        // Bridge sire → runner row (by NameJa, must carry pedigree). The sire is a
+        // stallion; same-name collisions are rare, so first-with-pedigree is safe.
+        Data.Entities.Horse? sireRunner = null;
+        if (!string.IsNullOrEmpty(sireBreed.NameJa))
+            sireRunner = await db.Horses.AsNoTracking()
+                .Where(h => h.NameJa == sireBreed.NameJa && h.SireId != null && h.SireId != "")
+                .OrderByDescending(h => h.BirthYear)
+                .FirstOrDefaultAsync(ct);
+
+        // Bridge dam → runner row, cross-verified by BMS (dam.SireId == horse.BmsId).
+        // Falls back to plain name+pedigree match if the verified lookup misses.
+        Data.Entities.Horse? damRunner = null;
+        if (!string.IsNullOrEmpty(damBreed.NameJa))
+        {
+            if (!string.IsNullOrEmpty(horse.BmsId))
+                damRunner = await db.Horses.AsNoTracking()
+                    .Where(h => h.NameJa == damBreed.NameJa && h.SireId == horse.BmsId)
+                    .FirstOrDefaultAsync(ct);
+            damRunner ??= await db.Horses.AsNoTracking()
+                .Where(h => h.NameJa == damBreed.NameJa && h.SireId != null && h.SireId != "")
+                .OrderByDescending(h => h.BirthYear)
+                .FirstOrDefaultAsync(ct);
+        }
+
+        // Gen-3 ancestor IDs (HansyokuNums). Maternal grandsire is the BMS directly.
+        string? ssId = sireRunner?.SireId;          // paternal grandsire
+        string? sdId = sireRunner?.DamId;           // paternal granddam
+        string? dsId = horse.BmsId;                 // maternal grandsire (authoritative)
+        string? ddId = damRunner?.DamId;            // maternal granddam
+
+        // Resolve all ancestor IDs to names. Most are HansyokuNums → breeding_horses;
+        // a few may themselves be KettoNum runners → horses.
         var allAncIds = new HashSet<string>(StringComparer.Ordinal);
         void AddId(string? v) { if (!string.IsNullOrEmpty(v)) allAncIds.Add(v); }
         AddId(horse.SireId); AddId(horse.DamId); AddId(horse.BmsId);
-        if (sireHorse != null) { AddId(sireHorse.SireId); AddId(sireHorse.DamId); }
-        if (damHorse  != null) { AddId(damHorse.SireId);  AddId(damHorse.DamId);  }
-
-        // Some gen-3 ancestors might be JRA runners (in horses), not just breeding horses
-        var gen3Ids = allAncIds.Except(gen2Ids).ToList();
-        if (gen3Ids.Count > 0)
-        {
-            var gen3Horses = await db.Horses.AsNoTracking()
-                .Where(h => gen3Ids.Contains(h.HorseId))
-                .ToListAsync(ct);
-            foreach (var h in gen3Horses) ancestorHorses[h.HorseId] = h;
-        }
-
-        // Remaining ancestor IDs resolved from breeding_horses (foreign sires/dams)
+        AddId(ssId); AddId(sdId); AddId(dsId); AddId(ddId);
         var ancList = allAncIds.ToList();
+
         var breedingAncs = ancList.Count > 0
             ? await db.BreedingHorses.AsNoTracking()
                 .Where(b => ancList.Contains(b.HansyokuNum))
                 .ToDictionaryAsync(b => b.HansyokuNum,
                     b => (NameJa: b.NameJa, NameEn: b.NameEn), ct)
             : new Dictionary<string, (string NameJa, string? NameEn)>();
+        var horseAncs = ancList.Count > 0
+            ? await db.Horses.AsNoTracking()
+                .Where(h => ancList.Contains(h.HorseId))
+                .ToDictionaryAsync(h => h.HorseId, h => (NameJa: h.NameJa, NameEn: h.NameEn), ct)
+            : new Dictionary<string, (string NameJa, string? NameEn)>();
 
         string ResolveAnc(string? ancId)
         {
             if (string.IsNullOrEmpty(ancId)) return "";
-            if (ancestorHorses.TryGetValue(ancId, out var h))
+            if (horseAncs.TryGetValue(ancId, out var h))
                 return !string.IsNullOrEmpty(h.NameEn) ? h.NameEn : h.NameJa;
             if (breedingAncs.TryGetValue(ancId, out var b))
                 return !string.IsNullOrEmpty(b.NameEn) ? b.NameEn : b.NameJa;
@@ -327,16 +361,16 @@ public sealed class HorsesController : ControllerBase
             {
                 sire_id        = horse.SireId ?? "",
                 sire_name      = ResolveAnc(horse.SireId),
-                sire_sire_id   = sireHorse?.SireId ?? "",
-                sire_sire_name = ResolveAnc(sireHorse?.SireId),
-                sire_dam_id    = sireHorse?.DamId ?? "",
-                sire_dam_name  = ResolveAnc(sireHorse?.DamId),
+                sire_sire_id   = ssId ?? "",
+                sire_sire_name = ResolveAnc(ssId),
+                sire_dam_id    = sdId ?? "",
+                sire_dam_name  = ResolveAnc(sdId),
                 dam_id         = horse.DamId ?? "",
                 dam_name       = ResolveAnc(horse.DamId),
-                dam_sire_id    = damHorse?.SireId ?? "",
-                dam_sire_name  = ResolveAnc(damHorse?.SireId),
-                dam_dam_id     = damHorse?.DamId ?? "",
-                dam_dam_name   = ResolveAnc(damHorse?.DamId)
+                dam_sire_id    = dsId ?? "",
+                dam_sire_name  = ResolveAnc(dsId),
+                dam_dam_id     = ddId ?? "",
+                dam_dam_name   = ResolveAnc(ddId)
             },
             surface_grid = surfaceGrid,
             sire_perf    = sirePerfList,
