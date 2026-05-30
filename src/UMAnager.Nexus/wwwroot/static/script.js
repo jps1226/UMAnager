@@ -3591,6 +3591,11 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         const exportBtnHtml = dateTimeline !== 'past'
             ? `<button class="btn-ai-export" onclick="event.stopPropagation(); exportRaceForAI('${r_id}')" title="Copy a devil's-advocate prompt + data for Claude/ChatGPT">🤖 Export for AI</button>`
             : "";
+        // Slider-tuning export (dev-only): a compact prose-free sweep of the engine's marks
+        // across slider positions, for tuning the scoring curve. No LLM persona — just numbers.
+        const tuneBtnHtml = (dateTimeline !== 'past' && isDevModeEnabled())
+            ? `<button class="btn-ai-export dev-only" onclick="event.stopPropagation(); exportRaceForTuning('${r_id}')" title="Copy a prose-free slider sweep (engine marks at 0/25/50/75/99/100) for tuning">🎚️ Tuning Export</button>`
+            : "";
 
         html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
             <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
@@ -3599,6 +3604,7 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
                 ${historyBtnHtml}
                 ${trendsBtnHtml}
                 ${exportBtnHtml}
+                ${tuneBtnHtml}
 
                 <button class="btn-autopick-safe auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20" ${isLocked ? 'disabled' : ''}>🛡️ Safe Bet</button>
                 <button class="btn-autopick auto-group-${r_id}" style="${autoStyle}; margin-left: 8px;" onclick="autoPick(event, '${r_id}', null)" title="Use Sidebar Slider" ${isLocked ? 'disabled' : ''}>🎲 Auto</button>
@@ -8280,6 +8286,55 @@ function exportRaceForAI(r_id) {
     }, null, 2);
 
     _aiCopy(prompt + "\n\n=== STRUCTURED DATA (JSON) ===\n" + json);
+}
+
+// Dev tuning export: prose-free slider sweep. Shows the engine's top-4 marks at a range
+// of slider positions for ONE race, plus a compact runner table — so the scoring curve
+// can be tuned from real fields without LLM narrative noise. No persona, no JSON.
+function exportRaceForTuning(r_id) {
+    const entries = globalRaceEntries[r_id] || [];
+    if (!entries.length) { showCopyToast('No runners to export yet.'); return; }
+    const info = globalRaceInfo[r_id] || {};
+    const localName = localizeRaceName(info.race_name) || localizeRaceClass(info.race_class) || 'Unnamed race';
+    const track = trackName(info.place) || info.place || '';
+    const cls = info.race_class ? String(info.race_class) : 'normal';
+
+    const nm = row => row.Horse || String(row.Horse_ID).split('.')[0];
+    const ppOf = row => parseInt(row.PP, 10) || 0;
+
+    // Reference table (PP order): odds, fav, sire fit, career — the raw inputs.
+    const ref = entries.slice().sort((a, b) => ppOf(a) - ppOf(b)).map(row =>
+        `${String(ppOf(row)).padStart(2)} ${nm(row).padEnd(20).slice(0,20)} ` +
+        `odds ${_aiDash(row.Odds).padStart(6)}  fav ${_aiDash(row.Fav).padStart(2)}  ` +
+        `sireFit ${(Number.isFinite(parseFloat(row.Sire_Fit)) ? parseFloat(row.Sire_Fit).toFixed(0)+'%' : '—').padStart(4)}  ` +
+        `career ${row.Record || '—'}`
+    );
+
+    // Slider sweep: top-4 by power score at each position (mirrors the auto-pick sort).
+    const positions = [0, 25, 50, 75, 90, 99, 100];
+    const symbols = ['◎', '〇', '▲', '△'];
+    const sweep = positions.map(risk => {
+        const top4 = entries
+            .map(row => ({ row, power: calculatePowerScore(row, risk) }))
+            .sort((a, b) => b.power - a.power)
+            .slice(0, 4);
+        const marks = top4.map((e, i) =>
+            `${symbols[i]} #${ppOf(e.row)} ${nm(e.row)} (${_aiDash(e.row.Odds)}|f${_aiDash(e.row.Fav)})`
+        ).join('   ');
+        return `risk ${String(risk).padStart(3)}: ${marks}`;
+    });
+
+    const out = [
+        `TUNING SWEEP — ${track} R${info.race_number || '?'} — ${localName} [class: ${cls}] · ${entries.length} runners`,
+        `(engine top-4 by power score at each slider position; ◎〇▲△ = ranks 1-4)`,
+        '',
+        ...sweep,
+        '',
+        'RUNNERS (PP order):',
+        ...ref,
+    ].join('\n');
+
+    _aiCopy(out);
 }
 
 function _aiCopy(text) {
