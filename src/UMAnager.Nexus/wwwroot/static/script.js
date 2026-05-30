@@ -4127,6 +4127,20 @@ function toggleRaceLock(event, r_id) {
  * an OrePro apply so the operator can't accidentally edit marks for races that
  * have already been bet. Idempotent — already-locked races stay locked.
  */
+// Lock a SINGLE race after it's been applied/submitted (edit-protection for just that
+// race). Used by the per-race Apply path so applying one race doesn't lock the marks on
+// other races you're still working on for the day.
+function lockSingleRaceAfterSubmit(raceId) {
+    const rid = String(raceId || '').trim();
+    if (!rid || raceLocks[rid]) return 0;
+    raceLocks[rid] = true;
+    const tbody = document.getElementById(`tbody-${rid}`);
+    if (tbody) tbody.innerHTML = buildTableBody(rid, globalRaceEntries[rid]);
+    updateRaceActionButtons(rid);
+    updateAutoBetHighlighting();
+    return 1;
+}
+
 function lockAllRacesForRaceDay(raceId) {
     const info = globalRaceInfo[raceId];
     const date = info?.clean_date;
@@ -6572,7 +6586,8 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
         try { renderLiveViewPanel(); } catch (_) {}
 
         if ((requestCompleted || rowStatus === 'ok') && isAutoLockAfterSubmitEnabled()) {
-            lockAllRacesForRaceDay(raceId);
+            // Lock ONLY this race — applying one race shouldn't lock others you're still editing.
+            lockSingleRaceAfterSubmit(raceId);
         }
 
         const out = document.getElementById('orepro-sync-results');
@@ -6647,9 +6662,15 @@ async function applyAllDayVotesToOrePro() {
         });
     };
 
-    const eligible = allIds.filter(r_id => hasMarks(r_id) && !isRaceLocked(r_id));
-    const lockedCount = allIds.filter(r_id => isRaceLocked(r_id)).length;
-    const unbetCount = allIds.length - eligible.length - lockedCount;
+    // A race is "already submitted" if OrePro apply-state says so. We skip THOSE (avoid
+    // double-submitting), NOT merely-locked ones. Locking is edit-protection only — a
+    // locked race must still be appliable, else locking your final pick to guard it on
+    // mobile would silently exclude it from the bulk apply (the exact bug reported).
+    const isSubmitted = (r_id) => !!(globalOreProApplyState?.[r_id]?.submitted);
+
+    const eligible = allIds.filter(r_id => hasMarks(r_id) && !isSubmitted(r_id));
+    const submittedCount = allIds.filter(r_id => isSubmitted(r_id)).length;
+    const unbetCount = allIds.length - eligible.length - submittedCount;
 
     if (!eligible.length) {
         setOreProSessionStatus(`No unsubmitted races with votes for ${date}.`, 'warn');
@@ -6728,7 +6749,8 @@ async function applyAllDayVotesToOrePro() {
             }
         }
 
-        if (okCount > 0 && isAutoLockAfterSubmitEnabled()) lockAllRacesForRaceDay(eligible[0]);
+        // Lock only the races we actually submitted (not empty/no-mark races for the day).
+        if (okCount > 0 && isAutoLockAfterSubmitEnabled()) eligible.forEach(lockSingleRaceAfterSubmit);
 
         await loadOreProApplyState();
         if (okCount > 0) loadVoteHistory().then(renderVoteHistory); // Phase 30: refresh badges
