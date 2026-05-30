@@ -7255,7 +7255,11 @@ function buildHorseHistoryHtml(history) {
         const favStr = e.fav_rank ? `#${e.fav_rank}` : '—';
         const surfIcon = e.surface === 'turf' ? '🌿' : (e.surface === 'dirt' ? '🟤' : '');
         const classLabel = localizeRaceName(e.race_name) || localizeRaceClass(e.race_class) || e.race_class || '—';
-        return `<tr class="${e.is_upcoming ? 'hh-upcoming' : ''} ${i >= INITIAL ? 'hh-extra' : ''}">
+        // Click any row → modal showing that whole race in the main-page layout,
+        // with the viewed horse highlighted. currentHorseId is the horse being profiled.
+        return `<tr class="hh-row ${e.is_upcoming ? 'hh-upcoming' : ''} ${i >= INITIAL ? 'hh-extra' : ''}"
+                    onclick="openHorseRaceModal('${e.race_id}','${currentHorseId}','${e.race_date}')"
+                    title="View this race's full field">
             <td class="hh-date">${escapeHtml(e.race_date)}</td>
             <td class="hh-track">${escapeHtml(e.track_name)}R${e.race_number || '?'}</td>
             <td class="hh-dist">${surfIcon}${e.distance || '—'}m</td>
@@ -7436,6 +7440,77 @@ function buildHorseVoteHistoryHtml(votes) {
       <div class="horse-section-title">Vote History (${votes.length})</div>
       <div class="horse-vote-strip">${pills}</div>
     </div>`;
+}
+
+// Phase 31: click a history row → modal with the full race field in the SAME layout
+// as the main page's race cards (reusing buildTableHeaderRow + buildTableBody), with
+// the profiled horse's row highlighted. Loads the race day into globals on demand via
+// the shared loadRaceDay() path, so even races outside the 14-day window work.
+async function openHorseRaceModal(raceId, horseId, date) {
+    if (!raceId) return;
+    // Ensure the race is in globals (fetches + merges the JST day if needed).
+    if (!globalRaceEntries[raceId]) {
+        const ok = await loadRaceDay(date);
+        if (!ok || !globalRaceEntries[raceId]) {
+            showCopyToast('Could not load that race.');
+            return;
+        }
+    }
+
+    // Make sure a sort state exists, then order entries like the main view.
+    if (!raceSorts[raceId]) raceSorts[raceId] = { col: globalSort.col, asc: globalSort.asc };
+    applySortLogic(raceId, raceSorts[raceId].col, raceSorts[raceId].asc);
+
+    const info = globalRaceInfo[raceId] || {};
+    const isPast = info._timeline === 'past';
+    const localName = localizeRaceName(info.race_name) || localizeRaceClass(info.race_class) || '';
+    const titleBits = [
+        info.time && info.time !== 'TBA' ? info.time : null,
+        info.place ? `${trackName(info.place)} R${info.race_number || ''}` : null,
+        localName
+    ].filter(Boolean).join(' · ');
+
+    const headerRow = buildTableHeaderRow(raceId);
+    const bodyRows  = buildTableBody(raceId, globalRaceEntries[raceId]);
+
+    // Remove any prior modal, then build fresh.
+    closeHorseRaceModal();
+    const overlay = document.createElement('div');
+    overlay.id = 'horse-race-modal';
+    overlay.className = 'modal-overlay';
+    overlay.onclick = (ev) => { if (ev.target === overlay) closeHorseRaceModal(); };
+    overlay.innerHTML = `
+        <div class="modal-content modal-content-race">
+            <div class="modal-header">
+                <h3 class="modal-title">${escapeHtml(titleBits || 'Race')}</h3>
+                <div class="modal-header-actions">
+                    <button onclick="closeHorseRaceModal()" class="close-btn">✖</button>
+                </div>
+            </div>
+            <div class="horse-race-modal-body">
+                <table class="${isPast && (appConfig.ui?.cleanPastRaceCards ?? true) ? 'past-race' : ''}">
+                    <thead>${headerRow}</thead>
+                    <tbody>${bodyRows}</tbody>
+                </table>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+
+    // Highlight the profiled horse's row (scoped to the modal subtree so it doesn't
+    // clash with a same-id row that may exist in the main schedules container).
+    const hid = String(horseId || '').split('.')[0];
+    if (hid) {
+        const tr = overlay.querySelector(`#row-${CSS.escape(raceId)}-${CSS.escape(hid)}`);
+        if (tr) {
+            tr.classList.add('hh-modal-highlight');
+            tr.scrollIntoView({ block: 'center' });
+        }
+    }
+}
+
+function closeHorseRaceModal() {
+    const el = document.getElementById('horse-race-modal');
+    if (el) el.remove();
 }
 
 // ── End Phase 31 ─────────────────────────────────────────────────────────────
