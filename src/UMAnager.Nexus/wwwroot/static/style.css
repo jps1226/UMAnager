@@ -1559,6 +1559,41 @@ td.jt-rate-none   { color: #444; }
 }
 .btn-odds-trends:hover { background: #6ea8ff; color: #000; }
 
+/* Phase 36: Devil's Advocate export button + copy toast */
+.btn-ai-export {
+    background: transparent;
+    border: 1px solid #c98bff;
+    color: #c98bff;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 8px;
+    transition: 0.2s;
+    vertical-align: middle;
+}
+.btn-ai-export:hover { background: #c98bff; color: #000; }
+
+#copy-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(12px);
+    background: #1a1c23;
+    border: 1px solid #c98bff;
+    color: #eee;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    z-index: 3000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s, transform 0.2s;
+}
+#copy-toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+
 .odds-history-empty { padding: 30px 12px; color: #888; text-align: center; font-size: 14px; }
 .odds-history-chart-wrap { position: relative; width: 100%; }
 .odds-history-svg {

@@ -935,6 +935,11 @@ async function init() {
     // NEW: Load config file
     const configRes = await fetch('/api/config');
     appConfig = await configRes.json();
+    // Migrate jockeyWeight from old default 40 → 20 (A/E shrinkage fix).
+    // Only fires if the user never manually changed it away from the old default.
+    if (appConfig.ui?.formulaWeights?.jockeyWeight === 40) {
+        appConfig.ui.formulaWeights.jockeyWeight = 20;
+    }
     applyDevModeBodyClass();
     // Restore UMM theme from localStorage (theme is client-side; no round-trip needed).
     applyUmmTheme(localStorage.getItem(UMM_STORAGE_KEY) === '1');
@@ -2111,7 +2116,7 @@ function getFormulaWeights() {
         pedigreeMultiplier:   parseFW(fw.pedigreeMultiplier,    30),
         formWeight:           parseFW(fw.formWeight,            80),
         sireFitWeight:        parseFW(fw.sireFitWeight,         10),
-        jockeyWeight:         parseFW(fw.jockeyWeight,          40),
+        jockeyWeight:         parseFW(fw.jockeyWeight,          20),
         trainerWeight:        parseFW(fw.trainerWeight,         20),
     };
 }
@@ -2162,10 +2167,20 @@ function calculatePowerScore(row, riskVal, raceClass) {
     // Phase 8: jockey + trainer A/E (Actual/Expected wins, market-bias-corrected).
     // ~1.0 = market-neutral; we center on 1.0 and weight the deviation. Null when
     // the rolling-window sample is below min-starts (server already gated).
+    // Shrinkage: ae_eff = 1 + (min(ae,2.0)−1)·n/(n+25). At n=10 → 29% credibility;
+    // at n=100 → 80%. Hard cap at 2.0 prevents low-sample outliers from dominating.
     const jAE = parseFloat(row.Jockey_AE);
-    if (Number.isFinite(jAE)) baseFormScore += (jAE - 1.0) * fw.jockeyWeight;
+    if (Number.isFinite(jAE)) {
+        const jN = parseFloat(row.Jockey_Starts) || 0;
+        const jEff = 1 + (Math.min(jAE, 2.0) - 1) * jN / (jN + 25);
+        baseFormScore += (jEff - 1.0) * fw.jockeyWeight;
+    }
     const tAE = parseFloat(row.Trainer_AE);
-    if (Number.isFinite(tAE)) baseFormScore += (tAE - 1.0) * fw.trainerWeight;
+    if (Number.isFinite(tAE)) {
+        const tN = parseFloat(row.Trainer_Starts) || 0;
+        const tEff = 1 + (Math.min(tAE, 2.0) - 1) * tN / (tN + 25);
+        baseFormScore += (tEff - 1.0) * fw.trainerWeight;
+    }
 
     // 3. Base Pedigree Score (from Tracked Bloodlines)
     let basePedScore = (parseFloat(row.Score) || 0) * fw.pedigreeMultiplier;
@@ -2253,22 +2268,28 @@ function explainPowerScore(row, riskVal) {
         formLines.push({ label: 'Last-3 skipped (debut race)', value: 0 });
     }
 
-    // Phase 8: jockey/trainer A/E contributions.
+    // Phase 8: jockey/trainer A/E contributions (with shrinkage, same math as calculatePowerScore).
     const jAEv = parseFloat(row.Jockey_AE);
     if (Number.isFinite(jAEv)) {
-        const jc = (jAEv - 1.0) * fw.jockeyWeight;
+        const jNv = parseFloat(row.Jockey_Starts) || 0;
+        const jEffv = 1 + (Math.min(jAEv, 2.0) - 1) * jNv / (jNv + 25);
+        const jc = (jEffv - 1.0) * fw.jockeyWeight;
         baseFormScore += jc;
         const jName = row.Jockey || row.Jockey_Code || 'jockey';
-        formLines.push({ label: `${jName} A/E ${jAEv.toFixed(2)} (${jAEv >= 1 ? '+' : ''}${(jAEv - 1).toFixed(2)}) × ${fw.jockeyWeight}`, value: jc });
+        const jShrinkNote = jNv > 0 ? ` → ${jEffv.toFixed(2)} (n=${jNv})` : '';
+        formLines.push({ label: `${jName} A/E ${jAEv.toFixed(2)}${jShrinkNote} × ${fw.jockeyWeight}`, value: jc });
     } else if (row.Jockey_Code) {
         formLines.push({ label: `${row.Jockey || row.Jockey_Code} A/E — (low sample)`, value: 0 });
     }
     const tAEv = parseFloat(row.Trainer_AE);
     if (Number.isFinite(tAEv)) {
-        const tc = (tAEv - 1.0) * fw.trainerWeight;
+        const tNv = parseFloat(row.Trainer_Starts) || 0;
+        const tEffv = 1 + (Math.min(tAEv, 2.0) - 1) * tNv / (tNv + 25);
+        const tc = (tEffv - 1.0) * fw.trainerWeight;
         baseFormScore += tc;
         const tName = row.Trainer || row.Trainer_Code || 'trainer';
-        formLines.push({ label: `${tName} A/E ${tAEv.toFixed(2)} (${tAEv >= 1 ? '+' : ''}${(tAEv - 1).toFixed(2)}) × ${fw.trainerWeight}`, value: tc });
+        const tShrinkNote = tNv > 0 ? ` → ${tEffv.toFixed(2)} (n=${tNv})` : '';
+        formLines.push({ label: `${tName} A/E ${tAEv.toFixed(2)}${tShrinkNote} × ${fw.trainerWeight}`, value: tc });
     } else if (row.Trainer_Code) {
         formLines.push({ label: `${row.Trainer || row.Trainer_Code} A/E — (low sample)`, value: 0 });
     }
@@ -2899,10 +2920,16 @@ function getMarkAwareAutoBetRankingsForRace(r_id) {
     if (takenSymbols.size === symbols.length) return [];
 
     // Horses ranked by power score, excluding any that already have a mark.
+    // At Risk ≤ 70: longshots (odds > 30) are sorted to the back so ◎/〇 naturally
+    // go to realistic contenders first. They remain available for ▲/△ slots.
+    const guardActive = currentRisk <= 70;
     const pool = entries
-        .map(row => ({ h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, currentRisk) }))
+        .map(row => ({ h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, currentRisk), isLongshot: guardActive && (parseFloat(row.Odds) || 9999) > 30 }))
         .filter(e => !markedHorses.has(e.h_id))
-        .sort((a, b) => b.power - a.power);
+        .sort((a, b) => {
+            if (a.isLongshot !== b.isLongshot) return a.isLongshot ? 1 : -1;
+            return b.power - a.power;
+        });
 
     // Abstention: skip lower-tier marks when scores are too clustered to differentiate.
     // ◎ always assigned if there's a pool. For each subsequent mark, require a minimum
@@ -3373,6 +3400,10 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         const trendsBtnHtml = dateTimeline !== 'past'
             ? `<button class="btn-odds-trends" onclick="event.stopPropagation(); showOddsHistory('${r_id}')" title="Odds over time for every runner">📈 Trends</button>`
             : "";
+        // Devil's Advocate export (Phase 36): upcoming/live only — copies a prompt + JSON for any LLM.
+        const exportBtnHtml = dateTimeline !== 'past'
+            ? `<button class="btn-ai-export" onclick="event.stopPropagation(); exportRaceForAI('${r_id}')" title="Copy a devil's-advocate prompt + data for Claude/ChatGPT">🤖 Export for AI</button>`
+            : "";
 
         html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
             <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
@@ -3380,6 +3411,7 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
 
                 ${historyBtnHtml}
                 ${trendsBtnHtml}
+                ${exportBtnHtml}
 
                 <button class="btn-autopick-safe auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20" ${isLocked ? 'disabled' : ''}>🛡️ Safe Bet</button>
                 <button class="btn-autopick auto-group-${r_id}" style="${autoStyle}; margin-left: 8px;" onclick="autoPick(event, '${r_id}', null)" title="Use Sidebar Slider" ${isLocked ? 'disabled' : ''}>🎲 Auto</button>
@@ -7478,6 +7510,162 @@ function closeOddsHistoryModal() {
     _oddsHistoryGeom = null;
 }
 
+// ── Phase 36: Devil's Advocate Export ───────────────────────────────────────
+// Copies a self-contained prompt + JSON for a race to the clipboard, to paste into
+// any LLM for a blunt second opinion. Pure frontend — uses globalRaceEntries,
+// globalMarks, and the scoring functions.
+function _aiRiskStance(risk) {
+    if (risk < 40)  return { zone: 'SAFE',  line: "I'm trying to make safe, chalk-heavy bets and protect the bankroll." };
+    if (risk <= 60) return { zone: 'BLEND', line: "I'm balancing value and safety." };
+    return { zone: 'CHAOS', line: "I'm hunting for value and longshot upsets." };
+}
+function _aiDash(v) {
+    if (v === null || v === undefined) return '—';
+    const s = String(v).trim();
+    return (s === '' || s === '0') ? '—' : s;
+}
+function _aiPct(v) {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? `${(n * 100).toFixed(0)}%` : '—';
+}
+function _aiNum(v, d = 2) {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n.toFixed(d) : '—';
+}
+
+function exportRaceForAI(r_id) {
+    const entries = globalRaceEntries[r_id] || [];
+    if (!entries.length) { showCopyToast('No runners to export yet.'); return; }
+    const info = globalRaceInfo[r_id] || {};
+    const risk = getCurrentAutoPickRisk();
+    const stance = _aiRiskStance(risk);
+
+    // Engine power ranking + suggested marks.
+    const ranked = entries
+        .map(row => ({ h: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, risk) }))
+        .sort((a, b) => b.power - a.power);
+    const prByHorse = {};
+    ranked.forEach((e, i) => { prByHorse[e.h] = { rank: i + 1, power: e.power }; });
+    const engineMark = {};
+    getUnconditionalAutoBetRankingsForRace(r_id).forEach(p => { engineMark[p.h_id] = p.symbol; });
+
+    const localName = localizeRaceName(info.race_name) || localizeRaceClass(info.race_class) || 'Unnamed race';
+    const surface = info.surface ? String(info.surface) : '';
+    const dist = info.distance ? `${info.distance}m` : '';
+    const track = trackName(info.place) || info.place || '';
+
+    // Per-entry data (PP order).
+    const rowData = entries.map(row => {
+        const h = String(row.Horse_ID).split('.')[0];
+        const runs = parseLast3Runs(row.Last3);
+        const form = runs.length
+            ? runs.map(rn => rn.favRank !== null
+                ? `${rn.fin}(fav${rn.favRank},Δ${rn.delta >= 0 ? '+' : ''}${rn.delta})`
+                : `${rn.fin}`).join(' ')
+            : '—';
+        const pr = prByHorse[h] || {};
+        return {
+            h, pp: parseInt(row.PP, 10) || 99,
+            name: row.Horse || h,
+            odds: _aiDash(row.Odds), fav: _aiDash(row.Fav),
+            you: globalMarks[`${r_id}_${h}`] || '·',
+            eng: engineMark[h] || '·',
+            form,
+            jockey: row.Jockey || row.Jockey_Code || '—',
+            jWin: _aiPct(row.Jockey_Win_Pct), jAE: _aiNum(row.Jockey_AE),
+            trainer: row.Trainer || row.Trainer_Code || '—',
+            tWin: _aiPct(row.Trainer_Win_Pct), tAE: _aiNum(row.Trainer_AE),
+            sireFit: Number.isFinite(parseFloat(row.Sire_Fit)) ? `${parseFloat(row.Sire_Fit).toFixed(0)}%` : '—',
+            career: row.Record || '—',
+            power: pr.power != null ? pr.power.toFixed(1) : '—',
+            prank: pr.rank || '—'
+        };
+    }).sort((a, b) => a.pp - b.pp);
+
+    // Markdown table.
+    const header = '| PP | Horse | Odds | Fav | You | Eng | Last-3 (fin·favΔ) | Jockey W%/AE | Trainer W%/AE | SireFit | Career | Pwr(rk) |';
+    const sep    = '|---|---|---|---|---|---|---|---|---|---|---|---|';
+    const tlines = rowData.map(r =>
+        `| ${r.pp === 99 ? '—' : r.pp} | ${r.name} | ${r.odds} | ${r.fav} | ${r.you} | ${r.eng} | ${r.form} | ${r.jockey} ${r.jWin}/${r.jAE} | ${r.trainer} ${r.tWin}/${r.tAE} | ${r.sireFit} | ${r.career} | ${r.power}(${r.prank}) |`);
+    const table = [header, sep, ...tlines].join('\n');
+
+    const symName = s => ({ '◎': '◎ Honmei', '〇': '〇 Taiko', '▲': '▲ Dark horse', '△': '△ Longshot', 'X': 'X eliminated' }[s] || s);
+    const yourMarks = rowData.filter(r => r.you !== '·').map(r => `  ${symName(r.you)} → #${r.pp === 99 ? '?' : r.pp} ${r.name}`);
+    const engMarks  = rowData.filter(r => r.eng !== '·').map(r => `  ${r.eng} → #${r.pp === 99 ? '?' : r.pp} ${r.name}`);
+    const disagree  = rowData.filter(r => r.you !== '·' && r.eng !== '·' && r.you !== r.eng)
+        .map(r => `  #${r.pp === 99 ? '?' : r.pp} ${r.name}: you ${r.you}, engine ${r.eng}`);
+
+    const prompt = [
+        "You are a seasoned keiba (Japanese horse racing) betting fanatic who has taken a newcomer under your wing. You're blunt, opinionated, and deeply knowledgeable about JRA racing. Review my picks for this race and tell me what I'm missing.",
+        "",
+        "MARK SYSTEM (JRA): ◎ honmei (my #1), 〇 taiko (strong rival), ▲ dark horse (value), △ longshot, X eliminated. Box bets: Quinella Box = ◎+〇+▲ (any 2 finish 1st-2nd); Trio Box = ◎+〇+▲+△ (any 3 finish 1st-2nd-3rd). A risk slider sets my appetite from chalk (safe) to chaos (value/upsets).",
+        "",
+        `MY RISK STANCE: ${stance.zone} (slider ${risk}/100) — ${stance.line}`,
+        "",
+        `RACE: ${track} R${info.race_number || '?'} — ${localName}${surface ? ' · ' + surface : ''}${dist ? ' · ' + dist : ''} · ${entries.length} runners · post ${info.time || '?'} JST`,
+        "",
+        "RUNNERS (Δ = Ninki-Finish delta: favRank − finish, positive = beat the market that day; Pwr = my engine's power score + its field rank):",
+        table,
+        "",
+        "MY MARKS:",
+        yourMarks.length ? yourMarks.join('\n') : '  (none set yet)',
+        "",
+        "WHAT MY ENGINE SUGGESTED (rank-order by power score):",
+        engMarks.length ? engMarks.join('\n') : '  (none)',
+        disagree.length ? "\nDISAGREEMENTS (my mark ≠ engine):\n" + disagree.join('\n') : "",
+        "",
+        "DEVIL'S ADVOCATE — do all of this:",
+        "1. For each horse I marked, argue why it might fail.",
+        "2. For each unmarked horse in the top 6 by odds, argue why I might be overlooking it.",
+        "3. Flag any mark that contradicts the data (odds, form, jockey/trainer, sire fit).",
+        "4. Suggest ONE alternative mark configuration (◎〇▲△) and explain why it fits my risk stance.",
+        "5. Be specific — cite the numbers in the table."
+    ].join('\n');
+
+    const json = JSON.stringify({
+        race: { id: r_id, track, race_number: info.race_number, name: localName, surface, distance: info.distance, post_jst: info.time, runners: entries.length },
+        risk: { slider: risk, zone: stance.zone },
+        runners: rowData.map(r => ({
+            pp: r.pp === 99 ? null : r.pp, horse: r.name, odds: r.odds, fav_rank: r.fav,
+            your_mark: r.you === '·' ? null : r.you, engine_mark: r.eng === '·' ? null : r.eng,
+            last3: r.form, jockey: r.jockey, jockey_win: r.jWin, jockey_ae: r.jAE,
+            trainer: r.trainer, trainer_win: r.tWin, trainer_ae: r.tAE,
+            sire_fit: r.sireFit, career: r.career, power: r.power, power_rank: r.prank
+        }))
+    }, null, 2);
+
+    _aiCopy(prompt + "\n\n=== STRUCTURED DATA (JSON) ===\n" + json);
+}
+
+function _aiCopy(text) {
+    const ok = () => showCopyToast('📋 Copied — paste into Claude / ChatGPT');
+    const fail = () => showCopyToast('Copy failed — check console');
+    if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).then(ok).catch(() => { _aiCopyFallback(text) ? ok() : fail(); });
+    } else {
+        _aiCopyFallback(text) ? ok() : fail();
+    }
+}
+function _aiCopyFallback(text) {
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch (e) { console.warn('[AIExport] copy failed', e); return false; }
+}
+
+function showCopyToast(msg) {
+    let t = document.getElementById('copy-toast');
+    if (!t) { t = document.createElement('div'); t.id = 'copy-toast'; document.body.appendChild(t); }
+    t.textContent = msg;
+    t.classList.add('visible');
+    clearTimeout(showCopyToast._timer);
+    showCopyToast._timer = setTimeout(() => t.classList.remove('visible'), 2600);
+}
+
 function _ohColor(i, n) { return `hsl(${Math.round(i * 360 / Math.max(n, 1))}, 70%, 56%)`; }
 function _ohJstClock(ms) {
     const d = new Date(ms + 9 * 3600 * 1000); // UTC → JST wall clock
@@ -7892,7 +8080,7 @@ function resetFormulaWeights() {
     document.getElementById('fw-pedigreeMultiplier').value = 30;
     document.getElementById('fw-formWeight').value         = 80;
     document.getElementById('fw-sireFitWeight').value      = 10;
-    document.getElementById('fw-jockeyWeight').value       = 40;
+    document.getElementById('fw-jockeyWeight').value       = 20;
     document.getElementById('fw-trainerWeight').value      = 20;
     syncAllFwSliders();
     updateSidebarSettings();
@@ -7934,7 +8122,7 @@ async function updateSidebarSettings() {
             pedigreeMultiplier: parseFWInput('fw-pedigreeMultiplier',  30),
             formWeight:         parseFWInput('fw-formWeight',          80),
             sireFitWeight:      parseFWInput('fw-sireFitWeight',       10),
-            jockeyWeight:       parseFWInput('fw-jockeyWeight',         40),
+            jockeyWeight:       parseFWInput('fw-jockeyWeight',         20),
             trainerWeight:      parseFWInput('fw-trainerWeight',        20),
         }
     };

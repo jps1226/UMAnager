@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260529-4">
+    <link rel="stylesheet" href="/static/style.css?v=20260529-5">
 </head>
 <body>
 
@@ -451,7 +451,7 @@
 
                         <div class="settings-formula-label-block">
                             <span class="settings-formula-label-name">Jockey Weight</span>
-                            <span class="settings-formula-label-desc">Applied to <b>(A/E − 1.0)</b>, where A/E = jockey's actual wins ÷ market-expected wins over the last 90 days. A/E 1.0 is perfectly market-neutral (zero contribution). A/E 1.30 adds +12 pts; A/E 0.70 subtracts −12. Below 30 starts the cell shows — and contributes nothing. <b>Default 40</b> — jockeys are the strongest human factor; a truly elite rider consistently beats market expectation at JRA.</span>
+                            <span class="settings-formula-label-desc">Applied to the <b>shrinkage-adjusted A/E</b>: ae_eff = 1 + (min(ae,2.0)−1)·n/(n+25). At n=10 the raw A/E is down-weighted to 29% credibility; at n=100 it's 80%. This prevents small-sample outliers from dominating. Below 30 starts the cell shows — and contributes nothing. <b>Default 20</b> — equal weight to trainerWeight after the shrinkage fix.</span>
                         </div>
                         <div class="fw-slider-wrap">
                             <input type="range" id="fw-jockeyWeight" min="0" max="200" step="5" oninput="syncFwSlider(this)" onchange="updateSidebarSettings()" class="settings-fw-slider">
@@ -586,6 +586,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260529-8"></script>
+<script src="/static/script.js?v=20260529-10"></script>
 </body>
 </html>
