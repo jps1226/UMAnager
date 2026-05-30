@@ -2583,3 +2583,118 @@ body.umm-mode .ww-horse-chip {
 #umm-characters-btn:hover { opacity: 0.88; transform: translateY(-1px); }
 body.umm-mode #umm-characters-btn { display: flex; }
 td.bk-color-8 { background: #dc809a !important; color: #000 !important; font-weight: 700; text-align: center; }
+
+/* ── Phase 31: Horse Deep-Dive Tab ────────────────────────────────────────── */
+.horse-view-shell { padding: 16px; max-width: 960px; margin: 0 auto; }
+
+/* Loading / error states */
+.horse-loading, .horse-error { padding: 40px; text-align: center; color: #888; font-size: 16px; }
+.horse-error { color: #ff6b6b; }
+
+/* Empty state (tab opened with no horse selected) */
+.horse-empty-state { padding: 60px 20px; text-align: center; }
+.horse-empty-icon { font-size: 48px; margin-bottom: 12px; }
+.horse-empty-text { color: #888; font-size: 16px; margin-bottom: 20px; }
+
+/* Horse search bar inside empty state */
+.horse-search-bar { position: relative; display: inline-block; width: 320px; max-width: 90vw; }
+.horse-search-input { width: 100%; box-sizing: border-box; padding: 8px 14px; background: #1e1f2b; border: 1px solid #444; border-radius: 6px; color: #ddd; font-size: 14px; outline: none; }
+.horse-search-input:focus { border-color: #1dd1a1; }
+.horse-search-dropdown { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: #1e1f2b; border: 1px solid #444; border-radius: 6px; z-index: 200; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+.horse-search-item { padding: 8px 14px; cursor: pointer; display: flex; gap: 10px; align-items: center; }
+.horse-search-item:hover { background: #2a2b3d; }
+.hsi-name { color: #e0e0e0; font-size: 14px; }
+.hsi-year { color: #888; font-size: 12px; }
+
+/* Profile wrapper */
+.horse-profile-wrap { display: flex; flex-direction: column; gap: 20px; }
+.horse-profile-back { margin-bottom: -8px; }
+
+/* Hero card */
+.horse-hero-card { background: #1a1b27; border: 1px solid #333; border-radius: 8px; padding: 16px 20px; }
+.horse-hero-names { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.horse-hero-en { font-size: 22px; font-weight: 700; color: #e8e8e8; }
+.horse-hero-ja { font-size: 16px; color: #aaa; }
+.horse-hero-year { font-size: 13px; color: #666; background: #2a2b3d; padding: 2px 8px; border-radius: 10px; }
+.horse-hero-meta { display: flex; flex-direction: column; gap: 10px; }
+.horse-hero-lineage { display: flex; flex-wrap: wrap; gap: 14px; }
+.hl-item { font-size: 13px; color: #ccc; }
+.hl-label { color: #888; font-size: 11px; margin-right: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+.horse-hero-stats { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+.horse-stat-block { display: flex; flex-direction: column; align-items: flex-start; }
+.hs-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.04em; }
+.hs-value { font-size: 15px; color: #e8e8e8; font-weight: 600; font-family: monospace; }
+.horse-form-strip { letter-spacing: 0.05em; }
+.horse-best-badge { font-size: 13px; background: #1f3a2e; color: #1dd1a1; border: 1px solid #1dd1a1; border-radius: 12px; padding: 3px 10px; }
+.horse-odds-chip { font-size: 14px; background: #2d2110; color: #ff9f43; border: 1px solid #ff9f43; border-radius: 12px; padding: 3px 10px; }
+
+/* Section wrapper */
+.horse-section { background: #1a1b27; border: 1px solid #333; border-radius: 8px; padding: 14px 16px; }
+.horse-section-title { font-size: 13px; font-weight: 700; color: #1dd1a1; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+.horse-empty-msg { color: #888; font-size: 13px; margin: 0; }
+
+/* Race history table */
+.horse-history-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.horse-history-table th { color: #888; font-weight: 600; text-align: left; padding: 4px 8px 6px; border-bottom: 1px solid #333; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.horse-history-table td { padding: 5px 8px; border-bottom: 1px solid #222; color: #ccc; vertical-align: middle; white-space: nowrap; }
+.horse-history-table tr:last-child td { border-bottom: none; }
+.horse-history-table tr.hh-upcoming td { color: #888; font-style: italic; }
+.hh-date { color: #aaa; font-family: monospace; }
+.hh-track { color: #ddd; }
+.hh-dist { white-space: nowrap; }
+.hh-class { color: #aaa; font-size: 11px; max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
+.hh-finish-cell { text-align: center; }
+.hh-finish { display: inline-block; font-weight: 700; padding: 1px 5px; border-radius: 3px; min-width: 20px; text-align: center; }
+.hh-finish-1 { background: #d4af37; color: #000; }
+.hh-finish-2 { background: #a8a9ad; color: #000; }
+.hh-finish-3 { background: #cd7f32; color: #fff; }
+.hh-finish-other { color: #999; }
+.hh-odds { color: #ff9f43; font-family: monospace; }
+.hh-fav { color: #888; font-size: 11px; }
+.hh-jockey { color: #aaa; max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+.hh-extra { display: none; }
+.hh-expand-row { text-align: center; margin-top: 8px; }
+
+/* Pedigree tree */
+.ped-tree { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ped-col { display: flex; flex-direction: column; gap: 6px; }
+.ped-gen2 { display: grid; grid-template-rows: 1fr 1fr; gap: 6px; }
+.ped-gen3 { display: grid; grid-template-rows: repeat(4, 1fr); gap: 4px; }
+.ped-box { background: #22233a; border: 1px solid #3a3b55; border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; justify-content: center; }
+.ped-gen2 .ped-box { min-height: 52px; }
+.ped-gen3 .ped-box { min-height: 24px; }
+.ped-role { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.06em; }
+.ped-name { font-size: 13px; color: #e0e0e0; margin-top: 2px; }
+.ped-sire .ped-name, .ped-ss .ped-name, .ped-sd .ped-name { color: #a8d8ea; }
+.ped-dam .ped-name, .ped-ds .ped-name, .ped-dd .ped-name { color: #f7c59f; }
+
+/* Surface × distance / Sire perf grid */
+.horse-surface-grid { width: 100%; border-collapse: collapse; font-size: 12px; }
+.horse-surface-grid th { color: #888; text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; padding: 4px 10px; border-bottom: 1px solid #333; text-align: center; }
+.horse-surface-grid th:first-child { text-align: left; }
+.horse-surface-grid td { padding: 6px 10px; border-bottom: 1px solid #222; vertical-align: middle; text-align: center; }
+.horse-surface-grid tr:last-child td { border-bottom: none; }
+.sg-surf { text-align: left !important; color: #ccc; font-size: 13px; }
+.sg-empty { color: #444; }
+.sg-cell { }
+.sg-record { display: block; font-family: monospace; color: #e0e0e0; font-size: 12px; }
+.sg-pct { display: block; font-size: 10px; color: #888; }
+
+/* Vote history strip */
+.horse-vote-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+.horse-vote-pill { display: flex; align-items: center; gap: 6px; background: #22233a; border-radius: 6px; padding: 5px 10px; font-size: 12px; }
+.hvp-date { color: #888; font-family: monospace; }
+.hvp-track { color: #aaa; }
+.hvp-race { color: #ccc; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 🔍 Profile button in hover menu */
+.hover-action-btn.profile-btn { background: #2a2b3d; color: #a0c4ff; border-color: #3a4060; }
+.hover-action-btn.profile-btn:hover { background: #33355a; }
+
+/* Mobile adjustments */
+@media (max-width: 600px) {
+    .horse-view-shell { padding: 8px; }
+    .ped-tree { grid-template-columns: 1fr; }
+    .horse-history-table th:nth-child(n+5),
+    .horse-history-table td:nth-child(n+5) { display: none; }
+}

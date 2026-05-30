@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260529-7">
+    <link rel="stylesheet" href="/static/style.css?v=20260530-1">
 </head>
 <body>
 
@@ -139,6 +139,7 @@
                     <button id="mobile-menu-btn" class="mobile-menu-btn" onclick="toggleMobileSidebar()" aria-label="Open menu">☰</button>
                     <button id="main-view-races" onclick="switchMainView('races')" class="toolbar-btn toolbar-btn-muted is-active">🏠 Main</button>
                     <button id="main-view-voting" onclick="switchMainView('voting')" class="toolbar-btn toolbar-btn-muted">🗳️ Voting</button>
+                    <button id="main-view-horse" onclick="switchMainView('horse')" class="toolbar-btn toolbar-btn-muted">🔍 Horse</button>
                 </div>
                 <div class="active-date-nav active-date-nav-topbar">
                     <button type="button" id="active-date-prev" class="active-date-nav-btn" onclick="shiftActiveDate(-1)">◀</button>
@@ -246,6 +247,18 @@
                 <div class="skel-race shimmer"></div>
                 <div class="skel-race shimmer"></div>
                 <div class="skel-race shimmer"></div>
+            </div>
+        </div>
+    </div>
+    <div id="horse-view-container" style="display:none;" class="horse-view-shell">
+        <div id="horse-profile-content" class="horse-profile-content">
+            <div class="horse-empty-state">
+                <div class="horse-empty-icon">🐴</div>
+                <div class="horse-empty-text">Search for a horse to view its profile</div>
+                <div class="horse-search-bar">
+                    <input type="text" id="horse-search-input" class="horse-search-input" placeholder="Horse name or ID…" oninput="onHorseSearchInput(this.value)" autocomplete="off">
+                    <div id="horse-search-dropdown" class="horse-search-dropdown" style="display:none;"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -593,6 +606,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260529-15"></script>
+<script src="/static/script.js?v=20260530-1"></script>
 </body>
 </html>

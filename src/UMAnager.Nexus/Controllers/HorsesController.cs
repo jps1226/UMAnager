@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
+using UMAnager.Nexus.Services;
 
 namespace UMAnager.Nexus.Controllers;
 
@@ -8,6 +9,24 @@ namespace UMAnager.Nexus.Controllers;
 [Route("api/horses")]
 public sealed class HorsesController : ControllerBase
 {
+    private static readonly IReadOnlyDictionary<string, string> TrackNames =
+        new Dictionary<string, string>
+        {
+            ["01"] = "Sapporo",  ["02"] = "Hakodate", ["03"] = "Fukushima", ["04"] = "Niigata",
+            ["05"] = "Tokyo",    ["06"] = "Nakayama", ["07"] = "Chukyo",    ["08"] = "Kyoto",
+            ["09"] = "Hanshin",  ["10"] = "Kokura",
+        };
+
+    private static string TrackName(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return "";
+        var padded = code.Trim().PadLeft(2, '0');
+        return TrackNames.TryGetValue(padded, out var name) ? name : padded;
+    }
+
+    private static string CircledRank(int? rank) =>
+        rank is >= 1 and <= 18 ? ((char)(0x245F + rank.Value)).ToString() : "";
+
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
 
     public HorsesController(IDbContextFactory<AppDbContext> dbFactory) => _dbFactory = dbFactory;
@@ -62,5 +81,269 @@ public sealed class HorsesController : ControllerBase
             .ToList();
 
         return Ok(new { results = combined });
+    }
+
+    /// <summary>
+    /// Phase 31: Full horse profile — hero stats, career history, 3-gen pedigree,
+    /// surface×distance grid, sire-performance rows, and vote history.
+    /// Single endpoint so the Horse tab opens with one request.
+    /// </summary>
+    [HttpGet("{id}/profile")]
+    public async Task<IActionResult> Profile(string id, CancellationToken ct)
+    {
+        using var db = await _dbFactory.CreateDbContextAsync(ct);
+
+        var horse = await db.Horses.AsNoTracking()
+            .FirstOrDefaultAsync(h => h.HorseId == id, ct);
+        if (horse == null) return NotFound(new { error = "Horse not found" });
+
+        // ── All race entries for this horse joined to races ───────────────────
+        var historyRaw = await (
+            from re in db.RaceEntries.AsNoTracking()
+            join r in db.Races.AsNoTracking() on re.RaceId equals r.RaceId
+            where re.HorseId == id
+            orderby r.RaceDate descending, r.RaceNumber descending
+            select new
+            {
+                re.RaceId,
+                re.PostPosition,
+                re.FinishPos,
+                re.Odds,
+                re.FavRank,
+                re.JockeyName,
+                r.RaceDate,
+                r.SortTime,
+                r.TrackCode,
+                r.Distance,
+                r.Surface,
+                r.RaceClass,
+                r.NameJa,
+                r.RaceNumber
+            }
+        ).ToListAsync(ct);
+
+        // ── Career stats (only runs with a real finish position) ──────────────
+        var finished = historyRaw.Where(e => e.FinishPos is > 0).ToList();
+        int careerStarts = finished.Count;
+        int careerWins   = finished.Count(e => e.FinishPos == 1);
+        int careerPlaces = finished.Count(e => e.FinishPos == 2);
+        int careerShows  = finished.Count(e => e.FinishPos is >= 1 and <= 3);
+
+        // ── Last-5 form strip ─────────────────────────────────────────────────
+        var last5Parts = finished.Take(5)
+            .Select(e => e.FinishPos!.Value.ToString() + CircledRank(e.FavRank))
+            .ToList();
+        var last5Form = last5Parts.Count > 0 ? string.Join("-", last5Parts) : "—";
+
+        // ── Surface × distance grid ───────────────────────────────────────────
+        var surfaceGrid = finished
+            .Where(e => !string.IsNullOrEmpty(e.Surface) && e.Distance is > 0)
+            .GroupBy(e => (Surface: e.Surface!, Bucket: SirePerformanceService.DistanceBucket(e.Distance)))
+            .Select(g => (object)new
+            {
+                surface = g.Key.Surface,
+                bucket  = g.Key.Bucket,
+                starts  = g.Count(),
+                wins    = g.Count(e => e.FinishPos == 1),
+                places  = g.Count(e => e.FinishPos is >= 1 and <= 3)
+            })
+            .ToList();
+
+        var bestGroup = finished
+            .Where(e => !string.IsNullOrEmpty(e.Surface) && e.Distance is > 0)
+            .GroupBy(e => (Surface: e.Surface!, Bucket: SirePerformanceService.DistanceBucket(e.Distance)))
+            .Select(g => (surf: g.Key.Surface, bucket: g.Key.Bucket,
+                          wins: g.Count(e => e.FinishPos == 1), starts: g.Count()))
+            .OrderByDescending(g => g.wins).ThenByDescending(g => g.starts)
+            .FirstOrDefault();
+
+        // ── Upcoming entry (most-recent race not yet run) ─────────────────────
+        var jstNow = DateTime.UtcNow.AddHours(9);
+        var upcomingRow = historyRaw
+            .Where(e => (!e.FinishPos.HasValue || e.FinishPos == 0)
+                     && e.SortTime.HasValue && e.SortTime.Value > jstNow)
+            .OrderBy(e => e.SortTime)
+            .FirstOrDefault();
+
+        // ── Field sizes (for history context) ────────────────────────────────
+        var histRaceIds = historyRaw.Select(e => e.RaceId).Distinct().ToList();
+        var fieldSizes = histRaceIds.Count > 0
+            ? await db.RaceEntries.AsNoTracking()
+                .Where(e => histRaceIds.Contains(e.RaceId) && e.FinishPos > 0)
+                .GroupBy(e => e.RaceId)
+                .Select(g => new { RaceId = g.Key, N = g.Count() })
+                .ToDictionaryAsync(x => x.RaceId, x => x.N, ct)
+            : new Dictionary<string, int>();
+
+        // ── Pedigree resolution (3 generations) ──────────────────────────────
+        // Load gen-2 ancestors (sire, dam) from horses table
+        var gen2Ids = new List<string>();
+        if (!string.IsNullOrEmpty(horse.SireId)) gen2Ids.Add(horse.SireId);
+        if (!string.IsNullOrEmpty(horse.DamId))  gen2Ids.Add(horse.DamId);
+        var ancestorHorses = gen2Ids.Count > 0
+            ? await db.Horses.AsNoTracking()
+                .Where(h => gen2Ids.Contains(h.HorseId))
+                .ToDictionaryAsync(h => h.HorseId, h => h, ct)
+            : new Dictionary<string, Data.Entities.Horse>();
+
+        ancestorHorses.TryGetValue(horse.SireId ?? "", out var sireHorse);
+        ancestorHorses.TryGetValue(horse.DamId  ?? "", out var damHorse);
+
+        // Collect all ancestor IDs we need names for (gen-2 + gen-3)
+        var allAncIds = new HashSet<string>(StringComparer.Ordinal);
+        void AddId(string? v) { if (!string.IsNullOrEmpty(v)) allAncIds.Add(v); }
+        AddId(horse.SireId); AddId(horse.DamId); AddId(horse.BmsId);
+        if (sireHorse != null) { AddId(sireHorse.SireId); AddId(sireHorse.DamId); }
+        if (damHorse  != null) { AddId(damHorse.SireId);  AddId(damHorse.DamId);  }
+
+        // Some gen-3 ancestors might be JRA runners (in horses), not just breeding horses
+        var gen3Ids = allAncIds.Except(gen2Ids).ToList();
+        if (gen3Ids.Count > 0)
+        {
+            var gen3Horses = await db.Horses.AsNoTracking()
+                .Where(h => gen3Ids.Contains(h.HorseId))
+                .ToListAsync(ct);
+            foreach (var h in gen3Horses) ancestorHorses[h.HorseId] = h;
+        }
+
+        // Remaining ancestor IDs resolved from breeding_horses (foreign sires/dams)
+        var ancList = allAncIds.ToList();
+        var breedingAncs = ancList.Count > 0
+            ? await db.BreedingHorses.AsNoTracking()
+                .Where(b => ancList.Contains(b.HansyokuNum))
+                .ToDictionaryAsync(b => b.HansyokuNum,
+                    b => (NameJa: b.NameJa, NameEn: b.NameEn), ct)
+            : new Dictionary<string, (string NameJa, string? NameEn)>();
+
+        string ResolveAnc(string? ancId)
+        {
+            if (string.IsNullOrEmpty(ancId)) return "";
+            if (ancestorHorses.TryGetValue(ancId, out var h))
+                return !string.IsNullOrEmpty(h.NameEn) ? h.NameEn : h.NameJa;
+            if (breedingAncs.TryGetValue(ancId, out var b))
+                return !string.IsNullOrEmpty(b.NameEn) ? b.NameEn : b.NameJa;
+            return "";
+        }
+
+        // ── Sire performance (all surface/bucket combos for this horse's sire) ─
+        List<object> sirePerfList;
+        if (!string.IsNullOrEmpty(horse.SireId))
+        {
+            var spRows = await db.Database
+                .SqlQueryRaw<SirePerformanceService.SirePerfRow>(
+                    "SELECT sire_id AS \"SireId\", surface AS \"Surface\", " +
+                    "distance_bucket AS \"Bucket\", starts AS \"Starts\", wins AS \"Wins\", " +
+                    "places AS \"Places\", win_pct AS \"WinPct\", place_pct AS \"PlacePct\" " +
+                    "FROM sire_performance WHERE sire_id = {0}", horse.SireId)
+                .ToListAsync(ct);
+            sirePerfList = spRows.Select(r => (object)new
+            {
+                surface   = r.Surface,
+                bucket    = r.Bucket,
+                win_pct   = r.WinPct,
+                place_pct = r.PlacePct,
+                starts    = r.Starts,
+                wins      = r.Wins
+            }).ToList();
+        }
+        else sirePerfList = [];
+
+        // ── Vote history for this horse ───────────────────────────────────────
+        var voteRows = await db.VoteHistory.AsNoTracking()
+            .Where(v => v.HorseId == id)
+            .OrderByDescending(v => v.VotedAt)
+            .ToListAsync(ct);
+
+        var votedRaceIds = voteRows.Select(v => v.RaceId).Distinct().ToList();
+        Dictionary<string, (DateTime Date, string? TrackCode, string? NameJa)> votedRaceMap;
+        if (votedRaceIds.Count > 0)
+        {
+            var raceInfo = await db.Races.AsNoTracking()
+                .Where(r => votedRaceIds.Contains(r.RaceId))
+                .Select(r => new { r.RaceId, r.RaceDate, r.TrackCode, r.NameJa })
+                .ToListAsync(ct);
+            votedRaceMap = raceInfo.ToDictionary(r => r.RaceId,
+                r => (r.RaceDate, r.TrackCode, r.NameJa));
+        }
+        else votedRaceMap = new();
+
+        var voteHistory = voteRows.Select(v =>
+        {
+            votedRaceMap.TryGetValue(v.RaceId, out var ri);
+            return (object)new
+            {
+                race_id    = v.RaceId,
+                race_date  = ri.Date != default ? ri.Date.ToString("yyyy-MM-dd") : "",
+                track_name = TrackName(ri.TrackCode),
+                race_name  = ri.NameJa ?? "",
+                mark       = v.Mark,
+                voted_at   = v.VotedAt.ToString("yyyy-MM-dd")
+            };
+        }).ToList();
+
+        // ── History list (all entries, client paginates to last-10) ──────────
+        var historyList = historyRaw.Select(e => (object)new
+        {
+            race_id     = e.RaceId,
+            race_date   = e.RaceDate.ToString("yyyy-MM-dd"),
+            track_name  = TrackName(e.TrackCode),
+            race_number = e.RaceNumber,
+            distance    = e.Distance,
+            surface     = e.Surface ?? "",
+            race_class  = e.RaceClass ?? "",
+            race_name   = e.NameJa ?? "",
+            finish      = e.FinishPos,
+            odds        = e.Odds.HasValue ? e.Odds.Value.ToString("F1") : (string?)null,
+            fav_rank    = e.FavRank,
+            jockey      = e.JockeyName ?? "",
+            field_size  = fieldSizes.TryGetValue(e.RaceId, out var fs) ? fs : 0,
+            is_upcoming = e.SortTime.HasValue && e.SortTime.Value > jstNow
+        }).ToList();
+
+        // ── Assemble response ─────────────────────────────────────────────────
+        var response = new
+        {
+            horse_id     = horse.HorseId,
+            name_en      = horse.NameEn ?? "",
+            name_ja      = horse.NameJa ?? "",
+            birth_year   = horse.BirthYear,
+            sire_id      = horse.SireId ?? "",
+            sire_name    = ResolveAnc(horse.SireId),
+            dam_id       = horse.DamId ?? "",
+            dam_name     = ResolveAnc(horse.DamId),
+            bms_id       = horse.BmsId ?? "",
+            bms_name     = ResolveAnc(horse.BmsId),
+            career_starts = careerStarts,
+            career_wins   = careerWins,
+            career_places = careerPlaces,
+            career_shows  = careerShows,
+            last5_form    = last5Form,
+            best_surface  = bestGroup.surf ?? "",
+            best_bucket   = bestGroup.bucket ?? "",
+            current_odds    = upcomingRow?.Odds?.ToString("F1"),
+            current_fav     = upcomingRow?.FavRank,
+            current_race_id = upcomingRow?.RaceId,
+            pedigree = new
+            {
+                sire_id        = horse.SireId ?? "",
+                sire_name      = ResolveAnc(horse.SireId),
+                sire_sire_id   = sireHorse?.SireId ?? "",
+                sire_sire_name = ResolveAnc(sireHorse?.SireId),
+                sire_dam_id    = sireHorse?.DamId ?? "",
+                sire_dam_name  = ResolveAnc(sireHorse?.DamId),
+                dam_id         = horse.DamId ?? "",
+                dam_name       = ResolveAnc(horse.DamId),
+                dam_sire_id    = damHorse?.SireId ?? "",
+                dam_sire_name  = ResolveAnc(damHorse?.SireId),
+                dam_dam_id     = damHorse?.DamId ?? "",
+                dam_dam_name   = ResolveAnc(damHorse?.DamId)
+            },
+            surface_grid = surfaceGrid,
+            sire_perf    = sirePerfList,
+            vote_history = voteHistory,
+            history      = historyList
+        };
+
+        return Ok(response);
     }
 }

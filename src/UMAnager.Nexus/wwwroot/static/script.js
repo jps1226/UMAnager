@@ -16,6 +16,7 @@ let currentTimelineTab = "upcoming";
 let currentActiveDate = null;
 let currentCalendarMonth = null;
 let currentMainView = 'races';
+let currentHorseId = null;
 let sidebarRaceCollapseState = {};
 let raceSorts = {}; // Per-race sort state — always kept in sync with globalSort.
 let globalSort = { col: 'Default', asc: true }; // Single source of truth; all races mirror this.
@@ -1421,6 +1422,9 @@ function buildNameWithHover(id, name, listType, trackedStatus, intensity, isMixe
         btnHtml = `<button class="hover-action-btn add-btn" data-horse-id="${cleanId}" data-list-type="${listType}" onclick="quickAddFromHover('${cleanId}', '${listType}', '${nameEnc}')">➕ Add</button>`;
     }
     
+    // 🔍 Profile button → opens the Horse Deep-Dive tab for this horse
+    const profileHtml = `<button class="hover-action-btn profile-btn" onclick="viewHorse('${cleanId}')">🔍 Profile</button>`;
+
     // Generate the link to the English Netkeiba Database!
     const linkHtml = `<a href="https://en.netkeiba.com/db/horse/${escapedId}/" target="_blank" class="hover-link-btn" title="View on Netkeiba DB">🔗 DB</a>`;
     
@@ -1445,6 +1449,7 @@ function buildNameWithHover(id, name, listType, trackedStatus, intensity, isMixe
         <span class="${nameClass}">${escapedName}</span>
         <div class="hover-menu">
             ${btnHtml}
+            ${profileHtml}
             ${linkHtml}
         </div>
     </div>`;
@@ -7089,31 +7094,351 @@ function renderLiveViewPanel() {
 }
 
 function switchMainView(view) {
-    currentMainView = view === 'voting' ? 'voting' : 'races';
+    if (view === 'voting') currentMainView = 'voting';
+    else if (view === 'horse') currentMainView = 'horse';
+    else currentMainView = 'races';
 
-    const schedules = document.getElementById('schedules-container');
-    const liveView = document.getElementById('live-view-container');
-    const racesBtn = document.getElementById('main-view-races');
-    const votingBtn = document.getElementById('main-view-voting');
+    const schedules  = document.getElementById('schedules-container');
+    const liveView   = document.getElementById('live-view-container');
+    const horseView  = document.getElementById('horse-view-container');
+    const racesBtn   = document.getElementById('main-view-races');
+    const votingBtn  = document.getElementById('main-view-voting');
+    const horseBtn   = document.getElementById('main-view-horse');
     if (!schedules || !liveView || !racesBtn || !votingBtn) return;
 
     const isVoting = currentMainView === 'voting';
-    schedules.style.display = isVoting ? 'none' : 'block';
-    liveView.style.display = isVoting ? 'flex' : 'none';
+    const isHorse  = currentMainView === 'horse';
+
+    schedules.style.display = (isVoting || isHorse) ? 'none' : 'block';
+    liveView.style.display  = isVoting ? 'flex' : 'none';
+    if (horseView) horseView.style.display = isHorse ? 'block' : 'none';
+
     const watchlistPanel = document.getElementById('weekend-watchlist-panel');
-    if (watchlistPanel) watchlistPanel.style.display = isVoting ? 'none' : '';
-    racesBtn.classList.toggle('is-active', !isVoting);
+    if (watchlistPanel) watchlistPanel.style.display = (isVoting || isHorse) ? 'none' : '';
+
+    racesBtn.classList.toggle('is-active', !isVoting && !isHorse);
     votingBtn.classList.toggle('is-active', isVoting);
+    if (horseBtn) horseBtn.classList.toggle('is-active', isHorse);
     document.body.classList.toggle('voting-mode', isVoting);
 
     syncVotingViewAvailability();
     updateLiveViewPopoutAvailability();
     updateWinningVotesFocusButton();
 
-    if (isVoting) {
-        renderLiveViewPanel();
+    if (isVoting) renderLiveViewPanel();
+}
+
+// ── Phase 31: Horse Deep-Dive Tab ──────────────────────────────────────────
+
+async function viewHorse(horseId) {
+    if (!horseId) return;
+    currentHorseId = horseId;
+    switchMainView('horse');
+
+    const content = document.getElementById('horse-profile-content');
+    if (content) content.innerHTML = '<div class="horse-loading">Loading profile…</div>';
+
+    try {
+        const resp = await fetch(`/api/horses/${encodeURIComponent(horseId)}/profile`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        renderHorseProfile(data);
+    } catch (e) {
+        if (content) content.innerHTML = `<div class="horse-error">Failed to load: ${escapeHtml(String(e.message))}</div>`;
     }
 }
+
+// Search bar in the empty state
+function onHorseSearchInput(val) {
+    const drop = document.getElementById('horse-search-dropdown');
+    if (!drop) return;
+    const q = (val || '').trim();
+    if (q.length < 2) { drop.style.display = 'none'; return; }
+    fetch(`/api/horses/search?q=${encodeURIComponent(q)}&type=racing`)
+        .then(r => r.json())
+        .then(data => {
+            const results = data.results || [];
+            if (!results.length) { drop.style.display = 'none'; return; }
+            drop.innerHTML = results.map(r =>
+                `<div class="horse-search-item" onclick="viewHorse('${escapeHtml(r.id)}')">
+                    <span class="hsi-name">${escapeHtml(r.name || r.id)}</span>
+                    ${r.birth_year ? `<span class="hsi-year">${r.birth_year}</span>` : ''}
+                 </div>`
+            ).join('');
+            drop.style.display = 'block';
+        })
+        .catch(() => { drop.style.display = 'none'; });
+}
+
+function renderHorseProfile(data) {
+    const content = document.getElementById('horse-profile-content');
+    if (!content) return;
+
+    const displayName = data.name_en || data.name_ja || data.horse_id;
+    const careerStr = `${data.career_wins}-${data.career_places}-${data.career_shows - data.career_wins - data.career_places}/${data.career_starts}`;
+
+    // Best surface/distance badge
+    let bestBadge = '';
+    if (data.best_surface && data.best_bucket) {
+        const surfIcon = data.best_surface === 'turf' ? '🌿' : '🟤';
+        bestBadge = `<span class="horse-best-badge">${surfIcon} ${data.best_surface} · ${data.best_bucket}</span>`;
+    }
+
+    // Current odds
+    let oddsChip = '';
+    if (data.current_odds) {
+        oddsChip = `<span class="horse-odds-chip">${data.current_odds}× <small>#${data.current_fav || '?'}</small></span>`;
+    }
+
+    let html = `
+    <div class="horse-profile-wrap">
+      <div class="horse-profile-back">
+        <button class="toolbar-btn toolbar-btn-muted" onclick="switchMainView('races')">◀ Back to Races</button>
+      </div>
+
+      <!-- Hero card -->
+      <div class="horse-hero-card">
+        <div class="horse-hero-names">
+          <span class="horse-hero-en">${escapeHtml(displayName)}</span>
+          ${data.name_ja && data.name_ja !== data.name_en ? `<span class="horse-hero-ja">${escapeHtml(data.name_ja)}</span>` : ''}
+          ${data.birth_year ? `<span class="horse-hero-year">${data.birth_year}</span>` : ''}
+        </div>
+        <div class="horse-hero-meta">
+          <div class="horse-hero-lineage">
+            ${data.sire_name ? `<span class="hl-item"><span class="hl-label">By</span> ${escapeHtml(data.sire_name)}</span>` : ''}
+            ${data.dam_name  ? `<span class="hl-item"><span class="hl-label">Dam</span> ${escapeHtml(data.dam_name)}</span>` : ''}
+            ${data.bms_name  ? `<span class="hl-item"><span class="hl-label">BMS</span> ${escapeHtml(data.bms_name)}</span>` : ''}
+          </div>
+          <div class="horse-hero-stats">
+            <span class="horse-stat-block">
+              <span class="hs-label">Career</span>
+              <span class="hs-value">${escapeHtml(careerStr)}</span>
+            </span>
+            <span class="horse-stat-block">
+              <span class="hs-label">Form (last 5)</span>
+              <span class="hs-value horse-form-strip">${escapeHtml(data.last5_form || '—')}</span>
+            </span>
+            ${bestBadge ? `<span class="horse-stat-block">${bestBadge}</span>` : ''}
+            ${oddsChip  ? `<span class="horse-stat-block">${oddsChip}</span>` : ''}
+          </div>
+        </div>
+      </div>
+
+      <!-- Race history -->
+      ${buildHorseHistoryHtml(data.history || [])}
+
+      <!-- 3-gen pedigree -->
+      ${buildHorsePedigreeHtml(data.pedigree)}
+
+      <!-- Surface × distance grid -->
+      ${buildHorseSurfaceGridHtml(data.surface_grid || [])}
+
+      <!-- Sire performance -->
+      ${buildHorseSirePerfHtml(data.sire_name, data.sire_perf || [])}
+
+      <!-- Vote history -->
+      ${buildHorseVoteHistoryHtml(data.vote_history || [])}
+    </div>`;
+
+    content.innerHTML = html;
+}
+
+function buildHorseHistoryHtml(history) {
+    if (!history.length) return '<div class="horse-section"><div class="horse-section-title">Race History</div><p class="horse-empty-msg">No race history found.</p></div>';
+
+    const INITIAL = 10;
+    const hasMore = history.length > INITIAL;
+
+    function rowHtml(e, i) {
+        const finStr = e.is_upcoming ? '—' : (e.finish != null ? `<span class="hh-finish hh-finish-${e.finish <= 3 ? e.finish : 'other'}">${e.finish}</span>` : '—');
+        const oddsStr = e.odds || '—';
+        const favStr = e.fav_rank ? `#${e.fav_rank}` : '—';
+        const surfIcon = e.surface === 'turf' ? '🌿' : (e.surface === 'dirt' ? '🟤' : '');
+        const classLabel = localizeRaceName(e.race_name) || localizeRaceClass(e.race_class) || e.race_class || '—';
+        return `<tr class="${e.is_upcoming ? 'hh-upcoming' : ''} ${i >= INITIAL ? 'hh-extra' : ''}">
+            <td class="hh-date">${escapeHtml(e.race_date)}</td>
+            <td class="hh-track">${escapeHtml(e.track_name)}R${e.race_number || '?'}</td>
+            <td class="hh-dist">${surfIcon}${e.distance || '—'}m</td>
+            <td class="hh-class">${escapeHtml(classLabel)}</td>
+            <td class="hh-field">${e.field_size || '—'}f</td>
+            <td class="hh-finish-cell">${finStr}</td>
+            <td class="hh-odds">${escapeHtml(oddsStr)}</td>
+            <td class="hh-fav">${escapeHtml(favStr)}</td>
+            <td class="hh-jockey">${escapeHtml(e.jockey)}</td>
+        </tr>`;
+    }
+
+    const rows = history.map((e, i) => rowHtml(e, i)).join('');
+    const expandBtn = hasMore
+        ? `<div class="hh-expand-row">
+             <button class="toolbar-btn toolbar-btn-muted" onclick="toggleHistoryExpand(this)">Show full career (${history.length})</button>
+           </div>`
+        : '';
+
+    return `
+    <div class="horse-section">
+      <div class="horse-section-title">Race History</div>
+      <table class="horse-history-table">
+        <thead>
+          <tr>
+            <th>Date</th><th>Track</th><th>Dist</th><th>Class</th>
+            <th title="Field size">Field</th><th>Fin</th><th>Odds</th><th>Fav</th><th>Jockey</th>
+          </tr>
+        </thead>
+        <tbody id="horse-history-tbody">${rows}</tbody>
+      </table>
+      ${expandBtn}
+    </div>`;
+}
+
+function toggleHistoryExpand(btn) {
+    const extras = document.querySelectorAll('.hh-extra');
+    const expanded = extras.length > 0 && extras[0].style.display !== 'none';
+    extras.forEach(tr => tr.style.display = expanded ? 'none' : '');
+    btn.textContent = expanded ? `Show full career (${extras.length + 10})` : 'Show less';
+}
+
+function buildHorsePedigreeHtml(ped) {
+    if (!ped) return '';
+    const sireName = escapeHtml(ped.sire_name || '—');
+    const damName  = escapeHtml(ped.dam_name  || '—');
+    const ssName   = escapeHtml(ped.sire_sire_name || '—');
+    const sdName   = escapeHtml(ped.sire_dam_name  || '—');
+    const dsName   = escapeHtml(ped.dam_sire_name  || '—');
+    const ddName   = escapeHtml(ped.dam_dam_name   || '—');
+
+    const hasGen3 = ped.sire_sire_name || ped.sire_dam_name || ped.dam_sire_name || ped.dam_dam_name;
+
+    if (!ped.sire_name && !ped.dam_name) return '';
+
+    return `
+    <div class="horse-section">
+      <div class="horse-section-title">Pedigree (3-gen)</div>
+      <div class="ped-tree">
+        <div class="ped-col ped-gen2">
+          <div class="ped-box ped-sire">
+            <span class="ped-role">Sire</span>
+            <span class="ped-name">${sireName}</span>
+          </div>
+          <div class="ped-box ped-dam">
+            <span class="ped-role">Dam</span>
+            <span class="ped-name">${damName}</span>
+          </div>
+        </div>
+        ${hasGen3 ? `
+        <div class="ped-col ped-gen3">
+          <div class="ped-box ped-ss">
+            <span class="ped-role">PatSire</span>
+            <span class="ped-name">${ssName}</span>
+          </div>
+          <div class="ped-box ped-sd">
+            <span class="ped-role">PatDam</span>
+            <span class="ped-name">${sdName}</span>
+          </div>
+          <div class="ped-box ped-ds">
+            <span class="ped-role">MatSire</span>
+            <span class="ped-name">${dsName}</span>
+          </div>
+          <div class="ped-box ped-dd">
+            <span class="ped-role">MatDam</span>
+            <span class="ped-name">${ddName}</span>
+          </div>
+        </div>` : ''}
+      </div>
+    </div>`;
+}
+
+function buildHorseSurfaceGridHtml(grid) {
+    if (!grid.length) return '';
+
+    // Build a table: rows = surfaces, cols = buckets (sprint/mile/middle/long)
+    const surfaces = [...new Set(grid.map(g => g.surface))].sort();
+    const buckets  = ['sprint', 'mile', 'middle', 'long'];
+    const byKey = {};
+    grid.forEach(g => { byKey[`${g.surface}_${g.bucket}`] = g; });
+
+    const headerCols = buckets.map(b => `<th>${b}</th>`).join('');
+    const bodyRows = surfaces.map(surf => {
+        const cols = buckets.map(b => {
+            const cell = byKey[`${surf}_${b}`];
+            if (!cell || !cell.starts) return '<td class="sg-empty">—</td>';
+            return `<td class="sg-cell" title="${cell.wins}W ${cell.places}P / ${cell.starts}S">
+                <span class="sg-record">${cell.wins}-${cell.places - cell.wins}-${cell.starts - cell.places}/${cell.starts}</span>
+                <span class="sg-pct">${cell.starts ? Math.round(100*cell.wins/cell.starts) : 0}%W</span>
+            </td>`;
+        }).join('');
+        const icon = surf === 'turf' ? '🌿' : '🟤';
+        return `<tr><td class="sg-surf">${icon} ${surf}</td>${cols}</tr>`;
+    }).join('');
+
+    return `
+    <div class="horse-section">
+      <div class="horse-section-title">Surface × Distance Record</div>
+      <table class="horse-surface-grid">
+        <thead><tr><th>Surface</th>${headerCols}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>`;
+}
+
+function buildHorseSirePerfHtml(sireName, perf) {
+    if (!perf.length) return '';
+
+    const buckets = ['sprint', 'mile', 'middle', 'long'];
+    const surfaces = [...new Set(perf.map(p => p.surface))].sort();
+    const byKey = {};
+    perf.forEach(p => { byKey[`${p.surface}_${p.bucket}`] = p; });
+
+    const headerCols = buckets.map(b => `<th>${b}</th>`).join('');
+    const bodyRows = surfaces.map(surf => {
+        const cols = buckets.map(b => {
+            const cell = byKey[`${surf}_${b}`];
+            if (!cell || !cell.starts) return '<td class="sg-empty">—</td>';
+            return `<td class="sg-cell" title="${cell.wins}W / ${cell.starts}S">
+                <span class="sg-record">${cell.win_pct}%</span>
+                <span class="sg-pct">${cell.place_pct}%P</span>
+            </td>`;
+        }).join('');
+        const icon = surf === 'turf' ? '🌿' : '🟤';
+        return `<tr><td class="sg-surf">${icon} ${surf}</td>${cols}</tr>`;
+    }).join('');
+
+    return `
+    <div class="horse-section">
+      <div class="horse-section-title">Sire Performance: ${escapeHtml(sireName || '—')}</div>
+      <table class="horse-surface-grid">
+        <thead><tr><th>Surface</th>${headerCols}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>`;
+}
+
+function buildHorseVoteHistoryHtml(votes) {
+    if (!votes.length) return `
+    <div class="horse-section">
+      <div class="horse-section-title">Vote History</div>
+      <p class="horse-empty-msg">Never voted on this horse.</p>
+    </div>`;
+
+    const markColor = { '◎': '#ff4b4b', '〇': '#ff9f43', '▲': '#1dd1a1', '△': '#0abde3' };
+    const pills = votes.map(v => {
+        const col = markColor[v.mark] || '#888';
+        return `<div class="horse-vote-pill">
+            <span class="mark-btn" style="background:${col};color:#fff;font-weight:bold">${escapeHtml(v.mark)}</span>
+            <span class="hvp-date">${escapeHtml(v.race_date || v.voted_at)}</span>
+            <span class="hvp-track">${escapeHtml(v.track_name || '')}</span>
+            ${v.race_name ? `<span class="hvp-race">${escapeHtml(v.race_name)}</span>` : ''}
+        </div>`;
+    }).join('');
+
+    return `
+    <div class="horse-section">
+      <div class="horse-section-title">Vote History (${votes.length})</div>
+      <div class="horse-vote-strip">${pills}</div>
+    </div>`;
+}
+
+// ── End Phase 31 ─────────────────────────────────────────────────────────────
 
 function buildDailyRecapHtml(targetDate) {
     const date = String(targetDate || '').trim();
