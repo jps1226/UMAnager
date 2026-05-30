@@ -62,6 +62,11 @@ public sealed class OddsApplyService
                     {
                         entry.PrevOdds = entry.Odds; // snapshot before overwrite for ↑↓ indicator
                         entry.Odds     = slot.WinOdds;
+                        // Bump UpdatedAt so the /api/races ETag (built partly from MAX(UpdatedAt))
+                        // changes when odds move. Without this, odds write to the DB + odds_history
+                        // (charts update) but the cards' ETag stays frozen → browser gets 304 →
+                        // stale card odds for the whole live window. (Bug found 2026-05-31 JST.)
+                        entry.UpdatedAt = capturedAt;
 
                         // Phase 37: append a time-series point only when the value actually
                         // changed (this branch). Auto-dedupes consecutive identical odds.
