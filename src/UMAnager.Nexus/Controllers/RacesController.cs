@@ -37,44 +37,59 @@ public sealed class RacesController : ControllerBase
     private const double DeltaPenaltyPerUnit     = 0.08;
     private const int    BurnedFavoriteMaxNinki  = 5;
 
-    private static double RunScore(int fin, int? favRank)
+    // Phase 28 (finish): field-size weighting of the overachiever bonus. Beating the
+    // market by Δ in an 18-horse field is a deeper result than in an 8-horse field, so
+    // the bonus scales by (field size / reference). This re-introduces the original spec's
+    // "discount wins in weak fields" intent, but only on the positive side and within the
+    // v3 Ninki-Δ framework. The burned-favorite penalty is field-agnostic — a fancied horse
+    // flopping is bad regardless of how many rivals it had.
+    private const double FieldSizeReference = 14.0; // ~JRA average field
+    private const double FieldFactorMin     = 0.6;  // small/weak field → muted credit
+    private const double FieldFactorMax     = 1.3;  // big/deep field → amplified credit
+
+    private static double FieldFactor(int fieldSize) =>
+        fieldSize > 0 ? Math.Clamp(fieldSize / FieldSizeReference, FieldFactorMin, FieldFactorMax) : 1.0;
+
+    private static double RunScore(int fin, int? favRank, int fieldSize)
     {
         if (fin <= 0) return 0.0;
         double raw = (fin <= 5) ? (1.0 / fin) : 0.0;
         if (favRank is null or < 1) return raw;
         double delta = favRank.Value - fin;
         if (delta > DeltaBonusThreshold)
-            raw += (delta - DeltaBonusThreshold) * DeltaBonusPerUnit;
+            raw += (delta - DeltaBonusThreshold) * DeltaBonusPerUnit * FieldFactor(fieldSize);
         else if (delta < 0 && favRank.Value <= BurnedFavoriteMaxNinki)
             raw += delta * DeltaPenaltyPerUnit;
         return raw;
     }
 
-    private static (string last3Str, double formScore) ComputeLast3(
-        List<(DateTime Date, int Finish, int? FavRank)>? hist, DateTime raceDate)
+    private static (string last3Str, double formScore, string fieldsStr) ComputeLast3(
+        List<(DateTime Date, int Finish, int? FavRank, int FieldSize)>? hist, DateTime raceDate)
     {
-        if (hist == null || hist.Count == 0) return ("—-—-—", 0.0);
-        var picks = new List<(int Finish, int? FavRank)>(3);
+        if (hist == null || hist.Count == 0) return ("—-—-—", 0.0, "—-—-—");
+        var picks = new List<(int Finish, int? FavRank, int FieldSize)>(3);
         foreach (var h in hist)
         {
             if (h.Date >= raceDate) continue;
-            picks.Add((h.Finish, h.FavRank));
+            picks.Add((h.Finish, h.FavRank, h.FieldSize));
             if (picks.Count == 3) break;
         }
-        if (picks.Count == 0) return ("—-—-—", 0.0);
+        if (picks.Count == 0) return ("—-—-—", 0.0, "—-—-—");
         var parts = new string[3];
+        var fields = new string[3];
         double score = 0.0;
         for (int i = 0; i < 3; i++)
         {
             if (i < picks.Count)
             {
-                var (fin, favRank) = picks[i];
-                parts[i] = fin.ToString() + CircledRank(favRank);
-                score += FormWeights[i] * RunScore(fin, favRank);
+                var (fin, favRank, fieldSize) = picks[i];
+                parts[i]  = fin.ToString() + CircledRank(favRank);
+                fields[i] = fieldSize > 0 ? fieldSize.ToString() : "—";
+                score += FormWeights[i] * RunScore(fin, favRank, fieldSize);
             }
-            else parts[i] = "—";
+            else { parts[i] = "—"; fields[i] = "—"; }
         }
-        return (string.Join("-", parts), score);
+        return (string.Join("-", parts), score, string.Join("-", fields));
     }
 
     private static string TrackName(string? code)
@@ -122,7 +137,7 @@ public sealed class RacesController : ControllerBase
             // Caching the computed ETag string avoids all 5 ETag-related DB round-trips
             // on every request. The 30 s TTL is well below the 5-minute live-odds floor.
             // Date-filtered calls skip the shared cache entirely (occasional, on-demand).
-            const string EtagCacheKey = "races-etag-v7";
+            const string EtagCacheKey = "races-etag-v8";
             string? fastEtag = null;
             if (!dateFiltered && _cache.TryGetValue<string>(EtagCacheKey, out fastEtag))
             {
@@ -190,7 +205,7 @@ public sealed class RacesController : ControllerBase
                         .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                         .FirstOrDefaultAsync();
                     var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                    etag = $"\"races-v7-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                    etag = $"\"races-v8-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                     _cache.Set(EtagCacheKey, etag,
                         new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
                 }
@@ -265,13 +280,29 @@ public sealed class RacesController : ControllerBase
                 from e in db.RaceEntries.AsNoTracking()
                 join r in db.Races.AsNoTracking() on e.RaceId equals r.RaceId
                 where entryHorseIds.Contains(e.HorseId!) && e.FinishPos != null && e.FinishPos > 0
-                select new { e.HorseId, r.RaceDate, Finish = e.FinishPos!.Value, e.FavRank }
+                select new { e.HorseId, e.RaceId, r.RaceDate, Finish = e.FinishPos!.Value, e.FavRank }
             ).ToListAsync();
+
+            // Phase 28 (finish): field size of each past race the runners contested, so the
+            // Ninki-Δ overachiever bonus can be weighted by how deep that field was. One grouped
+            // count over the races our horses actually ran in (cache-miss path only).
+            var histRaceIds = horseFinishHistory.Select(x => x.RaceId).Distinct().ToList();
+            var fieldSizeByRace = histRaceIds.Count > 0
+                ? await db.RaceEntries.AsNoTracking()
+                    .Where(e => histRaceIds.Contains(e.RaceId))
+                    .GroupBy(e => e.RaceId)
+                    .Select(g => new { RaceId = g.Key, N = g.Count() })
+                    .ToDictionaryAsync(x => x.RaceId, x => x.N)
+                : new Dictionary<string, int>();
+
             var finishesByHorse = horseFinishHistory
                 .GroupBy(x => x.HorseId!)
                 .ToDictionary(
                     g => g.Key,
-                    g => g.OrderByDescending(x => x.RaceDate).Select(x => (x.RaceDate, x.Finish, x.FavRank)).ToList()
+                    g => g.OrderByDescending(x => x.RaceDate)
+                          .Select(x => (x.RaceDate, x.Finish, x.FavRank,
+                                        FieldSize: fieldSizeByRace.TryGetValue(x.RaceId, out var n) ? n : 0))
+                          .ToList()
                 );
 
             // Race class is now stored on the races table (Oracle Q20: JyokenCD slot 5
@@ -356,7 +387,7 @@ public sealed class RacesController : ControllerBase
                     {
                         horseLookup.TryGetValue(e.HorseId ?? "", out var horse);
                         finishesByHorse.TryGetValue(e.HorseId ?? "", out var hist);
-                        var (last3Str, formScore) = ComputeLast3(hist, race.RaceDate);
+                        var (last3Str, formScore, last3Fields) = ComputeLast3(hist, race.RaceDate);
 
                         // Phase 9: sire-fit % for THIS race's (surface, bucket). null when
                         // the sire's sample in the bucket is below MinSireStarts.
@@ -396,6 +427,7 @@ public sealed class RacesController : ControllerBase
                             BK = e.Bracket ?? 0,
                             Record = recordByHorse.TryGetValue(e.HorseId ?? "", out var rec) ? rec : "",
                             Last3 = last3Str,
+                            Last3_Fields = last3Fields,   // Phase 28: field size per past run (popover context)
                             Form_Score = formScore,
                             Sire = ResolveAncestorName(horse?.SireId),
                             Sire_ID = horse?.SireId ?? "",

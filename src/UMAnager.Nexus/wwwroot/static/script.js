@@ -2330,7 +2330,7 @@ function explainPowerScore(row, riskVal) {
         const formScoreVal = parseFloat(row.Form_Score) || 0;
         const last3Contrib = formScoreVal * fw.formWeight;
         baseFormScore += last3Contrib;
-        formLines.push({ label: `Form (Ninki-Δ) ${formScoreVal.toFixed(3)} × ${fw.formWeight}`, value: last3Contrib });
+        formLines.push({ label: `Form (Ninki-Δ, field-wtd) ${formScoreVal.toFixed(3)} × ${fw.formWeight}`, value: last3Contrib });
     } else {
         formLines.push({ label: 'Last-3 skipped (debut race)', value: 0 });
     }
@@ -2522,6 +2522,7 @@ function renderScoreExplain(row, anchor) {
     function formDesc() {
         if (b.raceClass?.isDebut) return 'First career start — no race history';
         const runs = parseLast3Runs(row.Last3);
+        const fields = String(row.Last3_Fields || '').split('-'); // Phase 28: field size per past run
         const parts = [];
         if (formScore >= 0.65) parts.push('Excellent form');
         else if (formScore >= 0.35) parts.push('Solid recent form');
@@ -2532,7 +2533,11 @@ function renderScoreExplain(row, anchor) {
             const deltas = runs.map((r, i) => {
                 if (r.delta === null) return null;
                 const label = r.delta > 3 ? '↑sleeper' : (r.delta < 0 && r.favRank <= 5) ? '↓burned' : null;
-                return label ? `R${i+1}: Δ${r.delta > 0 ? '+' : ''}${r.delta} ${label}` : null;
+                if (!label) return null;
+                // Field size contextualizes the overachievement: beating Δ in a deeper field
+                // counts for more (and is weighted as such in the engine's Form_Score).
+                const fld = (fields[i] && fields[i] !== '—') ? ` (${fields[i]}f)` : '';
+                return `R${i+1}: Δ${r.delta > 0 ? '+' : ''}${r.delta}${fld} ${label}`;
             }).filter(Boolean);
             if (deltas.length > 0) parts.push(deltas.join(', '));
         }
