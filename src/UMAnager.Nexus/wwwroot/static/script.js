@@ -2268,18 +2268,47 @@ function calculatePowerScore(row, riskVal, raceClass) {
         basePedScore += (sireFitVal / 100) * fw.sireFitWeight * sireFitBoost;
     }
 
-    // 4. THE SLIDER MIXER
-    // At Risk 0: 100% Odds, 0% Form/Pedigree
-    // At Risk 100: 0% Odds, 100% Form/Pedigree
-    const oddsWeight = 1.0 - risk;
-    const formWeight = risk;
-    const pedWeight  = risk;
-
-    let totalScore = (baseOddsScore * oddsWeight) + (baseFormScore * formWeight) + (basePedScore * pedWeight);
-
-    // 5. Ultimate Tie-Breaker
-    // If scores tie (or if it's Risk 0 and odds aren't posted yet), the true Fav always wins by a fraction.
+    // 4. THE SLIDER MIXER (rebuilt 2026-05-31 — see SLIDER_TUNING.md)
+    // Old model: odds·(1−risk) + (form+ped)·risk. Problem: "chaos" only DIMMED favorites,
+    // it never REWARDED longshots, so on stat-heavy fields picks plateaued from ~50→100
+    // (a horse leading on form+ped just kept leading). Fix: add a VALUE term that actively
+    // rewards long odds, with weight growing like risk² so it's dormant in the safe half
+    // and dominant near chaos — giving the slider a smooth, even spread across 1–99.
+    // Endpoints are intentionally degenerate (mirror images):
+    //   risk 0   = PURE CHALK  → top-4 strictly by favouritism (odds only)
+    //   risk 100 = PURE YOLO   → top-4 strictly by longest odds among horses with any merit
+    //   1–99     = graded, defensible blend
     const favRank = parseFloat(row.Fav) || 999;
+
+    // --- Degenerate endpoint: 100 = "revealed in a dream" longshot sort ---
+    if (riskVal >= 100) {
+        // Rank by longest odds, but require a shred of merit so we don't crown a
+        // no-hoper with zero signal. meritGate nudges horses with any form/ped above
+        // pure price. Unposted odds sink to the bottom.
+        const meritGate = (baseFormScore + basePedScore) > 0 ? 1 : 0;
+        const yoloOdds = (!isNaN(odds) && odds > 0) ? odds : 0;
+        return yoloOdds * 1000 + meritGate - (favRank * 0.0001);
+    }
+
+    // --- Value term: rewards long odds (normalized log-odds), 0 for unposted ---
+    // log keeps it bounded so a 200:1 bomb doesn't swamp everything linearly.
+    let baseValueScore = 0;
+    if (!isNaN(odds) && odds > 1) {
+        baseValueScore = Math.log(odds) * 12; // ~×log: 5:1→19, 15:1→33, 50:1→47, 150:1→60
+    }
+
+    // Weights. Odds (favourite reward) fades linearly with risk. Form/ped (merit) is
+    // strongest in the middle and eases slightly at the very top so value can break through.
+    // Value grows like risk² — negligible below ~50, then ramps hard toward chaos.
+    const oddsWeight  = 1.0 - risk;
+    const meritWeight = risk * (1.0 - 0.35 * risk); // peaks ~mid, gently lower near 1.0
+    const valueWeight = risk * risk;
+
+    let totalScore = (baseOddsScore * oddsWeight)
+                   + ((baseFormScore + basePedScore) * meritWeight)
+                   + (baseValueScore * valueWeight);
+
+    // 5. Ultimate Tie-Breaker — true Fav wins ties by a fraction (esp. at Risk 0 pre-odds).
     totalScore -= (favRank * 0.0001);
 
     return totalScore;
@@ -2295,9 +2324,14 @@ function explainPowerScore(row, riskVal) {
     const isMaidenLike = cls.isDebut || cls.isMaiden;
     const sireFitBoost = cls.isDebut ? 5 : (cls.isMaiden ? 3 : 1);
     const risk = Math.max(0, Math.min(100, riskVal)) / 100;
+    // Mirror the rebuilt mixer in calculatePowerScore (SLIDER_TUNING.md): odds fades with
+    // risk, merit (form+ped) peaks mid and eases near the top, value (long-odds reward)
+    // grows like risk². Endpoints 0/100 are degenerate in calculatePowerScore; the popover
+    // shows the graded blend (it's only opened on real rows, not the endpoint sorts).
     const oddsMix = 1.0 - risk;
-    const formMix = risk;
-    const pedMix  = risk;
+    const formMix = risk * (1.0 - 0.35 * risk);
+    const pedMix  = risk * (1.0 - 0.35 * risk);
+    const valueMix = risk * risk;
 
     // ODDS branch
     let baseOddsScore = 0;
@@ -2382,25 +2416,37 @@ function explainPowerScore(row, riskVal) {
         pedLines.push({ label: 'Sire Fit — (no sample)', value: 0 });
     }
 
+    // VALUE branch (long-odds reward — the chaos dimension)
+    const valueLines = [];
+    let baseValueScore = 0;
+    if (!isNaN(odds) && odds > 1) {
+        baseValueScore = Math.log(odds) * 12;
+        valueLines.push({ label: `Value (long odds) log(${odds.toFixed(1)}) × 12`, value: baseValueScore });
+    } else {
+        valueLines.push({ label: 'Value — (odds ≤ 1 or unposted)', value: 0 });
+    }
+
     // MIX
     const oddsMixed = baseOddsScore * oddsMix;
     const formMixed = baseFormScore * formMix;
     const pedMixed  = basePedScore  * pedMix;
+    const valueMixed = baseValueScore * valueMix;
 
     // TIEBREAKER
     const favRank = parseFloat(row.Fav) || 999;
     const tiebreaker = -(favRank * 0.0001);
 
-    const total = oddsMixed + formMixed + pedMixed + tiebreaker;
+    const total = oddsMixed + formMixed + pedMixed + valueMixed + tiebreaker;
 
     return {
         total,
         risk: Math.round(risk * 100),
         raceClass: cls,
-        mix: { odds: oddsMix, form: formMix, ped: pedMix },
+        mix: { odds: oddsMix, form: formMix, ped: pedMix, value: valueMix },
         odds:    { lines: oddsLines, subtotal: baseOddsScore, mixed: oddsMixed },
         form:    { lines: formLines, subtotal: baseFormScore, mixed: formMixed },
         pedigree:{ lines: pedLines,  subtotal: basePedScore,  mixed: pedMixed  },
+        value:   { lines: valueLines, subtotal: baseValueScore, mixed: valueMixed },
         tiebreaker: { favRank, value: tiebreaker }
     };
 }
@@ -2512,6 +2558,8 @@ function renderScoreExplain(row, anchor) {
     const sfStarts = parseFloat(row.Sire_Starts);
 
     const oddsRank = fieldRank(e => { const v = parseFloat(e.Odds); return Number.isFinite(v) && v > 0 ? v : null; }, false);
+    // Value rank: longest odds = best (rank 1) — the chaos dimension, inverse of oddsRank.
+    const valueRank = fieldRank(e => { const v = parseFloat(e.Odds); return Number.isFinite(v) && v > 0 ? v : null; }, true);
     const formRank = fieldRank(e => parseFloat(e.Form_Score) || 0, true);
     const jRank    = fieldRank(e => { const v = parseFloat(e.Jockey_AE); return Number.isFinite(v) ? v : null; }, true);
     const tRank    = fieldRank(e => { const v = parseFloat(e.Trainer_AE); return Number.isFinite(v) ? v : null; }, true);
@@ -2610,8 +2658,20 @@ function renderScoreExplain(row, anchor) {
         </div>`;
     }
 
+    function valueDesc() {
+        const o = parseFloat(row.Odds);
+        if (!Number.isFinite(o) || o <= 1) return 'No posted odds — no value signal.';
+        const w = (risk * risk * 100).toFixed(0);
+        if (o >= 50) return `Big overlay at ${o.toFixed(1)} — chaos weight ${w}% rewards the bomb.`;
+        if (o >= 15) return `Longshot value at ${o.toFixed(1)} — chaos weight ${w}%.`;
+        if (o >= 7)  return `Mild value at ${o.toFixed(1)} — modest chaos lift (${w}%).`;
+        return `Short price (${o.toFixed(1)}) — little value to mine even in chaos.`;
+    }
+
     function sent(rank) { return sentiment(rank, total); }
     const oddsP  = sent(oddsRank) === 'sx-pos' ? true : sent(oddsRank) === 'sx-neg' ? false : null;
+    // Value is "positive" when this is a genuine longshot (top third by odds length).
+    const valueP = sent(valueRank) === 'sx-pos' ? true : sent(valueRank) === 'sx-neg' ? false : null;
     const formP  = sent(formRank) === 'sx-pos' ? true : sent(formRank) === 'sx-neg' ? false : null;
     const jP     = Number.isFinite(jAE) ? (jAE >= 1.1 ? true : jAE < 0.9 ? false : null) : null;
     const tP     = Number.isFinite(tAE) ? (tAE >= 1.1 ? true : tAE < 0.9 ? false : null) : null;
@@ -2634,6 +2694,7 @@ function renderScoreExplain(row, anchor) {
             ${factorRow('🏇', 'Jockey', aeDesc(jAE, row.Jockey || null), jRank, jP)}
             ${factorRow('🎯', 'Trainer', aeDesc(tAE, row.Trainer || null), tRank, tP)}
             ${factorRow('🧬', 'Sire Fit', sfDesc(), sfRank, sfP)}
+            ${risk > 50 ? factorRow('🎲', 'Value (chaos)', valueDesc(), valueRank, valueP) : ''}
         </div>
         <div class="sx-risk-note">${riskNote()}</div>
     `;
@@ -2997,11 +3058,16 @@ function getMarkAwareAutoBetRankingsForRace(r_id) {
     if (takenSymbols.size === symbols.length) return [];
 
     // Horses ranked by power score, excluding any that already have a mark.
-    // At Risk ≤ 70: longshots (odds > 30) are sorted to the back so ◎/〇 naturally
-    // go to realistic contenders first. They remain available for ▲/△ slots.
-    const guardActive = currentRisk <= 70;
+    // Continuous longshot tolerance (was a hard risk≤70 cliff; see SLIDER_TUNING.md).
+    // The acceptable-odds ceiling rises smoothly with the slider so there's no abrupt
+    // jump at 70: safe settings keep ◎/〇 on realistic prices, chaos lets bombs through.
+    //   risk 0 → ceiling ~12   risk 50 → ~30   risk 80 → ~75   risk 100 → ∞
+    // Horses above the ceiling are sorted to the back (still available for ▲/△), exactly
+    // as before — only the threshold is now graded instead of a switch.
+    const r = Math.max(0, Math.min(100, currentRisk)) / 100;
+    const oddsCeiling = currentRisk >= 100 ? Infinity : 12 + Math.pow(r, 2) * 240; // 12→252 then ∞ at 100
     const pool = entries
-        .map(row => ({ h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, currentRisk), isLongshot: guardActive && (parseFloat(row.Odds) || 9999) > 30 }))
+        .map(row => ({ h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, currentRisk), isLongshot: (parseFloat(row.Odds) || 9999) > oddsCeiling }))
         .filter(e => !markedHorses.has(e.h_id))
         .sort((a, b) => {
             if (a.isLongshot !== b.isLongshot) return a.isLongshot ? 1 : -1;
