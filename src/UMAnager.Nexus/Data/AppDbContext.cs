@@ -13,6 +13,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<BreedingHorse> BreedingHorses => Set<BreedingHorse>();
     public DbSet<OddsHistory> OddsHistory => Set<OddsHistory>();
+    public DbSet<VoteHistory> VoteHistory => Set<VoteHistory>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
         => modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);

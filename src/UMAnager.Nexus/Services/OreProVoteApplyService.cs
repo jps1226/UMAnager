@@ -40,12 +40,14 @@ public sealed class OreProVoteApplyService
     private readonly ILogger<OreProVoteApplyService> _logger;
     private readonly SettingsService _settings;
     private readonly AppStateService _appState;
+    private readonly VoteHistoryService _voteHistory;
 
-    public OreProVoteApplyService(ILogger<OreProVoteApplyService> logger, SettingsService settings, AppStateService appState)
+    public OreProVoteApplyService(ILogger<OreProVoteApplyService> logger, SettingsService settings, AppStateService appState, VoteHistoryService voteHistory)
     {
-        _logger   = logger;
-        _settings = settings;
-        _appState = appState;
+        _logger      = logger;
+        _settings    = settings;
+        _appState    = appState;
+        _voteHistory = voteHistory;
     }
 
     public async Task<JsonElement> ApplyAsync(JsonElement payload, CancellationToken ct)
@@ -302,6 +304,11 @@ public sealed class OreProVoteApplyService
 
             // Persist apply/submit state so the UI can show a badge after refresh.
             await RecordApplyStateAsync(raceId, resolved.Count, submitFlow, ct);
+
+            // Phase 30: record votes to vote_history so repeat runners show "Voted N×" badge.
+            var votesToRecord = ExtractHorseIdsFromMarks(race, resolved);
+            if (votesToRecord.Count > 0)
+                _ = Task.Run(() => _voteHistory.RecordVotesAsync(raceId, votesToRecord));
         }
 
         var okCount = results.Count(r => r.GetType().GetProperty("status")?.GetValue(r) as string == "ok");
@@ -482,6 +489,48 @@ public sealed class OreProVoteApplyService
     }
 
     private record RequestedMark(string symbol, int post, string markCode);
+
+    /// <summary>
+    /// Matches resolved marks back to horse_ids using the optional horse_id field the
+    /// frontend embeds in each mark object (added in Phase 30). Falls back to post-position
+    /// lookup in the incoming marks array if horse_id is absent (backwards compat).
+    /// Returns a list of (horseId, symbol) pairs for all successfully resolved marks.
+    /// </summary>
+    private static List<(string horseId, string mark)> ExtractHorseIdsFromMarks(JsonElement race, IEnumerable<dynamic> resolvedMarks)
+    {
+        // Build post → horse_id map from the marks array (frontend sends horse_id per mark).
+        var postToHorse = new Dictionary<int, string>();
+        if (race.TryGetProperty("marks", out var marksEl) && marksEl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var m in marksEl.EnumerateArray())
+            {
+                if (!m.TryGetProperty("horse_id", out var hEl) || hEl.ValueKind != JsonValueKind.String) continue;
+                var hId = hEl.GetString()?.Trim() ?? "";
+                if (string.IsNullOrEmpty(hId)) continue;
+                int post = 0;
+                if (m.TryGetProperty("post", out var p))
+                {
+                    post = p.ValueKind == JsonValueKind.Number ? p.GetInt32()
+                         : p.ValueKind == JsonValueKind.String && int.TryParse(p.GetString(), out var pi) ? pi : 0;
+                }
+                if (post > 0) postToHorse[post] = hId;
+            }
+        }
+
+        var result = new List<(string, string)>();
+        foreach (var r in resolvedMarks)
+        {
+            try
+            {
+                int post = (int)r.post;
+                string symbol = (string)r.symbol;
+                if (postToHorse.TryGetValue(post, out var horseId) && !string.IsNullOrEmpty(horseId))
+                    result.Add((horseId, symbol));
+            }
+            catch { /* dynamic access can throw on type mismatch — skip */ }
+        }
+        return result;
+    }
 
     // ─── Submit (best-effort) ──────────────────────────────────────────────────
 

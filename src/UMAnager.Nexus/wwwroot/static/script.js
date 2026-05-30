@@ -23,6 +23,10 @@ let winningVotesFocusEnabled = false;
 let searchableHorses = []; // Stores the database for the search bar
 let currentSearchSelection = -1; // Tracks keyboard navigation in the dropdown
 let appConfig = {}; // NEW: Stores app configuration
+let globalVoteHistory = {}; // Phase 30: { horse_id: total count } — sidebar mini-count
+let globalVoteHistoryRaces = {}; // Phase 30: { horse_id: [race_id,...] } — badge counts races OTHER than the current one
+let globalVoteHistoryRecent = []; // Phase 30: recent 50 vote rows for sidebar history
+let globalCalendarSkeleton = {}; // Phase 38: { 'YYYY-MM-DD': { count, timeline } } — all race days (lazy-load source)
 let isFirstLoad = true; // NEW: Track if this is the first page load to auto-collapse past races
 let renderedDates = new Set(); // Lazy render tracking — cleared on each full re-render
 let _devFetchMs = 0;    // headers + body download + JSON.parse
@@ -696,6 +700,56 @@ function toggleWeekendWatchlist() {
     if (chevron) chevron.textContent = collapsed ? '▲' : '▼';
 }
 
+// ── Phase 30: Vote History ──────────────────────────────────────────────────
+
+// "Voted N×" badge count for a horse on a given race card — counts only races OTHER
+// than the one being viewed, so a horse you've only voted for in THIS race shows nothing.
+// The badge means "you've backed this horse before (in another race)."
+function votedCountExcludingRace(h_id, r_id) {
+    const races = globalVoteHistoryRaces[h_id];
+    if (!races || !races.length) return 0;
+    return races.filter(rid => rid !== r_id).length;
+}
+
+async function loadVoteHistory() {
+    try {
+        const res = await fetch('/api/votes/history');
+        if (!res.ok) return;
+        const data = await res.json();
+        globalVoteHistory = data.Counts || data.counts || {};
+        globalVoteHistoryRaces = data.Races || data.races || {};
+        globalVoteHistoryRecent = data.Recent || data.recent || [];
+    } catch (e) {
+        // Non-fatal — badges just won't show
+    }
+}
+
+function renderVoteHistory() {
+    const container = document.getElementById('sidebar-vote-history');
+    if (!container) return;
+
+    if (!globalVoteHistoryRecent.length) {
+        container.innerHTML = '<div class="ww-empty">No votes recorded yet. Apply Votes to OrePro to start tracking.</div>';
+        return;
+    }
+
+    // Dedupe by horse+race, most recent first (already sorted by backend).
+    container.innerHTML = globalVoteHistoryRecent.map(v => {
+        const count = globalVoteHistory[v.HorseId || v.horseId] || 1;
+        const name  = v.Name || v.name || v.HorseId || v.horseId || '?';
+        const mark  = v.Mark || v.mark || '';
+        const raceId = v.RaceId || v.raceId || '';
+        // Parse race_id for a short label: YYYYMMDD PP NNNN RR → track code at bytes 8–9
+        const raceLabel = raceId.length === 16 ? `${raceId.slice(0,8)} R${parseInt(raceId.slice(14,16),10)}` : raceId;
+        const countTag = count > 1 ? `<span class="voted-badge voted-badge-mini">×${count}</span>` : '';
+        return `<div class="ww-item ww-voted-item">
+            <span class="ww-badge">${mark}</span>
+            <span class="ww-name">${escapeHtml(name)}${countTag}</span>
+            <span class="ww-meta">${escapeHtml(raceLabel)}</span>
+        </div>`;
+    }).join('');
+}
+
 // ==========================================
 // --- LIST MANAGEMENT & UI REFRESH SUITE ---
 // ==========================================
@@ -703,8 +757,9 @@ function toggleWeekendWatchlist() {
 async function refreshDataAndUI() {
     // 1. Save scroll position so the screen doesn't jump
     const scrollY = window.scrollY;
-    
+
     // 2. Refresh the Grid & Weekend Watchlist (must load races FIRST to populate searchableHorses)
+    await loadCalendarSkeleton(); // Phase 38: keep calendar day coverage fresh
     await loadRaces();
     
     // 3. Refresh the Sidebar Lists (needs searchableHorses populated)
@@ -713,6 +768,7 @@ async function refreshDataAndUI() {
     renderLists();
     // loadRaces() called these before listsData was populated, so re-render now.
     renderWeekendWatchlist();
+    renderVoteHistory();
     renderEnginePicks();
     updateQuickStats();
     updateRaceHighlighting();
@@ -727,6 +783,7 @@ async function refreshListsOnly() {
     listsData = await listRes.json();
     renderLists();
     renderWeekendWatchlist();
+    renderVoteHistory();
     renderEnginePicks();
     updateQuickStats();
 
@@ -954,6 +1011,10 @@ async function init() {
         raceNameDict = { stakes: {}, classNames: {} };
     }
 
+    // Phase 30: load vote history for "Voted N×" badges and sidebar section.
+    await loadVoteHistory();
+    // Phase 38: load the calendar skeleton so all race days are navigable (lazy detail).
+    await loadCalendarSkeleton();
     // Load OrePro per-race apply state so the Apply button can reflect history.
     await loadOreProApplyState();
     // Load OrePro behavior settings (e.g. navigate-to-receipt-after-submit).
@@ -1787,7 +1848,11 @@ function buildTableBody(r_id, entries) {
                 const cls = bkCls ? ` class="${bkCls}"` : '';
                 return `<td${cls}${fb}>${txt}</td>`;
             })(),
-            Horse: `<td style="font-weight: bold;">${horseStr} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></td>`,
+            Horse: (() => {
+                const voteCount = votedCountExcludingRace(h_id, r_id);
+                const votedBadge = voteCount > 0 ? ` <span class="voted-badge" title="You backed this horse in ${voteCount} earlier race${voteCount !== 1 ? 's' : ''} this season (not counting this one)">Voted ${voteCount}×</span>` : '';
+                return `<td style="font-weight: bold;">${horseStr}${votedBadge} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></td>`;
+            })(),
             Record: `<td>${row.Record || ""}</td>`,
             Last3: (() => {
                 const raw = String(row.Last3 || "—-—-—");
@@ -3105,12 +3170,39 @@ function getSortedActiveDates() {
     return Object.keys(globalRacesByDate).sort();
 }
 
+// Phase 38: every race day the calendar should expose — loaded days ∪ skeleton days.
+// Used for month availability + day highlighting; the tab/switch logic still keys off
+// the loaded-only getSortedActiveDates() and lazy-loads a skeleton day when opened.
+function getAllCalendarDates() {
+    return [...new Set([
+        ...Object.keys(globalRacesByDate),
+        ...Object.keys(globalCalendarSkeleton)
+    ])].sort();
+}
+
 function getMonthKey(dateStr) {
     return dateStr ? String(dateStr).slice(0, 7) : null;
 }
 
 function getAvailableCalendarMonths() {
-    return [...new Set(getSortedActiveDates().map(getMonthKey).filter(Boolean))].sort();
+    return [...new Set(getAllCalendarDates().map(getMonthKey).filter(Boolean))].sort();
+}
+
+// Phase 38: fetch the lightweight calendar skeleton (all race days, no entries) so the
+// calendar can highlight and navigate to any day; heavy detail loads on demand per day.
+async function loadCalendarSkeleton() {
+    try {
+        const res = await fetch('/api/races/calendar', { cache: 'no-cache' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const next = {};
+        (data.days || []).forEach(d => {
+            if (d && d.date) next[d.date] = { count: d.count || 0, timeline: d.timeline || 'past' };
+        });
+        globalCalendarSkeleton = next;
+    } catch (e) {
+        // Non-fatal — calendar degrades to loaded-only days
+    }
 }
 
 function formatCalendarMonth(monthKey) {
@@ -3248,9 +3340,10 @@ function renderRaceCalendar() {
 
     for (let day = 1; day <= daysInMonth; day += 1) {
         const dateStr = `${monthKey}-${String(day).padStart(2, '0')}`;
-        const races = globalRacesByDate[dateStr];
+        const loaded = globalRacesByDate[dateStr];
+        const skel = globalCalendarSkeleton[dateStr];
 
-        if (!races) {
+        if (!loaded && !skel) {
             cells.push(`
                 <div class="race-calendar-cell" title="${dateStr}">
                     <div class="race-calendar-daynum" style="padding: 8px; color: #4b5565;">${day}</div>
@@ -3259,13 +3352,16 @@ function renderRaceCalendar() {
             continue;
         }
 
-        const timeline = globalDateTimelineByDate[dateStr] || 'upcoming';
+        // Skeleton days (not yet loaded) get a subtle cue and lazy-load on click.
+        const count = loaded ? loaded.length : skel.count;
+        const timeline = loaded ? (globalDateTimelineByDate[dateStr] || 'upcoming') : (skel.timeline || 'past');
+        const skeletonClass = loaded ? '' : ' is-skeleton';
         const activeClass = dateStr === currentActiveDate ? ' is-selected' : '';
         cells.push(`
-            <button type="button" class="race-calendar-day timeline-${timeline}${activeClass}" onclick="selectCalendarDate('${dateStr}')" title="${dateStr} \u2022 ${races.length} race${races.length === 1 ? '' : 's'}">
+            <button type="button" class="race-calendar-day timeline-${timeline}${activeClass}${skeletonClass}" onclick="selectCalendarDate('${dateStr}')" title="${dateStr} \u2022 ${count} race${count === 1 ? '' : 's'}${loaded ? '' : ' \u2022 click to load'}">
                 <div class="race-calendar-daynum">${day}</div>
                 <div class="race-calendar-meta">
-                    <span class="race-calendar-count">${races.length}</span>
+                    <span class="race-calendar-count">${count}</span>
                 </div>
             </button>
         `);
@@ -3306,7 +3402,20 @@ function changeCalendarMonth(step) {
     }
 }
 
-function selectCalendarDate(date) {
+async function selectCalendarDate(date) {
+    // Phase 38: a day that's highlighted from the skeleton but not yet loaded — pull its
+    // heavy detail on demand, rebuild the tab shells, then activate it.
+    if (date && !globalRacesByDate[date] && globalCalendarSkeleton[date]) {
+        const loaded = await loadRaceDay(date);
+        if (loaded) {
+            renderDayTabsAndSchedules(date);
+            renderWeekendWatchlist();
+            renderVoteHistory();
+            renderEnginePicks();
+            updateQuickStats();
+            return;
+        }
+    }
     switchMainTab(date);
 }
 
@@ -3507,55 +3616,22 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
     }
 }
 
-// --- RENDER DASHBOARD ---
-async function loadRaces() {
-    const t0 = performance.now();
-    appendDebugLine('loadRaces started');
-    // cache: 'no-cache' re-validates every time (sends If-None-Match) but allows
-    // 304 short-circuits — browser skips response.json() when ETag matches, saving
-    // 2-4s of V8 JSON.parse on unchanged data. ETag v5 + 30s server cache makes
-    // the ETag trustworthy. 'no-store' was overkill and blocked all 304s.
-    const _fetchT0 = performance.now();
-    const racesRes = await fetch('/api/races', { cache: 'no-cache' });
-    const _headersMs = Math.round(performance.now() - _fetchT0);
-    appendDebugLine(`/api/races status=${racesRes.status}`);
-    const data = applyTimeDisplayToRacesPayload(await racesRes.json().catch(() => ({})));
-    _devFetchMs = Math.round(performance.now() - _fetchT0); // headers + body download + JSON.parse
-    if (!racesRes.ok) {
-        const detail = data?.detail || data?.message || `HTTP ${racesRes.status}`;
-        appendConsoleLine(`[Races] Failed to load races: ${detail}`);
-        appendDebugLine(`loadRaces failed in ${(performance.now() - t0).toFixed(0)}ms`);
-        throw new Error(detail);
-    }
-    appendDebugLine(
-        `Payload days: upcoming=${Object.keys(data.upcoming_races_by_date || data.races_by_date || {}).length}, ` +
-        `past=${Object.keys(data.past_races_by_date || {}).length}`
-    );
-    const timelineData = normalizeRacesPayload(data);
-    // Reset cached structures for a clean rebuild.
-    upcomingRaces = [];
-    searchableHorses = [];
-    globalRaceEntries = {};
-    globalRaceClass = {};
-    globalRaceInfo = {};
-    globalRacesByDate = {};
-    globalDateTimelineByDate = {};
-    globalAllRacesByDate = {
-        upcoming: timelineData.upcoming || {},
-        past: timelineData.past || {}
-    };
-
-    const _stateT0 = performance.now();
+// Populate the in-memory race globals from a {upcoming:{date:[races]}, past:{...}} map.
+// Shared by the full load (loadRaces) and the Phase 38 lazy per-day load (loadRaceDay).
+// Idempotent per race_id (entry preload is gated), so re-merging an already-loaded date
+// is a no-op for entries; callers only pass not-yet-loaded dates to avoid list dupes.
+function populateGlobalsFromTimeline(allByDate) {
     ["upcoming", "past"].forEach(timeline => {
-        Object.keys(globalAllRacesByDate[timeline]).forEach(date => {
+        const byDate = allByDate[timeline] || {};
+        Object.keys(byDate).forEach(date => {
             if (!globalRacesByDate[date]) {
-                globalRacesByDate[date] = globalAllRacesByDate[timeline][date];
+                globalRacesByDate[date] = byDate[date];
                 globalDateTimelineByDate[date] = timeline;
             } else {
                 // Same JST date appears in both timelines (race day: some past, some upcoming).
                 // Append without duplicating; keep 'upcoming' as the date-level label.
                 const existingIds = new Set(globalRacesByDate[date].map(r => r.info.race_id));
-                globalAllRacesByDate[timeline][date].forEach(r => {
+                byDate[date].forEach(r => {
                     if (!existingIds.has(r.info.race_id)) globalRacesByDate[date].push(r);
                 });
             }
@@ -3569,7 +3645,7 @@ async function loadRaces() {
                 });
             }
 
-            globalAllRacesByDate[timeline][date].forEach(race => {
+            byDate[date].forEach(race => {
                 const r_id = race.info.race_id;
 
                 // Preload entries for all timelines so cross-timeline features (export)
@@ -3612,7 +3688,77 @@ async function loadRaces() {
             });
         });
     });
+}
 
+// Phase 38: lazy-load one JST race day's full detail on demand (calendar navigation to a
+// day outside the initial 14-day window). Fetches /api/races?date=, merges into the globals
+// via the shared populate path, then rebuilds tab shells so the day can render. Returns true
+// if the day now has data loaded.
+async function loadRaceDay(date) {
+    if (!date) return false;
+    if (globalRacesByDate[date]) return true; // already loaded
+    try {
+        const res = await fetch(`/api/races?date=${encodeURIComponent(date)}`, { cache: 'no-store' });
+        if (!res.ok) return false;
+        const data = applyTimeDisplayToRacesPayload(await res.json().catch(() => ({})));
+        const timelineData = normalizeRacesPayload(data);
+        const dayByDate = { upcoming: timelineData.upcoming || {}, past: timelineData.past || {} };
+        // Fold into the master map so a later full re-render still sees this day.
+        ["upcoming", "past"].forEach(tl => {
+            Object.keys(dayByDate[tl]).forEach(d => {
+                globalAllRacesByDate[tl] = globalAllRacesByDate[tl] || {};
+                if (!globalAllRacesByDate[tl][d]) globalAllRacesByDate[tl][d] = dayByDate[tl][d];
+            });
+        });
+        populateGlobalsFromTimeline(dayByDate);
+        upcomingRaces.sort((a, b) => a.time - b.time);
+        return !!globalRacesByDate[date];
+    } catch (e) {
+        console.warn('loadRaceDay failed for', date, e);
+        return false;
+    }
+}
+
+// --- RENDER DASHBOARD ---
+async function loadRaces() {
+    const t0 = performance.now();
+    appendDebugLine('loadRaces started');
+    // cache: 'no-cache' re-validates every time (sends If-None-Match) but allows
+    // 304 short-circuits — browser skips response.json() when ETag matches, saving
+    // 2-4s of V8 JSON.parse on unchanged data. ETag v5 + 30s server cache makes
+    // the ETag trustworthy. 'no-store' was overkill and blocked all 304s.
+    const _fetchT0 = performance.now();
+    const racesRes = await fetch('/api/races', { cache: 'no-cache' });
+    const _headersMs = Math.round(performance.now() - _fetchT0);
+    appendDebugLine(`/api/races status=${racesRes.status}`);
+    const data = applyTimeDisplayToRacesPayload(await racesRes.json().catch(() => ({})));
+    _devFetchMs = Math.round(performance.now() - _fetchT0); // headers + body download + JSON.parse
+    if (!racesRes.ok) {
+        const detail = data?.detail || data?.message || `HTTP ${racesRes.status}`;
+        appendConsoleLine(`[Races] Failed to load races: ${detail}`);
+        appendDebugLine(`loadRaces failed in ${(performance.now() - t0).toFixed(0)}ms`);
+        throw new Error(detail);
+    }
+    appendDebugLine(
+        `Payload days: upcoming=${Object.keys(data.upcoming_races_by_date || data.races_by_date || {}).length}, ` +
+        `past=${Object.keys(data.past_races_by_date || {}).length}`
+    );
+    const timelineData = normalizeRacesPayload(data);
+    // Reset cached structures for a clean rebuild.
+    upcomingRaces = [];
+    searchableHorses = [];
+    globalRaceEntries = {};
+    globalRaceClass = {};
+    globalRaceInfo = {};
+    globalRacesByDate = {};
+    globalDateTimelineByDate = {};
+    globalAllRacesByDate = {
+        upcoming: timelineData.upcoming || {},
+        past: timelineData.past || {}
+    };
+
+    const _stateT0 = performance.now();
+    populateGlobalsFromTimeline(globalAllRacesByDate);
     upcomingRaces.sort((a, b) => a.time - b.time);
     _devStateMs = Math.round(performance.now() - _stateT0);
 
@@ -3634,6 +3780,7 @@ async function loadRaces() {
 
     const _sidebarT0 = performance.now();
     renderWeekendWatchlist();
+    renderVoteHistory();
     renderEnginePicks();
     updateQuickStats();
     _devSidebarMs = Math.round(performance.now() - _sidebarT0);
@@ -3702,6 +3849,7 @@ function switchMainTab(date) {
     updateWinningVotesFocusButton();
     renderRaceCalendar();
     renderWeekendWatchlist();
+    renderVoteHistory();
     renderEnginePicks();
     updateQuickStats();
     if (currentMainView === 'voting') {
@@ -5982,7 +6130,7 @@ function collectOreProMarksFromEntries(raceId, entries) {
         if (seenPairs.has(pairKey)) return;
         seenPairs.add(pairKey);
 
-        marks.push({ symbol, post, mark_code: String(markCode) });
+        marks.push({ symbol, post, mark_code: String(markCode), horse_id: h_id });
     });
 
     return marks.sort((a, b) => {
@@ -6292,6 +6440,7 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
         // Refresh persistent apply-state badges. After this and a re-render, the race
         // title will show "📝 Applied" or "📤 Submitted".
         await loadOreProApplyState();
+        loadVoteHistory().then(renderVoteHistory); // Phase 30: refresh "Voted N×" badges
         try { renderLiveViewPanel(); } catch (_) {}
 
         if ((requestCompleted || rowStatus === 'ok') && isAutoLockAfterSubmitEnabled()) {
@@ -6454,6 +6603,7 @@ async function applyAllDayVotesToOrePro() {
         if (okCount > 0 && isAutoLockAfterSubmitEnabled()) lockAllRacesForRaceDay(eligible[0]);
 
         await loadOreProApplyState();
+        if (okCount > 0) loadVoteHistory().then(renderVoteHistory); // Phase 30: refresh badges
         try { renderLiveViewPanel(); } catch (_) {}
 
         const mode = failCount === 0 ? 'ok' : (okCount > 0 ? 'warn' : 'error');

@@ -112,11 +112,19 @@ public sealed class RacesController : ControllerBase
     {
         try
         {
+            // Phase 38: optional ?date=YYYY-MM-DD returns one JST race-day's full detail,
+            // bypassing both the rolling window and the shared response cache. Powers the
+            // calendar's lazy day-load so any day with data can be opened on demand.
+            var dateParam = Request.Query["date"].ToString();
+            bool dateFiltered = DateOnly.TryParse(dateParam, out var reqDate);
+
             // ── FAST PATH: ETag string still fresh (< 30 s) — zero DB queries ─────────
             // Caching the computed ETag string avoids all 5 ETag-related DB round-trips
             // on every request. The 30 s TTL is well below the 5-minute live-odds floor.
+            // Date-filtered calls skip the shared cache entirely (occasional, on-demand).
             const string EtagCacheKey = "races-etag-v7";
-            if (_cache.TryGetValue<string>(EtagCacheKey, out var fastEtag))
+            string? fastEtag = null;
+            if (!dateFiltered && _cache.TryGetValue<string>(EtagCacheKey, out fastEtag))
             {
                 Response.Headers["Cache-Control"] = "no-cache";
                 Response.Headers["ETag"] = fastEtag!;
@@ -133,48 +141,75 @@ public sealed class RacesController : ControllerBase
             // builder — no double-query on cold cache paths.
             using var db = await _dbFactory.CreateDbContextAsync();
             var jstNow = DateTime.UtcNow.AddHours(9);
-            var windowStart = jstNow.AddDays(-7); // narrowed 14 → 7 days (v5)
-            var races = await db.Races
-                .Where(r => r.SortTime != null && r.SortTime >= windowStart)
-                .OrderBy(r => r.SortTime)
-                .AsNoTracking()
-                .ToListAsync();
-
-            string etag;
-            if (fastEtag == null)
+            var windowStart = jstNow.AddDays(-14); // 14-day rolling window (the calendar skeleton + lazy day-load cover anything older)
+            List<Data.Entities.Race> races;
+            if (dateFiltered)
             {
-                // ETag cache miss: compute from the already-loaded races + 4 more queries.
-                DateTime? maxLastUpdated = races.Count > 0 ? races.Max(r => r.LastUpdated) : null;
-                var raceIdsEtag = races.Select(r => r.RaceId).ToHashSet();
-                var maxBreedingUpdated = await db.BreedingHorses.AsNoTracking()
-                    .MaxAsync(b => (DateTime?)b.LastUpdated);
-                var maxEntryUpdated = raceIdsEtag.Count > 0
-                    ? await db.RaceEntries.AsNoTracking()
-                        .Where(e => raceIdsEtag.Contains(e.RaceId))
-                        .MaxAsync(e => (DateTime?)e.UpdatedAt)
-                    : null;
-                var maxJockeyRefresh = await db.Database
-                    .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM jockeys")
-                    .FirstOrDefaultAsync();
-                var maxTrainerRefresh = await db.Database
-                    .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
-                    .FirstOrDefaultAsync();
-                var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                etag = $"\"races-v7-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
-                _cache.Set(EtagCacheKey, etag,
-                    new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
+                // SortTime is a timestamptz holding JST wall-clock numbers; the windowed query
+                // compares it against a Kind=Utc value (UtcNow.AddHours(9)). Match that convention
+                // — a Kind=Utc midnight of the requested JST day — so Npgsql accepts the parameter
+                // and the bounds line up with cleanDate bucketing.
+                var dayStart = DateTime.SpecifyKind(reqDate.ToDateTime(TimeOnly.MinValue), DateTimeKind.Utc);
+                var dayEnd = dayStart.AddDays(1);
+                races = await db.Races
+                    .Where(r => r.SortTime != null && r.SortTime >= dayStart && r.SortTime < dayEnd)
+                    .OrderBy(r => r.SortTime)
+                    .AsNoTracking()
+                    .ToListAsync();
             }
             else
             {
-                etag = fastEtag!; // body was evicted but ETag is still valid
+                races = await db.Races
+                    .Where(r => r.SortTime != null && r.SortTime >= windowStart)
+                    .OrderBy(r => r.SortTime)
+                    .AsNoTracking()
+                    .ToListAsync();
             }
 
-            Response.Headers["Cache-Control"] = "no-cache";
-            Response.Headers["ETag"] = etag;
-            if (Request.Headers["If-None-Match"].ToString() == etag)
-                return StatusCode(StatusCodes.Status304NotModified);
-            if (_cache.TryGetValue<(string Tag, byte[] Bytes)>(RacesCacheKey, out var cachedBody) && cachedBody.Tag == etag)
-                return File(cachedBody.Bytes, "application/json; charset=utf-8");
+            // ETag / 304 / shared-cache only apply to the default windowed request. A
+            // date-filtered call is served fresh with no-store (see header below).
+            string etag = "";
+            if (!dateFiltered)
+            {
+                if (fastEtag == null)
+                {
+                    // ETag cache miss: compute from the already-loaded races + 4 more queries.
+                    DateTime? maxLastUpdated = races.Count > 0 ? races.Max(r => r.LastUpdated) : null;
+                    var raceIdsEtag = races.Select(r => r.RaceId).ToHashSet();
+                    var maxBreedingUpdated = await db.BreedingHorses.AsNoTracking()
+                        .MaxAsync(b => (DateTime?)b.LastUpdated);
+                    var maxEntryUpdated = raceIdsEtag.Count > 0
+                        ? await db.RaceEntries.AsNoTracking()
+                            .Where(e => raceIdsEtag.Contains(e.RaceId))
+                            .MaxAsync(e => (DateTime?)e.UpdatedAt)
+                        : null;
+                    var maxJockeyRefresh = await db.Database
+                        .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM jockeys")
+                        .FirstOrDefaultAsync();
+                    var maxTrainerRefresh = await db.Database
+                        .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
+                        .FirstOrDefaultAsync();
+                    var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
+                    etag = $"\"races-v7-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                    _cache.Set(EtagCacheKey, etag,
+                        new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
+                }
+                else
+                {
+                    etag = fastEtag!; // body was evicted but ETag is still valid
+                }
+
+                Response.Headers["Cache-Control"] = "no-cache";
+                Response.Headers["ETag"] = etag;
+                if (Request.Headers["If-None-Match"].ToString() == etag)
+                    return StatusCode(StatusCodes.Status304NotModified);
+                if (_cache.TryGetValue<(string Tag, byte[] Bytes)>(RacesCacheKey, out var cachedBody) && cachedBody.Tag == etag)
+                    return File(cachedBody.Bytes, "application/json; charset=utf-8");
+            }
+            else
+            {
+                Response.Headers["Cache-Control"] = "no-store";
+            }
 
             // ── Full build ────────────────────────────────────────────────────────────
             var raceIds = races.Select(r => r.RaceId).ToHashSet();
@@ -426,14 +461,60 @@ public sealed class RacesController : ControllerBase
             var responseBytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
                 responsePayload,
                 new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = null });
-            _cache.Set(RacesCacheKey, (etag, responseBytes),
-                new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(4) });
+            // Date-filtered responses are not cached in the shared slot (it's keyed to the
+            // windowed body); only the default request populates it.
+            if (!dateFiltered)
+                _cache.Set(RacesCacheKey, (etag, responseBytes),
+                    new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(4) });
             return File(responseBytes, "application/json; charset=utf-8");
         }
         catch (Exception ex)
         {
             return StatusCode(500, new { error = ex.Message });
         }
+    }
+
+    // Phase 38: lightweight calendar skeleton. Returns every race day in the DB as
+    // { date, count, timeline } with NO entry data, so the dashboard calendar can highlight
+    // and navigate to any day with races. The heavy per-day detail loads on demand via
+    // GET /api/races?date=YYYY-MM-DD. Date strings match GetRaces' cleanDate bucketing
+    // (RaceDate.ToString) so the two line up exactly. Cached 60 s to absorb rapid reloads.
+    [HttpGet("calendar")]
+    public async Task<IActionResult> GetCalendar()
+    {
+        const string CalCacheKey = "races-calendar-v1";
+        if (_cache.TryGetValue<byte[]>(CalCacheKey, out var cached) && cached is not null)
+        {
+            Response.Headers["Cache-Control"] = "no-cache";
+            return File(cached, "application/json; charset=utf-8");
+        }
+
+        using var db = await _dbFactory.CreateDbContextAsync();
+        var now = DateTime.UtcNow.AddHours(9);
+        var rows = await db.Races.AsNoTracking()
+            .Where(r => r.SortTime != null)
+            .Select(r => new { r.RaceDate, r.SortTime })
+            .ToListAsync();
+
+        var days = rows
+            .GroupBy(r => r.RaceDate.ToString("yyyy-MM-dd"))
+            .Select(g => new
+            {
+                date = g.Key,
+                count = g.Count(),
+                // A day is "upcoming" if any of its races are still ahead of post time.
+                timeline = g.Any(x => x.SortTime > now) ? "upcoming" : "past"
+            })
+            .OrderBy(d => d.date)
+            .ToList();
+
+        var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
+            new { days },
+            new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = null });
+        _cache.Set(CalCacheKey, bytes,
+            new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(60) });
+        Response.Headers["Cache-Control"] = "no-cache";
+        return File(bytes, "application/json; charset=utf-8");
     }
 
     // /api/config GET/POST is owned by ConfigController — don't duplicate here.

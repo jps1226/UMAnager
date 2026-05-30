@@ -52,6 +52,7 @@ builder.Services.AddSingleton<IDiscordNotifier, DiscordNotifier>();
 builder.Services.AddScoped<BetWinNotifier>();
 builder.Services.AddScoped<ClaudeRecapWriter>();
 builder.Services.AddScoped<DayRecapNotifier>();
+builder.Services.AddSingleton<VoteHistoryService>();
 builder.Services.AddSingleton<OreProVoteApplyService>();
 builder.Services.AddSingleton<LiveOrchestrator>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveOrchestrator>());
@@ -152,6 +153,31 @@ using (var scope = app.Services.CreateScope())
     catch (Exception ex)
     {
         app.Logger.LogError(ex, "[Startup] Phase 37 odds_history table ensure failed (non-fatal).");
+    }
+}
+
+// Phase 30: vote_history table (idempotent, raw SQL — same pattern as odds_history).
+using (var scope = app.Services.CreateScope())
+{
+    try
+    {
+        var factory = scope.ServiceProvider.GetRequiredService<Microsoft.EntityFrameworkCore.IDbContextFactory<UMAnager.Nexus.Data.AppDbContext>>();
+        using var db = await factory.CreateDbContextAsync();
+        await db.Database.ExecuteSqlRawAsync(@"
+            CREATE TABLE IF NOT EXISTS vote_history (
+                ""Id""       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                ""HorseId""  VARCHAR(10)  NOT NULL,
+                ""RaceId""   VARCHAR(16)  NOT NULL,
+                ""Mark""     VARCHAR(4)   NOT NULL,
+                ""VotedAt""  TIMESTAMPTZ  NOT NULL,
+                CONSTRAINT uq_vote_history_race_horse UNIQUE (""RaceId"", ""HorseId"")
+            );
+            CREATE INDEX IF NOT EXISTS ix_vote_history_horse ON vote_history (""HorseId"");
+        ");
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "[Startup] Phase 30 vote_history table ensure failed (non-fatal).");
     }
 }
 
