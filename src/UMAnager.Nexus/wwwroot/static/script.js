@@ -7132,8 +7132,14 @@ function switchMainView(view) {
 
 async function viewHorse(horseId) {
     if (!horseId) return;
+    // If opened from the per-race modal, dismiss it so the new profile is visible behind.
+    closeHorseRaceModal();
     currentHorseId = horseId;
     switchMainView('horse');
+
+    // Reset scroll so a profile opened from a deep-scrolled one starts at the top.
+    const shell = document.querySelector('.horse-view-shell');
+    if (shell) shell.scrollTop = 0;
 
     const content = document.getElementById('horse-profile-content');
     if (content) content.innerHTML = '<div class="horse-loading">Loading profile…</div>';
@@ -7236,6 +7242,9 @@ function renderHorseProfile(data) {
       <!-- Sire performance -->
       ${buildHorseSirePerfHtml(data.sire_name, data.sire_perf || [])}
 
+      <!-- Progeny -->
+      ${buildHorseProgenyHtml(data.progeny || [], data.progeny_total || 0)}
+
       <!-- Vote history -->
       ${buildHorseVoteHistoryHtml(data.vote_history || [])}
     </div>`;
@@ -7304,51 +7313,64 @@ function toggleHistoryExpand(btn) {
 
 function buildHorsePedigreeHtml(ped) {
     if (!ped) return '';
-    const sireName = escapeHtml(ped.sire_name || '—');
-    const damName  = escapeHtml(ped.dam_name  || '—');
-    const ssName   = escapeHtml(ped.sire_sire_name || '—');
-    const sdName   = escapeHtml(ped.sire_dam_name  || '—');
-    const dsName   = escapeHtml(ped.dam_sire_name  || '—');
-    const ddName   = escapeHtml(ped.dam_dam_name   || '—');
+    if (!ped.sire_name && !ped.dam_name) return '';
+
+    // A box links to that ancestor's profile when we resolved a JRA-runner KettoNum
+    // (runner_id). Foreign-only ancestors have no runner row → plain, non-clickable.
+    const pedBox = (cls, role, name, runnerId) => {
+        const display = escapeHtml(name || '—');
+        if (runnerId) {
+            return `<div class="ped-box ${cls} ped-clickable" onclick="viewHorse('${escapeHtml(runnerId)}')" title="View ${display}'s profile">
+                <span class="ped-role">${role}</span>
+                <span class="ped-name ped-link">${display}</span>
+            </div>`;
+        }
+        return `<div class="ped-box ${cls}">
+            <span class="ped-role">${role}</span>
+            <span class="ped-name">${display}</span>
+        </div>`;
+    };
 
     const hasGen3 = ped.sire_sire_name || ped.sire_dam_name || ped.dam_sire_name || ped.dam_dam_name;
-
-    if (!ped.sire_name && !ped.dam_name) return '';
 
     return `
     <div class="horse-section">
       <div class="horse-section-title">Pedigree (3-gen)</div>
       <div class="ped-tree">
         <div class="ped-col ped-gen2">
-          <div class="ped-box ped-sire">
-            <span class="ped-role">Sire</span>
-            <span class="ped-name">${sireName}</span>
-          </div>
-          <div class="ped-box ped-dam">
-            <span class="ped-role">Dam</span>
-            <span class="ped-name">${damName}</span>
-          </div>
+          ${pedBox('ped-sire', 'Sire', ped.sire_name, ped.sire_runner_id)}
+          ${pedBox('ped-dam', 'Dam', ped.dam_name, ped.dam_runner_id)}
         </div>
         ${hasGen3 ? `
         <div class="ped-col ped-gen3">
-          <div class="ped-box ped-ss">
-            <span class="ped-role">PatSire</span>
-            <span class="ped-name">${ssName}</span>
-          </div>
-          <div class="ped-box ped-sd">
-            <span class="ped-role">PatDam</span>
-            <span class="ped-name">${sdName}</span>
-          </div>
-          <div class="ped-box ped-ds">
-            <span class="ped-role">MatSire</span>
-            <span class="ped-name">${dsName}</span>
-          </div>
-          <div class="ped-box ped-dd">
-            <span class="ped-role">MatDam</span>
-            <span class="ped-name">${ddName}</span>
-          </div>
+          ${pedBox('ped-ss', 'PatSire', ped.sire_sire_name, ped.sire_sire_runner_id)}
+          ${pedBox('ped-sd', 'PatDam', ped.sire_dam_name, ped.sire_dam_runner_id)}
+          ${pedBox('ped-ds', 'MatSire', ped.dam_sire_name, ped.dam_sire_runner_id)}
+          ${pedBox('ped-dd', 'MatDam', ped.dam_dam_name, ped.dam_dam_runner_id)}
         </div>` : ''}
       </div>
+    </div>`;
+}
+
+function buildHorseProgenyHtml(progeny, total) {
+    if (!progeny || !progeny.length) return '';
+    const chips = progeny.map(p => {
+        const yr = p.birth_year ? `<span class="hpr-year">${p.birth_year}</span>` : '';
+        const roleIcon = p.role === 'sire' ? '♂' : '♀';
+        return `<div class="horse-progeny-chip ${p.role === 'sire' ? 'hpr-sire' : 'hpr-dam'}" onclick="viewHorse('${escapeHtml(p.horse_id)}')" title="As ${p.role === 'sire' ? 'sire' : 'dam'} — view profile">
+            <span class="hpr-role">${roleIcon}</span>
+            <span class="hpr-name">${escapeHtml(p.name || p.horse_id)}</span>
+            ${yr}
+        </div>`;
+    }).join('');
+    const moreNote = (total && total > progeny.length)
+        ? `<div class="horse-progeny-more">Showing ${progeny.length} of ${total} (most recent first)</div>`
+        : '';
+    return `
+    <div class="horse-section">
+      <div class="horse-section-title">Progeny${total ? ` (${total})` : ''}</div>
+      <div class="horse-progeny-grid">${chips}</div>
+      ${moreNote}
     </div>`;
 }
 

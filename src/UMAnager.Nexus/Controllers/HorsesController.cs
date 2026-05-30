@@ -259,6 +259,73 @@ public sealed class HorsesController : ControllerBase
             return "";
         }
 
+        // The pedigree boxes link to ancestors' own profiles, but a slot's ID is a
+        // HansyokuNum (breeding space) — the /profile endpoint keys on KettoNum. Bridge
+        // each ancestor to its JRA-runner KettoNum by NameJa so the box becomes clickable
+        // (only when a runner row exists; foreign-only ancestors stay non-clickable).
+        string AncNameJa(string? id)
+        {
+            if (string.IsNullOrEmpty(id)) return "";
+            if (horseAncs.TryGetValue(id, out var h)) return h.NameJa;
+            if (breedingAncs.TryGetValue(id, out var b)) return b.NameJa;
+            return "";
+        }
+        var ancNames = new[] { horse.SireId, horse.DamId, ssId, sdId, dsId, ddId }
+            .Select(AncNameJa).Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
+        var runnerRows = ancNames.Count > 0
+            ? await db.Horses.AsNoTracking()
+                .Where(h => ancNames.Contains(h.NameJa))
+                .Select(h => new { h.HorseId, h.NameJa, h.SireId, h.BirthYear })
+                .ToListAsync(ct)
+            : new();
+        // Prefer a runner that carries pedigree, then the most recent — same heuristic
+        // as the sire/dam bridge above.
+        var runnerByName = runnerRows
+            .GroupBy(r => r.NameJa)
+            .ToDictionary(g => g.Key,
+                g => g.OrderByDescending(x => !string.IsNullOrEmpty(x.SireId))
+                      .ThenByDescending(x => x.BirthYear)
+                      .First().HorseId);
+        string RunnerId(string? ancId)
+        {
+            var nm = AncNameJa(ancId);
+            return !string.IsNullOrEmpty(nm) && runnerByName.TryGetValue(nm, out var rid) ? rid : "";
+        }
+        // sire/dam have authoritative bridges (dam cross-verified by BMS); prefer those.
+        var sireRunnerId = sireRunner?.HorseId ?? RunnerId(horse.SireId);
+        var damRunnerId  = damRunner?.HorseId  ?? RunnerId(horse.DamId);
+
+        // ── Progeny ───────────────────────────────────────────────────────────
+        // Offspring reference this horse by its HansyokuNum (breeding ID), which the
+        // horses table doesn't store for the horse itself. Bridge by NameJa to find
+        // this horse's HansyokuNum(s), then pull horses whose Sire/Dam points to them.
+        var selfHansyoku = await db.BreedingHorses.AsNoTracking()
+            .Where(b => b.NameJa == horse.NameJa)
+            .Select(b => b.HansyokuNum)
+            .ToListAsync(ct);
+        List<object> progenyList = [];
+        int progenyTotal = 0;
+        if (selfHansyoku.Count > 0)
+        {
+            progenyTotal = await db.Horses.AsNoTracking().CountAsync(
+                h => (h.SireId != null && selfHansyoku.Contains(h.SireId))
+                  || (h.DamId  != null && selfHansyoku.Contains(h.DamId)), ct);
+            var kids = await db.Horses.AsNoTracking()
+                .Where(h => (h.SireId != null && selfHansyoku.Contains(h.SireId))
+                         || (h.DamId  != null && selfHansyoku.Contains(h.DamId)))
+                .OrderByDescending(h => h.BirthYear)
+                .Take(60)
+                .Select(h => new { h.HorseId, h.NameEn, h.NameJa, h.BirthYear, h.SireId })
+                .ToListAsync(ct);
+            progenyList = kids.Select(k => (object)new
+            {
+                horse_id   = k.HorseId,
+                name       = k.NameEn ?? k.NameJa,
+                birth_year = k.BirthYear,
+                role       = (k.SireId != null && selfHansyoku.Contains(k.SireId)) ? "sire" : "dam"
+            }).ToList();
+        }
+
         // ── Sire performance (all surface/bucket combos for this horse's sire) ─
         List<object> sirePerfList;
         if (!string.IsNullOrEmpty(horse.SireId))
@@ -361,21 +428,29 @@ public sealed class HorsesController : ControllerBase
             {
                 sire_id        = horse.SireId ?? "",
                 sire_name      = ResolveAnc(horse.SireId),
+                sire_runner_id = sireRunnerId,
                 sire_sire_id   = ssId ?? "",
                 sire_sire_name = ResolveAnc(ssId),
+                sire_sire_runner_id = RunnerId(ssId),
                 sire_dam_id    = sdId ?? "",
                 sire_dam_name  = ResolveAnc(sdId),
+                sire_dam_runner_id = RunnerId(sdId),
                 dam_id         = horse.DamId ?? "",
                 dam_name       = ResolveAnc(horse.DamId),
+                dam_runner_id  = damRunnerId,
                 dam_sire_id    = dsId ?? "",
                 dam_sire_name  = ResolveAnc(dsId),
+                dam_sire_runner_id = RunnerId(dsId),
                 dam_dam_id     = ddId ?? "",
-                dam_dam_name   = ResolveAnc(ddId)
+                dam_dam_name   = ResolveAnc(ddId),
+                dam_dam_runner_id = RunnerId(ddId)
             },
-            surface_grid = surfaceGrid,
-            sire_perf    = sirePerfList,
-            vote_history = voteHistory,
-            history      = historyList
+            surface_grid  = surfaceGrid,
+            sire_perf     = sirePerfList,
+            vote_history  = voteHistory,
+            progeny       = progenyList,
+            progeny_total = progenyTotal,
+            history       = historyList
         };
 
         return Ok(response);

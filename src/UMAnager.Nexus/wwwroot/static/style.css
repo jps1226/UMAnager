@@ -2673,6 +2673,20 @@ td.bk-color-8 { background: #dc809a !important; color: #000 !important; font-wei
 .ped-name { font-size: 13px; color: #e0e0e0; margin-top: 2px; }
 .ped-sire .ped-name, .ped-ss .ped-name, .ped-sd .ped-name { color: #a8d8ea; }
 .ped-dam .ped-name, .ped-ds .ped-name, .ped-dd .ped-name { color: #f7c59f; }
+.ped-box.ped-clickable { cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.ped-box.ped-clickable:hover { background: #2c2e4a; border-color: #1dd1a1; }
+.ped-name.ped-link { text-decoration: underline; text-decoration-color: rgba(29,209,161,0.4); text-underline-offset: 2px; }
+
+/* Progeny chips */
+.horse-progeny-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.horse-progeny-chip { display: flex; align-items: center; gap: 6px; background: #22233a; border: 1px solid #34354f; border-radius: 6px; padding: 5px 10px; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.horse-progeny-chip:hover { background: #2c2e4a; border-color: #1dd1a1; }
+.hpr-role { font-size: 13px; opacity: 0.8; }
+.horse-progeny-chip.hpr-sire .hpr-role { color: #a8d8ea; }
+.horse-progeny-chip.hpr-dam .hpr-role { color: #f7c59f; }
+.hpr-name { font-size: 13px; color: #e0e0e0; }
+.hpr-year { font-size: 11px; color: #888; }
+.horse-progeny-more { margin-top: 8px; font-size: 11px; color: #888; }
 
 /* Surface × distance / Sire perf grid */
 .horse-surface-grid { width: 100%; border-collapse: collapse; font-size: 12px; }
