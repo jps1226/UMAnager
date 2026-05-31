@@ -232,6 +232,18 @@ function riskZone(riskValue) {
     return 'BLEND';
 }
 
+// Canonical mark sequence for a target count (Phase 29 v2). ◎〇▲ are singletons;
+// every mark beyond the 3rd is a △ (mirrors OrePro marks 4..18 = △). So:
+//   1→◎  2→◎〇  3→◎〇▲  4→◎〇▲△  5→◎〇▲△△  6→◎〇▲△△△
+// The mark COUNT is what auto-selects the OrePro template downstream.
+function markSequenceForCount(count) {
+    const n = Math.max(0, Math.min(6, Number(count) || 0));
+    const base = ['◎', '〇', '▲'];
+    const seq = [];
+    for (let i = 0; i < n; i++) seq.push(i < 3 ? base[i] : '△');
+    return seq;
+}
+
 // Parse Last3 string ("2⑧-1③-—") into structured runs, most-recent first.
 function parseLast3Runs(last3Str) {
     if (!last3Str || last3Str === '—-—-—') return [];
@@ -2593,14 +2605,22 @@ function renderScoreExplain(row, anchor) {
     const allEntries = globalRaceEntries[raceId] || [];
     const total = allEntries.length || 1;
 
-    // Derive the mark the auto-pick engine would assign — ranked by score, not globalMarks.
-    // The user may have manually overridden marks; the popover always explains the engine's view.
-    const autoPickMarks = ['◎', '〇', '▲', '△'];
-    const scored = (allEntries.length ? allEntries : [row])
-        .map(e => ({ id: String(e.Horse_ID).split('.')[0], score: calculatePowerScore(e, risk) }))
-        .sort((a, c) => c.score - a.score);
-    const autoRank = scored.findIndex(s => s.id === String(horseId)) + 1;
-    const mark = autoRank >= 1 && autoRank <= 4 ? autoPickMarks[autoRank - 1] : null;
+    // Derive the mark the Phase 29 v2 engine would assign — from its full race plan
+    // (mark-blind), not globalMarks. The user may have overridden marks; the popover
+    // always explains the engine's view, including its chosen COUNT and field SHAPE.
+    const enginePlan = getEngineMarkPlanForRace(raceId);
+    const mark = (enginePlan.assignments.find(a => a.h_id === String(horseId)) || {}).symbol || null;
+    const ENGINE_SHAPE_LABELS = {
+        'lone-favorite': 'lone favorite', 'two-clear': 'two clear', 'tight-top3': 'tight top-3',
+        'tight-pack': 'tight pack', 'standout+pack': 'standout + open pack', 'wide-open': 'wide open',
+        'small-field': 'field too small', 'no-safe-anchor': 'no safe anchor',
+        'chalk-no-overlay': 'chalk, no value', 'underpriced-fav': 'underpriced favorite',
+        'shape-risk-mismatch': 'shape/risk mismatch', 'empty': 'no field',
+    };
+    const engineShapeText = ENGINE_SHAPE_LABELS[enginePlan.shape] || enginePlan.shape || '';
+    const enginePlanNote = enginePlan.count > 0
+        ? `⚙ Engine: ${enginePlan.count} mark${enginePlan.count === 1 ? '' : 's'} · ${engineShapeText}`
+        : `⚙ Engine: abstain · ${engineShapeText}`;
 
     // Rank this horse among the field for a given metric (1 = best).
     function fieldRank(extractor, higherIsBetter) {
@@ -2766,6 +2786,7 @@ function renderScoreExplain(row, anchor) {
             <button class="sx-close" onclick="closeScoreExplain()" title="Close">✕</button>
         </div>
         <div class="sx-verdict">${verdictSentence()}</div>
+        <div class="sx-engine-plan">${enginePlanNote}</div>
         <div class="sx-factors">
             ${factorRow('💴', 'Odds', oddsDesc(), oddsRank, oddsP)}
             ${factorRow('📈', 'Recent Form', formDesc(), formRank, formP)}
@@ -2826,45 +2847,34 @@ function applyAutoPickSelectionsToRace(r_id, riskOverride = null) {
         return { changed: false, currentRisk: getCurrentAutoPickRisk(riskOverride), reason: 'empty' };
     }
 
-    const allSymbols = ["◎", "〇", "▲", "△"];
-    const usedSymbols = [];
-    const markedHorses = [];
-
-    for (const [k, v] of Object.entries(globalMarks)) {
-        if (k.startsWith(`${r_id}_`) && v) {
-            if (allSymbols.includes(v)) usedSymbols.push(v);
-            markedHorses.push(k.split('_')[1]);
-        }
-    }
-
-    const availableSymbols = allSymbols.filter(symbol => !usedSymbols.includes(symbol));
     const currentRisk = getCurrentAutoPickRisk(riskOverride);
-    if (availableSymbols.length === 0) {
-        return { changed: false, currentRisk, reason: 'full' };
-    }
 
-    const scoredHorses = entries
-        .filter(row => !markedHorses.includes(String(row.Horse_ID).split('.')[0]))
-        .map(row => ({
-            h_id: String(row.Horse_ID).split('.')[0],
-            power: calculatePowerScore(row, currentRisk)
-        }))
-        .sort((a, b) => b.power - a.power);
+    // Phase 29 v2: the engine OWNS this race's main marks (◎〇▲△). It picks the COUNT
+    // (1-6, or 0 = abstain → leave the race clean) from field shape + risk. We write the
+    // plan authoritatively over the existing main marks, preserving X eliminations.
+    const plan = getEngineMarkPlanForRace(r_id, { riskOverride });
+    const target = {};                       // h_id → symbol (the engine's plan)
+    plan.assignments.forEach(a => { target[a.h_id] = a.symbol; });
 
     let changed = false;
-    for (let i = 0; i < Math.min(availableSymbols.length, scoredHorses.length); i++) {
-        const key = `${r_id}_${scoredHorses[i].h_id}`;
-        if (globalMarks[key] !== availableSymbols[i]) {
-            globalMarks[key] = availableSymbols[i];
-            changed = true;
-        }
+    // Remove any main mark not matching the plan (clears the race entirely on abstain).
+    for (const [k, v] of Object.entries(globalMarks)) {
+        if (!k.startsWith(`${r_id}_`) || !v || v === 'X') continue;
+        const h = k.slice(r_id.length + 1);
+        if (target[h] !== v) { globalMarks[k] = null; changed = true; }
     }
+    // Apply the plan's marks.
+    Object.entries(target).forEach(([h, sym]) => {
+        const key = `${r_id}_${h}`;
+        if (globalMarks[key] !== sym) { globalMarks[key] = sym; changed = true; }
+    });
 
     if (changed) {
-        touchRaceMeta(r_id, { markSource: 'auto-pick', riskSlider: currentRisk });
+        touchRaceMeta(r_id, { markSource: 'auto-pick', riskSlider: currentRisk, engineCount: plan.count, engineShape: plan.shape });
     }
 
-    return { changed, currentRisk, reason: changed ? 'updated' : 'unchanged' };
+    return { changed, currentRisk, count: plan.count, shape: plan.shape,
+             reason: changed ? (plan.count ? 'updated' : 'abstained') : (plan.count ? 'unchanged' : 'abstained-empty') };
 }
 
 // --- AUTO-PICK ALGORITHM ---
@@ -2899,7 +2909,7 @@ async function reorderPicks(event, r_id) {
 
     const mainSymbols = ["◎", "〇", "▲", "△"];
     let markedHorses = [];
-    
+
     // 1. Gather ONLY the horses that currently have a main symbol
     for (const [k, v] of Object.entries(globalMarks)) {
         if (k.startsWith(`${r_id}_`) && mainSymbols.includes(v)) {
@@ -2908,6 +2918,11 @@ async function reorderPicks(event, r_id) {
     }
 
     if (markedHorses.length === 0) return;
+
+    // The mark COUNT is preserved; reorder only re-ranks which horse gets which symbol.
+    // Sequence is ◎〇▲ then △ repeated, so a 5/6-mark (nagashi) race keeps all its △.
+    const markCount = markedHorses.length;
+    const seq = markSequenceForCount(markCount);
 
     // 2. Calculate Power Score using the Slider!
     const currentRisk = getCurrentAutoPickRisk();
@@ -2922,13 +2937,13 @@ async function reorderPicks(event, r_id) {
 
     // 3. WIPE the old symbols to prevent cloning!
     markedHorses.forEach(m => {
-        globalMarks[m.key] = null; 
+        globalMarks[m.key] = null;
     });
 
     // 4. Reassign the symbols in their new, mathematically correct order!
-    for (let i = 0; i < Math.min(mainSymbols.length, scoredHorses.length); i++) {
+    for (let i = 0; i < Math.min(seq.length, scoredHorses.length); i++) {
         const newKey = `${r_id}_${scoredHorses[i].h_id}`;
-        globalMarks[newKey] = mainSymbols[i];
+        globalMarks[newKey] = seq[i];
     }
 
     // 5. Save and instantly snap the UI into the new order
@@ -3109,41 +3124,156 @@ function getUnconditionalAutoBetRankingsForRace(r_id) {
         .map((e, i) => ({ h_id: e.h_id, symbol: symbols[i] }));
 }
 
-// Returns engine suggestions that respect any marks the user has already set.
-// - Symbols already assigned by the user are skipped (their horse is done).
-// - Remaining symbols are filled by the highest-scoring completely-unmarked horses.
-// This means: if the user gives 〇 to a horse the engine wanted ◎ for, the engine
-// accepts the 〇, moves on, and suggests ◎ for the next best unmarked horse.
+// ─── Phase 29 v2: Mark-Count Engine ─────────────────────────────────────────
+// Decides HOW MANY marks (0-6; 0 = abstain) the engine wants on a race, from the
+// field SHAPE (power-score gaps) modulated by the RISK slider, then assigns
+// ◎〇▲△△△ (truncated to N) to the top-N runners. N auto-selects the OrePro
+// template downstream (1=複勝 … 6=◎-nagashi×5) — the engine's only job is the count.
+// Built to counter "bet every race and lose": the abstention rules return 0 on
+// races that don't fit the risk stance, so bulk-apply skips them.
+// All thresholds are named constants — tune from live results (SLIDER_TUNING.md).
+const ENGINE_TUNING = {
+    MIN_FIELD: 8,         // fields smaller than this → abstain (too random to model)
+    STANDOUT_GAP: 0.30,   // relative p1−p2 gap that marks a "dominant favorite"
+    AXIS_GAP: 0.22,       // min relative p1−p2 gap to allow a nagashi axis (counts 5-6)
+    BREAK_MIN: 0.18,      // a relative gap ≥ this counts as a real "break" in the field
+    SHORT_FAV_ODDS: 1.8,  // ◎ shorter than this + no overlay → skip at low/mid risk
+    OVERLAY_LO: 8,        // a top-ranked runner priced in [LO, HI] = a longshot the
+    OVERLAY_HI: 70,       //   engine likes → "overlay/value present" in the race
+    SAFE_MAX: 35,         // risk ≤ this = SAFE stance
+    CHAOS_MIN: 65,        // risk ≥ this = CHAOS stance
+};
+
+// The engine's full decision for a race: { count, assignments:[{h_id,symbol}],
+// reason, shape, detail }. Mark-blind (reads the whole field); callers that must
+// respect existing user marks use getMarkAwareAutoBetRankingsForRace below.
+function getEngineMarkPlanForRace(r_id, opts = {}) {
+    const T = ENGINE_TUNING;
+    const empty = (reason) => ({ count: 0, assignments: [], reason, shape: reason, detail: null });
+    const entries = globalRaceEntries[r_id];
+    if (!entries || entries.length === 0) return empty('empty');
+
+    const risk = getCurrentAutoPickRisk(opts.riskOverride ?? null);
+    const r = Math.max(0, Math.min(100, risk)) / 100;
+    const fieldSize = entries.length;
+
+    // Score & sort every runner (mark-blind shape read).
+    const scored = entries.map(row => {
+        const odds = parseFloat(row.Odds);
+        return {
+            h_id: String(row.Horse_ID).split('.')[0],
+            power: calculatePowerScore(row, risk),
+            odds: (Number.isFinite(odds) && odds > 0) ? odds : null,
+        };
+    }).sort((a, b) => b.power - a.power);
+
+    // Abstention: tiny field — too much variance to bet into.
+    if (fieldSize < T.MIN_FIELD) return empty('small-field');
+
+    // ── Shape read from the top-6 power gaps ─────────────────────────────────
+    const K = Math.min(6, scored.length);
+    const top = scored.slice(0, K);
+    const spread = top[0].power - top[K - 1].power;
+    const wideOpen = !(spread > 0);                  // fully flat (featureless maiden)
+
+    const relGap = [];
+    for (let i = 0; i < K - 1; i++) relGap.push(spread > 0 ? (top[i].power - top[i + 1].power) / spread : 0);
+
+    const standout = relGap[0] || 0;                 // favorite dominance (p1−p2, relative)
+    let breakIdx = 0, breakVal = -1;
+    for (let i = 0; i < Math.min(4, relGap.length); i++) {
+        if (relGap[i] > breakVal) { breakVal = relGap[i]; breakIdx = i; }
+    }
+    const naturalCount = breakVal >= T.BREAK_MIN ? breakIdx + 1 : 0; // 0 = tight pack, no break
+    const openPackBehindStandout = standout >= T.STANDOUT_GAP &&
+        relGap.slice(1).every(g => g < T.BREAK_MIN);  // clear ◎ but no second break behind
+
+    // ── Value / overlay signals ──────────────────────────────────────────────
+    const favOdds = top[0].odds;
+    const underpricedFav = favOdds !== null && favOdds < T.SHORT_FAV_ODDS;
+    const hasOverlay = top.some(e => e.odds !== null && e.odds >= T.OVERLAY_LO && e.odds <= T.OVERLAY_HI);
+    const hasAxis = standout >= T.AXIS_GAP && favOdds !== null;
+
+    // ── Base count from shape ────────────────────────────────────────────────
+    let count, shape;
+    if (wideOpen) {                          shape = 'wide-open';      count = 4; }
+    else if (openPackBehindStandout) {       shape = 'standout+pack';  count = 5; }
+    else if (naturalCount === 1 && standout >= T.STANDOUT_GAP) { shape = 'lone-favorite'; count = 1; }
+    else if (naturalCount === 2) {           shape = 'two-clear';      count = 2; }
+    else if (naturalCount === 3) {           shape = 'tight-top3';     count = 3; }
+    else {                                   shape = 'tight-pack';     count = 4; }
+
+    // ── Risk modulation ──────────────────────────────────────────────────────
+    if (risk <= T.SAFE_MAX) {
+        // SAFE: shrink the boxes toward the anchor; never nagashi.
+        if (shape === 'standout+pack') count = hasAxis ? 1 : 2; // just back the standout
+        else if (shape === 'wide-open') count = 0;              // no anchor → abstain
+        else if (count >= 3) count -= 1;                        // 4→3, 3→2 (1,2 unchanged)
+    } else if (risk >= T.CHAOS_MIN) {
+        // CHAOS: spread / hunt value.
+        if (shape === 'lone-favorite') count = hasAxis ? 5 : 2; // swing off the chalk via nagashi
+        else if (shape === 'standout+pack') count = r >= 0.85 ? 6 : 5;
+        else if (shape === 'wide-open') count = hasAxis ? 6 : 4; // wide net only with an axis
+        else count = Math.min(4, count + 1);                    // tighten boxes up a notch
+    }
+    // BLEND keeps the shape's base count.
+
+    // Nagashi-needs-standout: counts 5-6 require a genuine ◎ axis, else cap at box.
+    if (count >= 5 && !hasAxis) count = 4;
+
+    // ── Abstention (return 0) — the core "bet fewer, better races" lever ──────
+    if (risk >= T.CHAOS_MIN && !hasOverlay && underpricedFav) return empty('chalk-no-overlay');
+    if (risk <= T.SAFE_MAX && (wideOpen || naturalCount === 0) && !underpricedFav) return empty('no-safe-anchor');
+    if (underpricedFav && !hasOverlay && risk < T.CHAOS_MIN) return empty('underpriced-fav');
+    if (count <= 0) return empty('shape-risk-mismatch');
+
+    count = Math.max(1, Math.min(6, count));
+
+    const seq = markSequenceForCount(count);
+    const assignments = [];
+    for (let i = 0; i < seq.length && i < scored.length; i++) {
+        assignments.push({ h_id: scored[i].h_id, symbol: seq[i] });
+    }
+    return {
+        count, assignments, reason: shape, shape,
+        detail: { standout: +standout.toFixed(2), naturalCount, hasAxis, hasOverlay, underpricedFav, wideOpen },
+    };
+}
+
+// Mark-aware view of the engine plan: same target COUNT, but respects marks the user
+// already placed (keeps their singletons, counts their △) and fills only the remaining
+// slots from unmarked horses. Used by the highlight overlay. Engine abstains → [].
 function getMarkAwareAutoBetRankingsForRace(r_id) {
     const entries = globalRaceEntries[r_id];
     if (!entries || entries.length === 0) return [];
-    const symbols = ['◎', '〇', '▲', '△'];
+
+    const plan = getEngineMarkPlanForRace(r_id);
+    if (plan.count === 0) return [];                     // engine abstains → highlight nothing
+    const seq = markSequenceForCount(plan.count);
     const currentRisk = getCurrentAutoPickRisk();
 
-    // Which symbols already have a user-assigned horse, and which horses have any mark.
-    const takenSymbols = new Set();
+    // What the user has already marked.
+    const takenSingles = new Set();   // which of ◎〇▲ the user already used
+    let userTriangles = 0;
     const markedHorses = new Set();
     entries.forEach(row => {
         const h_id = String(row.Horse_ID).split('.')[0];
         const mark = globalMarks[`${r_id}_${h_id}`];
-        if (mark) {
-            markedHorses.add(h_id);
-            if (symbols.includes(mark)) takenSymbols.add(mark);
-        }
+        if (!mark || mark === 'X') return;
+        markedHorses.add(h_id);
+        if (mark === '△') userTriangles++; else takenSingles.add(mark);
     });
 
-    // All symbols are user-assigned — nothing for the engine to suggest.
-    if (takenSymbols.size === symbols.length) return [];
+    // Slots the engine still needs to fill.
+    const needSingles = ['◎', '〇', '▲'].filter((s, i) => i < seq.length && !takenSingles.has(s));
+    const triCount = seq.filter(s => s === '△').length;
+    const needTriangles = Math.max(0, triCount - userTriangles);
+    if (needSingles.length === 0 && needTriangles === 0) return [];
 
-    // Horses ranked by power score, excluding any that already have a mark.
-    // Continuous longshot tolerance (was a hard risk≤70 cliff; see SLIDER_TUNING.md).
-    // The acceptable-odds ceiling rises smoothly with the slider so there's no abrupt
-    // jump at 70: safe settings keep ◎/〇 on realistic prices, chaos lets bombs through.
+    // Unmarked horses by power, longshot-tolerant (graded ceiling; see SLIDER_TUNING.md).
     //   risk 0 → ceiling ~12   risk 50 → ~30   risk 80 → ~75   risk 100 → ∞
-    // Horses above the ceiling are sorted to the back (still available for ▲/△), exactly
-    // as before — only the threshold is now graded instead of a switch.
     const r = Math.max(0, Math.min(100, currentRisk)) / 100;
-    const oddsCeiling = currentRisk >= 100 ? Infinity : 12 + Math.pow(r, 2) * 240; // 12→252 then ∞ at 100
+    const oddsCeiling = currentRisk >= 100 ? Infinity : 12 + Math.pow(r, 2) * 240;
     const pool = entries
         .map(row => ({ h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, currentRisk), isLongshot: (parseFloat(row.Odds) || 9999) > oddsCeiling }))
         .filter(e => !markedHorses.has(e.h_id))
@@ -3152,26 +3282,10 @@ function getMarkAwareAutoBetRankingsForRace(r_id) {
             return b.power - a.power;
         });
 
-    // Abstention: skip lower-tier marks when scores are too clustered to differentiate.
-    // ◎ always assigned if there's a pool. For each subsequent mark, require a minimum
-    // gap between that candidate and the next-ranked horse (proves it's a real tier break).
     const result = [];
-    let poolIdx = 0;
-    for (const symbol of symbols) {
-        if (takenSymbols.has(symbol)) continue;
-        if (poolIdx >= pool.length) break;
-        if (poolIdx > 0 && pool.length >= 4) {
-            const fieldSpread = pool[0].power - pool[Math.min(pool.length - 1, 5)].power;
-            if (fieldSpread > 0) {
-                const gapFromNext = pool[poolIdx - 1].power - pool[poolIdx].power;
-                if (gapFromNext / fieldSpread < 0.03) {
-                    poolIdx++;
-                    continue;
-                }
-            }
-        }
-        result.push({ h_id: pool[poolIdx++].h_id, symbol });
-    }
+    let idx = 0;
+    for (const s of needSingles) { if (idx >= pool.length) break; result.push({ h_id: pool[idx++].h_id, symbol: s }); }
+    for (let t = 0; t < needTriangles && idx < pool.length; t++) result.push({ h_id: pool[idx++].h_id, symbol: '△' });
     return result;
 }
 
@@ -4031,11 +4145,12 @@ function createMarkBtn(r_id, h_id, symbol, key) {
     const isLocked = !!raceLocks[r_id];
     let activeClass = isActive ? `active-${symbol}` : '';
 
-    // If it's not active, AND it's not the X button, check if it's stolen!
-    if (!isActive && symbol !== 'X') {
+    // If it's not active, AND it's a singleton main vote (◎〇▲), check if it's stolen!
+    // △ is repeatable (Phase 29 v2 multi-longshot) and X is unlimited — neither dims.
+    if (!isActive && symbol !== 'X' && symbol !== '△') {
         for (const [k, v] of Object.entries(globalMarks)) {
             if (k.startsWith(`${r_id}_`) && v === symbol) {
-                activeClass = "dimmed-symbol"; 
+                activeClass = "dimmed-symbol";
                 break;
             }
         }
@@ -4259,9 +4374,11 @@ async function toggleMark(r_id, h_id, symbol) {
         document.getElementById(`btn_${keyA}_${newSymA}`).className = "mark-btn";
     } else {
         let keyB = null;
-        
-        // ONLY steal the symbol from another horse if it's a main vote! (Allows infinite X's)
-        if (newSymA !== 'X') {
+
+        // Steal the symbol from another horse only for the SINGLETON main votes (◎〇▲).
+        // △ is repeatable (Phase 29 v2: counts 5-6 = multiple longshots → nagashi) and X is
+        // unlimited, so neither steals.
+        if (newSymA !== 'X' && newSymA !== '△') {
             for (const [k, v] of Object.entries(globalMarks)) {
                 if (k.startsWith(`${r_id}_`) && v === newSymA && k !== keyA) {
                     keyB = k; break;
@@ -6699,6 +6816,7 @@ async function autoBetActiveDay() {
 
         let changedRaceIds = [];
         let skippedLocked = 0;
+        let abstained = 0;
 
         eligibleRaceIds.forEach(r_id => {
             if (isRaceLocked(r_id)) {
@@ -6710,6 +6828,7 @@ async function autoBetActiveDay() {
             if (result.changed) {
                 changedRaceIds.push(r_id);
             }
+            if (result.count === 0) abstained += 1; // engine chose to skip this race
         });
 
         if (changedRaceIds.length) {
@@ -6736,12 +6855,13 @@ async function autoBetActiveDay() {
         // Auto-bet stays local to UMAnager — we don't push to OrePro here. Use Apply Votes
         // afterwards (optionally tweak marks first) to send everything across.
         const lockNote = skippedLocked ? ` Skipped ${skippedLocked} locked race(s).` : '';
+        const abstainNote = abstained ? ` Engine abstained on ${abstained} race(s) (no good bet at Risk ${riskVal}).` : '';
         if (!changedRaceIds.length) {
-            setOreProSessionStatus(`Auto-pick finished but produced no new marks for ${date}.${lockNote}`, 'warn');
+            setOreProSessionStatus(`Auto-pick finished but produced no new marks for ${date}.${abstainNote}${lockNote}`, 'warn');
             return;
         }
         setOreProSessionStatus(
-            `Auto-picked ${changedRaceIds.length} race(s) for ${date} at Risk ${riskVal}. Click Apply Votes to send them to OrePro.${lockNote}`,
+            `Auto-picked ${changedRaceIds.length} race(s) for ${date} at Risk ${riskVal}. Click Apply Votes to send them to OrePro.${abstainNote}${lockNote}`,
             'info'
         );
     } finally {

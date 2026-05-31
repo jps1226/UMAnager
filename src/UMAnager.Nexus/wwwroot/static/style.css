@@ -1540,6 +1540,14 @@ tr:hover .score-explain-trigger { opacity: 1; }
     border-left: 2px solid #ffd700;
     border-radius: 2px;
 }
+/* Phase 29 v2: engine count + shape readout */
+.score-explain-popover .sx-engine-plan {
+    font-size: 11px; color: #7ed6df;
+    padding: 4px 7px; margin-bottom: 8px;
+    background: rgba(126,214,223,0.07);
+    border-left: 2px solid #7ed6df;
+    border-radius: 2px;
+}
 /* Factor rows */
 .score-explain-popover .sx-factors { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .score-explain-popover .sx-factor { display: flex; align-items: flex-start; gap: 7px; }
