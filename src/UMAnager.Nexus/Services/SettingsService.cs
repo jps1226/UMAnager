@@ -74,6 +74,13 @@ public sealed class SettingsService
         public const string BetStakeWinYen      = "bet_stake_win_yen";
         public const string BetStakeQuinellaYen = "bet_stake_quinella_yen";
         public const string BetStakeTrioYen     = "bet_stake_trio_yen";
+
+        // JSON int[] — the OrePro mark-count template-cost ladder. Index i = total ¥ staked
+        // on a race carrying (i+1) marks (OrePro auto-fires one template keyed by mark count).
+        // Default mirrors the operator's 6-slot starter ladder: 1→¥100, 2→¥100, 3→¥400,
+        // 4→¥400, 5→¥600, 6→¥1000. Mark counts beyond the array clamp to the last entry.
+        // This is the authoritative stake-per-race source for sunk-cost + net-win accounting.
+        public const string BetTemplateCosts    = "bet_template_costs";
     }
 
     public static readonly TimeSpan LiveOddsHardFloor = TimeSpan.FromMinutes(5);
@@ -94,6 +101,8 @@ public sealed class SettingsService
         public const string             OreProNavToCompleteAfterSubmit = "false";
         public const string             DisplayLocalTime               = "false";
         public const int                BetEstimateStakeYen            = 100;
+        // 6-slot starter ladder, indexed by (markCount-1). See Keys.BetTemplateCosts.
+        public static readonly int[]    BetTemplateCosts               = { 100, 100, 400, 400, 600, 1000 };
     }
 
     private readonly IDbContextFactory<AppDbContext> _contextFactory;
@@ -156,6 +165,38 @@ public sealed class SettingsService
     }
 
     /// <summary>
+    /// The mark-count template-cost ladder (see Keys.BetTemplateCosts). Falls back to the
+    /// built-in 6-slot default if unset or malformed.
+    /// </summary>
+    public async Task<int[]> GetBetTemplateCostsAsync()
+    {
+        var raw = await GetStringAsync(Keys.BetTemplateCosts);
+        if (!string.IsNullOrWhiteSpace(raw))
+        {
+            try
+            {
+                var arr = System.Text.Json.JsonSerializer.Deserialize<int[]>(raw);
+                if (arr is { Length: > 0 } && arr.All(c => c >= 0))
+                    return arr;
+            }
+            catch (System.Text.Json.JsonException) { /* fall through to default */ }
+        }
+        return Defaults.BetTemplateCosts;
+    }
+
+    /// <summary>
+    /// Total ¥ staked on a race carrying <paramref name="markCount"/> marks, per the ladder.
+    /// 0 marks → ¥0; counts beyond the ladder clamp to the last entry. Shared by sunk-cost,
+    /// Day P/L, and net-win accounting so every surface agrees on what a race cost.
+    /// </summary>
+    public static int StakeForMarkCount(int markCount, int[] ladder)
+    {
+        if (markCount <= 0 || ladder.Length == 0) return 0;
+        var idx = Math.Min(markCount, ladder.Length) - 1;
+        return ladder[idx];
+    }
+
+    /// <summary>
     /// Reads the live odds polling interval, clamping below the hard 5-minute floor.
     /// </summary>
     public async Task<TimeSpan> GetLiveOddsIntervalAsync()
@@ -194,6 +235,7 @@ public sealed class SettingsService
         AddIfMissing(Keys.OreProNavToCompleteAfterSubmit, Defaults.OreProNavToCompleteAfterSubmit);
         AddIfMissing(Keys.DisplayLocalTime,               Defaults.DisplayLocalTime);
         AddIfMissing(Keys.BetEstimateStakeYen,            Defaults.BetEstimateStakeYen.ToString());
+        AddIfMissing(Keys.BetTemplateCosts,               System.Text.Json.JsonSerializer.Serialize(Defaults.BetTemplateCosts));
 
         await ctx.SaveChangesAsync();
     }

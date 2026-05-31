@@ -31,6 +31,7 @@ public sealed class SettingsController : ControllerBase
         SettingsService.Keys.BetStakeWinYen,
         SettingsService.Keys.BetStakeQuinellaYen,
         SettingsService.Keys.BetStakeTrioYen,
+        SettingsService.Keys.BetTemplateCosts,
     };
 
     [HttpGet]

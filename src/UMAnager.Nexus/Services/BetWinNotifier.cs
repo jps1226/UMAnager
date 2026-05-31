@@ -31,17 +31,23 @@ public sealed class BetWinNotifier
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly AppStateService _state;
     private readonly IDiscordNotifier _discord;
+    private readonly SunkCostService _sunk;
+    private readonly SettingsService _settings;
     private readonly ILogger<BetWinNotifier> _logger;
 
     public BetWinNotifier(
         IDbContextFactory<AppDbContext> dbFactory,
         AppStateService state,
         IDiscordNotifier discord,
+        SunkCostService sunk,
+        SettingsService settings,
         ILogger<BetWinNotifier> logger)
     {
         _dbFactory = dbFactory;
         _state     = state;
         _discord   = discord;
+        _sunk      = sunk;
+        _settings  = settings;
         _logger    = logger;
     }
 
@@ -50,30 +56,37 @@ public sealed class BetWinNotifier
         var ids = raceIds.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList();
         if (ids.Count == 0) return;
 
-        var marks = await LoadMarksAsync();
+        var (marks, locked) = await LoadMarksAndLocksAsync();
         if (marks.Count == 0) return; // no bets placed → nothing to win
 
         var notified = await LoadNotifiedSetAsync();
-        var freshCandidates = ids.Where(id => !notified.Contains(id)).ToList();
+        // Only LOCKED (placed) races are eligible — never ping a win on a card you didn't bet.
+        var freshCandidates = ids.Where(id => !notified.Contains(id) && locked.Contains(id)).ToList();
         if (freshCandidates.Count == 0) return;
 
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        // Need EVERY entry of the candidates (the evaluator prices the marked horses' post
+        // positions, which aren't necessarily top-3 finishers).
         var entries = await db.RaceEntries.AsNoTracking()
-            .Where(e => freshCandidates.Contains(e.RaceId) && e.FinishPos != null && e.FinishPos > 0)
-            .Select(e => new { e.RaceId, e.HorseId, Finish = e.FinishPos!.Value })
+            .Where(e => freshCandidates.Contains(e.RaceId))
+            .Select(e => new { e.RaceId, e.HorseId, e.PostPosition, e.FinishPos })
             .ToListAsync(ct);
+        var entriesByRace = entries.GroupBy(e => e.RaceId).ToDictionary(g => g.Key, g => g.ToList());
 
         var races = await db.Races.AsNoTracking()
             .Where(r => freshCandidates.Contains(r.RaceId))
-            .Select(r => new { r.RaceId, r.TrackCode, r.RaceNumber })
+            .Select(r => new { r.RaceId, r.TrackCode, r.RaceNumber, r.ResultsJson })
             .ToListAsync(ct);
         var raceMeta = races.ToDictionary(r => r.RaceId, r => r);
 
-        // Resolve horse names for every top-3 finisher across all candidate races. One round-trip;
-        // we'll filter to actual hits per-race below. NameEn preferred, fallback to NameJa.
-        var topFinisherIds = entries.Select(e => e.HorseId!).Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
+        var ladder = await _settings.GetBetTemplateCostsAsync();
+
+        // Resolve names for every marked horse across candidates (for the hit-detail line).
+        var markedHorseIds = freshCandidates
+            .SelectMany(id => marks.Keys.Where(k => k.StartsWith(id + "_")).Select(k => k.Substring(id.Length + 1)))
+            .Distinct().ToList();
         var horseNames = await db.Horses.AsNoTracking()
-            .Where(h => topFinisherIds.Contains(h.HorseId))
+            .Where(h => markedHorseIds.Contains(h.HorseId))
             .Select(h => new { h.HorseId, h.NameEn, h.NameJa })
             .ToListAsync(ct);
         var nameByHorse = horseNames.ToDictionary(
@@ -81,57 +94,66 @@ public sealed class BetWinNotifier
             h => !string.IsNullOrEmpty(h.NameEn) ? h.NameEn! : (h.NameJa ?? h.HorseId));
 
         var anyNotified = false;
+        SunkCostSummary? running = null; // cumulative tally snapshot — computed once, lazily
         foreach (var raceId in freshCandidates)
         {
-            var top3 = entries
-                .Where(e => e.RaceId == raceId && e.Finish >= 1 && e.Finish <= 3)
-                .GroupBy(e => e.Finish)
-                .ToDictionary(g => g.Key, g => g.First().HorseId);
+            if (!raceMeta.TryGetValue(raceId, out var rm)) continue;
+            var raceEntries = entriesByRace.GetValueOrDefault(raceId) ?? new();
 
-            // Wait for a complete top-3 before deciding. Partial data → leave un-notified,
-            // re-check next tick.
-            if (!(top3.ContainsKey(1) && top3.ContainsKey(2) && top3.ContainsKey(3))) continue;
+            int? pp1 = null, pp2 = null, pp3 = null;
+            foreach (var e in raceEntries)
+            {
+                if (e.FinishPos == 1) pp1 = e.PostPosition;
+                else if (e.FinishPos == 2) pp2 = e.PostPosition;
+                else if (e.FinishPos == 3) pp3 = e.PostPosition;
+            }
+            // Wait for a complete top-3 before deciding. Partial → leave un-notified, re-check next tick.
+            if (pp1 is null || pp2 is null || pp3 is null) continue;
 
-            var raceMarks = marks
-                .Where(kv => kv.Key.StartsWith(raceId + "_"))
-                .ToDictionary(kv => kv.Key.Substring(raceId.Length + 1), kv => kv.Value);
+            var ppByHorse = raceEntries.GroupBy(e => e.HorseId).ToDictionary(g => g.Key, g => g.First().PostPosition);
+            var runners = TemplateBetEvaluator.BuildRunners(raceId, marks, ppByHorse);
+            if (runners.Count == 0) { notified.Add(raceId); continue; }
 
-            var pickedSet = new HashSet<string>(raceMarks.Keys);
-            raceMarks.TryGetValue(top3[1], out var firstMark);
-
-            var honmei   = firstMark == "◎";
-            var quinella = pickedSet.Contains(top3[1]) && pickedSet.Contains(top3[2]);
-            var trio     = quinella && pickedSet.Contains(top3[3]);
-
-            var pills = new List<string>();
-            if (honmei)   pills.Add("◎ Win");
-            if (quinella) pills.Add("Q Box");
-            if (trio)     pills.Add("T Box");
+            JsonElement? payouts = null; JsonDocument? pdoc = null;
+            try { pdoc = JsonDocument.Parse(rm.ResultsJson ?? "{}"); payouts = pdoc.RootElement; }
+            catch (JsonException) { }
+            var outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, ladder);
+            pdoc?.Dispose();
 
             notified.Add(raceId);
+            if (!outcome.AnyHit) continue; // placed + settled but lost — no ping
 
-            if (pills.Count == 0) continue; // top-3 complete but no hit — mark notified, no ping
+            // Pills = the template lines that hit (e.g. "3連複", "ワイド×2").
+            var pills = outcome.HitLabels.GroupBy(x => x)
+                .Select(g => g.Count() > 1 ? $"{g.Key}×{g.Count()}" : g.Key).ToList();
 
-            // Build per-hit horse detail: each marked horse that landed in top 3, with mark + name + position.
-            // For Q Box show top-2; for T Box top-3; for ◎ Win alone, just the winner.
-            var maxPos = trio ? 3 : (quinella ? 2 : 1);
+            // Detail: which marked horses landed in the top 3.
+            var finishByHorse = raceEntries.Where(e => e.FinishPos is >= 1 and <= 3)
+                .GroupBy(e => e.HorseId).ToDictionary(g => g.Key, g => g.First().FinishPos!.Value);
+            var raceMarks = marks.Where(kv => kv.Key.StartsWith(raceId + "_"))
+                .ToDictionary(kv => kv.Key.Substring(raceId.Length + 1), kv => kv.Value);
             var hits = new List<MarkHit>();
-            for (int pos = 1; pos <= maxPos; pos++)
+            foreach (var kv in raceMarks)
             {
-                var horseId = top3[pos];
-                if (!raceMarks.TryGetValue(horseId, out var mark) || string.IsNullOrEmpty(mark)) continue;
-                var name = nameByHorse.TryGetValue(horseId, out var n) ? n : horseId;
-                hits.Add(new MarkHit(mark, name, pos));
+                if (!finishByHorse.TryGetValue(kv.Key, out var fin)) continue;
+                var name = nameByHorse.TryGetValue(kv.Key, out var n) ? n : kv.Key;
+                hits.Add(new MarkHit(kv.Value, name, fin));
             }
 
-            var label = BuildRaceLabel(raceMeta.TryGetValue(raceId, out var rm) ? rm.TrackCode : null,
-                                       raceMeta.TryGetValue(raceId, out var rm2) ? rm2.RaceNumber : null);
+            var label = BuildRaceLabel(rm.TrackCode, rm.RaceNumber);
+            var raceNet = outcome.Won - outcome.Staked;
+            var raceSign = raceNet >= 0 ? "+" : "−";
+            running ??= await _sunk.GetSummaryAsync(ct);
+            var runSign = running.NetYen >= 0 ? "+" : "−";
+            var runningLine =
+                $"This race: {raceSign}¥{Math.Abs(raceNet):N0} (won ¥{outcome.Won:N0} − staked ¥{outcome.Staked:N0}) · "
+              + $"Running net {runSign}¥{Math.Abs(running.NetYen):N0}";
+
             try
             {
-                await _discord.NotifyMarkHitsAsync(label, pills, hits, ct);
-                _logger.LogInformation("[BetWin] Race {RaceId} hits: {Pills} | {Hits}",
-                    raceId, string.Join(",", pills),
-                    string.Join(", ", hits.Select(h => $"{h.Mark} {h.HorseName} ({h.Finish})")));
+                await _discord.NotifyMarkHitsAsync(label, pills, hits, runningLine, ct);
+                _logger.LogInformation("[BetWin] Race {RaceId} won ¥{Won:N0} ({Pills})",
+                    raceId, outcome.Won, string.Join(",", pills));
             }
             catch (Exception ex)
             {
@@ -150,27 +172,39 @@ public sealed class BetWinNotifier
         return $"{name} R{raceNumber?.ToString() ?? "?"}";
     }
 
-    private async Task<Dictionary<string, string>> LoadMarksAsync()
+    /// <summary>Load the marks dict (non-X) and the set of locked (placed) race-ids.</summary>
+    private async Task<(Dictionary<string, string> Marks, HashSet<string> Locked)> LoadMarksAndLocksAsync()
     {
+        var marks = new Dictionary<string, string>();
+        var locked = new HashSet<string>();
         var raw = await _state.GetStringAsync(MarksStateKey);
-        if (string.IsNullOrWhiteSpace(raw)) return new();
+        if (string.IsNullOrWhiteSpace(raw)) return (marks, locked);
         try
         {
             using var doc = JsonDocument.Parse(raw);
-            if (!doc.RootElement.TryGetProperty("marks", out var marksEl)) return new();
-            var dict = new Dictionary<string, string>();
-            foreach (var prop in marksEl.EnumerateObject())
+            var root = doc.RootElement;
+            if (root.TryGetProperty("marks", out var marksEl) && marksEl.ValueKind == JsonValueKind.Object)
             {
-                var v = prop.Value.GetString();
-                if (string.IsNullOrEmpty(v) || v == "X") continue;
-                dict[prop.Name] = v;
+                foreach (var prop in marksEl.EnumerateObject())
+                {
+                    var v = prop.Value.GetString();
+                    if (string.IsNullOrEmpty(v) || v == "X") continue;
+                    marks[prop.Name] = v;
+                }
             }
-            return dict;
+            if (root.TryGetProperty("raceMeta", out var metaEl) && metaEl.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in metaEl.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.Object
+                        && prop.Value.TryGetProperty("lockStateAtSave", out var lk)
+                        && lk.ValueKind == JsonValueKind.True)
+                        locked.Add(prop.Name);
+                }
+            }
         }
-        catch (JsonException)
-        {
-            return new();
-        }
+        catch (JsonException) { }
+        return (marks, locked);
     }
 
     private async Task<HashSet<string>> LoadNotifiedSetAsync()

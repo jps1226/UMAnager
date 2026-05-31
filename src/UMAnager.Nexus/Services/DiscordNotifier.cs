@@ -9,7 +9,7 @@ public interface IDiscordNotifier
     Task NotifyPhaseChangedAsync(AppPhase from, AppPhase to, CancellationToken ct = default);
     Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default);
-    Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, CancellationToken ct = default);
+    Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, string? runningNetLine = null, CancellationToken ct = default);
     Task NotifyPostPositionsConfirmedAsync(string raceDate, int raceCount, CancellationToken ct = default);
     Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default);
@@ -77,7 +77,7 @@ public sealed class DiscordNotifier : IDiscordNotifier
     public Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default)
         => SendAsync($":moneybag: **Bet card won** on `{raceId}` — {description} → ¥{payout:N0}", ct);
 
-    public Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, CancellationToken ct = default)
+    public Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, string? runningNetLine = null, CancellationToken ct = default)
     {
         var pills = string.Join(" · ", hitPills);
         var hitList = hits.OrderBy(h => h.Finish).ToList();
@@ -87,6 +87,8 @@ public sealed class DiscordNotifier : IDiscordNotifier
             var detail = string.Join(" · ", hitList.Select(h => $"{h.Mark} {h.HorseName} ({Ordinal(h.Finish)})"));
             content += $"\n      {detail}";
         }
+        if (!string.IsNullOrEmpty(runningNetLine))
+            content += $"\n      {runningNetLine}";
         return SendAsync(content, ct);
     }
 
@@ -98,19 +100,22 @@ public sealed class DiscordNotifier : IDiscordNotifier
 
     public Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default)
     {
-        var summary = $":checkered_flag: **Day Recap {recap.DateKey}** — {recap.RacesMarked}/{recap.RacesTotal} races marked";
-        var hits    = $"◎ Win: **{recap.HonmeiHits}** · Q Box: **{recap.QBoxHits}** · T Box: **{recap.TBoxHits}**";
-        var total   = $":moneybag: Estimated total winnings: **¥{recap.TotalWonYen:N0}**";
+        var summary = $":checkered_flag: **Day Recap {recap.DateKey}** — {recap.RacesMarked}/{recap.RacesTotal} bets placed";
+        var hits    = $"Won **{recap.RacesWon}** of **{recap.RacesMarked}** placed bets";
+        var total   = $":moneybag: Won: **¥{recap.TotalWonYen:N0}** · Staked: **¥{recap.TotalStakedYen:N0}**";
+        var netSign = recap.NetYen >= 0 ? "+" : "−";
+        var netEmoji = recap.NetYen >= 0 ? ":chart_with_upwards_trend:" : ":chart_with_downwards_trend:";
+        var net     = $"{netEmoji} **Net: {netSign}¥{Math.Abs(recap.NetYen):N0}**";
 
         string body;
         if (recap.WinningLines.Count > 0)
         {
             var lines = string.Join("\n", recap.WinningLines.Select(l => $"• {l}"));
-            body = $"{summary}\n{hits}\n{total}\n{lines}";
+            body = $"{summary}\n{hits}\n{total}\n{net}\n{lines}";
         }
         else
         {
-            body = $"{summary}\n{hits}\n_(no hits today)_";
+            body = $"{summary}\n{hits}\n{total}\n{net}\n_(no hits today)_";
         }
         return SendAsync(body, ct);
     }

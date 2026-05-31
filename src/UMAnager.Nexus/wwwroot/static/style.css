@@ -186,6 +186,8 @@
         .quick-stat-best { color: #8ea0c6; font-weight: 600; }
         .quick-stat-best-clickable { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
         .quick-stat-best-clickable:hover { color: #c5d3ee; }
+        .quick-stat-sunk-reset { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+        .quick-stat-sunk-reset:hover { color: #c5d3ee; }
 
         .clock-container { display: flex; justify-content: center; gap: 40px; background-color: rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 10px; flex-shrink: 0; margin-bottom: 0; }
         .console-top-bar { flex: 1; min-width: 200px; height: 102px; max-height: 102px; margin-top: 0; border-radius: 10px; font-size: 11px; display: none; }
@@ -563,6 +565,26 @@
             0%   { transform: translateX(-100%); }
             100% { transform: translateX(100%); }
         }
+        .voting-sunk-cost {
+            background: linear-gradient(180deg, #1a2333 0%, #141821 100%);
+            border: 1px solid #2f3b52;
+            border-top: none;
+            padding: 12px 18px;
+        }
+        .voting-sunk-cost-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .voting-sunk-cost-title { font-size: 14px; font-weight: 700; color: #e8eef7; }
+        .voting-sunk-scope { font-size: 11px; font-weight: 500; color: #8ea0c6; margin-left: 6px; }
+        .voting-sunk-cost-body { display: flex; gap: 28px; flex-wrap: wrap; }
+        .voting-sunk-stat { display: flex; flex-direction: column; }
+        .voting-sunk-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #6c7a93; }
+        .voting-sunk-value { font-size: 20px; font-weight: 700; color: #e8eef7; line-height: 1.2; }
+        .voting-sunk-value.quick-stat-pos { color: #72af68; }
+        .voting-sunk-value.quick-stat-neg { color: #d26363; }
         .voting-day-total {
             display: flex;
             align-items: baseline;

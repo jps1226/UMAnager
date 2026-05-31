@@ -53,6 +53,7 @@ builder.Services.AddScoped<BetWinNotifier>();
 builder.Services.AddScoped<ClaudeRecapWriter>();
 builder.Services.AddScoped<DayRecapNotifier>();
 builder.Services.AddSingleton<VoteHistoryService>();
+builder.Services.AddSingleton<SunkCostService>();
 builder.Services.AddSingleton<OreProVoteApplyService>();
 builder.Services.AddSingleton<LiveOrchestrator>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveOrchestrator>());

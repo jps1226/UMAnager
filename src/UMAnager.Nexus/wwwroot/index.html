@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260530-5">
+    <link rel="stylesheet" href="/static/style.css?v=20260531-7">
 </head>
 <body>
 
@@ -189,8 +189,8 @@
                             <div id="qs-agreement-best" class="quick-stat-sub quick-stat-best" title="Risk slider value that would best match your marks today"></div>
                         </div>
                         <div class="quick-stat-block">
-                            <div class="quick-stat-label">Day P/L</div>
-                            <div id="qs-pl" class="quick-stat-value">—</div>
+                            <div class="quick-stat-label">Day Net</div>
+                            <div id="qs-pl" class="quick-stat-value" title="The viewed day's net: every placed (locked) bet's stake counts immediately (in the red), climbing back as bets win.">—</div>
                             <div id="qs-pl-sub" class="quick-stat-sub">stake / net</div>
                         </div>
                     </div>
@@ -269,8 +269,33 @@
                 <button id="btn-orepro-open" onclick="openOreProCompanion()" class="toolbar-btn toolbar-btn-muted">🌐 Open OrePro</button>
                 <button id="btn-orepro-auto-day" onclick="autoBetActiveDay()" class="toolbar-btn toolbar-btn-primary" title="Auto-pick the rest of the day with the current risk slider. Only updates marks within UMAnager — nothing is sent to OrePro until you click Apply Day Votes.">⚡ Auto Bet Day</button>
                 <button id="btn-orepro-apply-day" onclick="applyAllDayVotesToOrePro()" class="toolbar-btn toolbar-btn-primary" title="Send all unsubmitted voted races for the selected day to OrePro (apply + submit each one).">📤 Apply Day Votes</button>
+                <button id="btn-lock-all-bets" onclick="lockAllBetsForActiveDay()" class="toolbar-btn toolbar-btn-muted" title="Lock every marked race for the selected day — locking marks them as placed bets so they count toward your sunk cost / Day Net.">🔒 Lock All Bets</button>
                 <button id="btn-orepro-clear-day" onclick="clearActiveDayBets()" class="toolbar-btn toolbar-btn-muted" title="Clear all saved marks for the selected day so you can re-evaluate the card">🧹 Clear Day Bets</button>
                 <button id="btn-reestimate-day" onclick="reEstimateActiveDay()" class="toolbar-btn toolbar-btn-muted">🧮 Re-estimate Day</button>
+            </div>
+        </div>
+        <div id="voting-sunk-cost" class="voting-sunk-cost">
+            <div class="voting-sunk-cost-head">
+                <span class="voting-sunk-cost-title">💸 Sunk Cost <span id="voting-sunk-scope" class="voting-sunk-scope">all-time</span></span>
+                <button onclick="resetSunkCost()" class="toolbar-btn toolbar-btn-muted" title="Reset the tally — counts only races from today (JST) forward.">↺ Reset</button>
+            </div>
+            <div class="voting-sunk-cost-body">
+                <div class="voting-sunk-stat">
+                    <div class="voting-sunk-label">Net</div>
+                    <div id="voting-sunk-net" class="voting-sunk-value">—</div>
+                </div>
+                <div class="voting-sunk-stat">
+                    <div class="voting-sunk-label">Staked</div>
+                    <div id="voting-sunk-staked" class="voting-sunk-value">—</div>
+                </div>
+                <div class="voting-sunk-stat">
+                    <div class="voting-sunk-label">Won</div>
+                    <div id="voting-sunk-won" class="voting-sunk-value">—</div>
+                </div>
+                <div class="voting-sunk-stat">
+                    <div class="voting-sunk-label">Bets</div>
+                    <div id="voting-sunk-bets" class="voting-sunk-value">—</div>
+                </div>
             </div>
         </div>
         <div id="voting-day-total" class="voting-day-total" style="display:none;"></div>
@@ -533,6 +558,12 @@
                         </div>
                         <input type="number" id="setting-betStakeTrio" min="100" max="1000000" step="100" onblur="saveBetStake('trio', this.value)" class="settings-number-input">
 
+                        <div class="settings-formula-label-block">
+                            <span class="settings-formula-label-name">Template-Cost Ladder (¥ by mark count)</span>
+                            <span class="settings-formula-label-desc">What OrePro actually fires per race, keyed by how many marks it carries. Comma-separated: 1 mark, 2, 3, … (e.g. 100,100,400,400,600,1000). This is the authoritative stake for the sunk-cost tally. Counts beyond the list reuse the last value.</span>
+                        </div>
+                        <input type="text" id="setting-betTemplateCosts" placeholder="100,100,400,400,600,1000" onblur="saveBetTemplateCosts(this.value)" class="settings-number-input">
+
                     </div>
                     <button onclick="resetFormulaWeights()" class="settings-reset-btn">↺ Reset to Defaults</button>
                 </div>
@@ -606,6 +637,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260531-4"></script>
+<script src="/static/script.js?v=20260531-9"></script>
 </body>
 </html>

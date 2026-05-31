@@ -75,8 +75,8 @@ public sealed class DayRecapNotifier
             .ToList();
         if (dateKeys.Count == 0) return;
 
-        var marks = await LoadMarksAsync();
-        var stakes = await _settings.GetBetStakesAsync();
+        var (marks, locked) = await LoadMarksAndLocksAsync();
+        var ladder = await _settings.GetBetTemplateCostsAsync();
 
         foreach (var dateKey in dateKeys)
         {
@@ -104,13 +104,56 @@ public sealed class DayRecapNotifier
             if (pctFinished < 0.80) continue;
             if (dayRaces.Any(r => string.IsNullOrEmpty(r.ResultsJson))) continue;
 
-            // Build the recap.
-            var topByRace = await db.RaceEntries.AsNoTracking()
-                .Where(e => dayRaceIds.Contains(e.RaceId) && e.FinishPos != null && e.FinishPos >= 1 && e.FinishPos <= 3)
-                .Select(e => new { e.RaceId, e.HorseId, e.PostPosition, Finish = e.FinishPos!.Value })
+            // Load EVERY entry of the day (the evaluator needs marked horses' post positions,
+            // which aren't necessarily top-3 finishers).
+            var allEntries = await db.RaceEntries.AsNoTracking()
+                .Where(e => dayRaceIds.Contains(e.RaceId))
+                .Select(e => new { e.RaceId, e.HorseId, e.PostPosition, e.FinishPos })
                 .ToListAsync(ct);
+            var entriesByRace = allEntries.GroupBy(e => e.RaceId).ToDictionary(g => g.Key, g => g.ToList());
 
-            var recap = ComputeRecap(date, dateKey, dayRaces.Cast<object>().ToList(), topByRace.Cast<object>().ToList(), marks, stakes);
+            // Build the recap from the ACTUAL placed (locked) templates. A race counts only
+            // if it's locked AND carries marks; won is priced per the template (place/wide/trio).
+            int placed = 0, racesWon = 0, totalWon = 0, totalStaked = 0;
+            var winningLines = new List<string>();
+            foreach (var r in dayRaces)
+            {
+                if (!locked.Contains(r.RaceId)) continue;
+                var raceEntries = entriesByRace.GetValueOrDefault(r.RaceId) ?? new();
+                var ppByHorse = raceEntries.GroupBy(e => e.HorseId).ToDictionary(g => g.Key, g => g.First().PostPosition);
+                var runners = TemplateBetEvaluator.BuildRunners(r.RaceId, marks, ppByHorse);
+                if (runners.Count == 0) continue;
+                placed++;
+
+                int? pp1 = null, pp2 = null, pp3 = null;
+                foreach (var e in raceEntries)
+                {
+                    if (e.FinishPos == 1) pp1 = e.PostPosition;
+                    else if (e.FinishPos == 2) pp2 = e.PostPosition;
+                    else if (e.FinishPos == 3) pp3 = e.PostPosition;
+                }
+
+                JsonElement? payouts = null; JsonDocument? pdoc = null;
+                try { pdoc = JsonDocument.Parse(r.ResultsJson ?? "{}"); payouts = pdoc.RootElement; }
+                catch (JsonException) { }
+                var outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, ladder);
+                pdoc?.Dispose();
+
+                totalStaked += outcome.Staked;
+                totalWon    += outcome.Won;
+                if (outcome.AnyHit)
+                {
+                    racesWon++;
+                    var trackName = (r.TrackCode != null && TrackNames.TryGetValue(r.TrackCode, out var tn)) ? tn : (r.TrackCode ?? "?");
+                    var detail = string.Join(" · ", outcome.HitLabels
+                        .GroupBy(x => x).Select(g => g.Count() > 1 ? $"{g.Key}×{g.Count()}" : g.Key));
+                    winningLines.Add($"{trackName} R{r.RaceNumber} — {detail} · ¥{outcome.Won:N0}");
+                }
+            }
+
+            DayRecap? recap = placed == 0
+                ? null
+                : new DayRecap(dateKey, dayRaces.Count, placed, racesWon, totalStaked, totalWon, totalWon - totalStaked, winningLines);
 
             // Mark the day as recap-evaluated even if there were no marks, so we don't
             // keep computing this every tick for the rest of the week.
@@ -140,141 +183,40 @@ public sealed class DayRecapNotifier
         await SaveSentDatesAsync(sentDates);
     }
 
-    private DayRecap? ComputeRecap(DateTime date, string dateKey, List<object> dayRaces,
-                                   List<object> topByRace, Dictionary<string, string> marks,
-                                   (int Win, int Quinella, int Trio) stakes)
+
+    /// <summary>Load the marks dict (non-X) and the set of locked (placed) race-ids.</summary>
+    private async Task<(Dictionary<string, string> Marks, HashSet<string> Locked)> LoadMarksAndLocksAsync()
     {
-        // dayRaces: anon { RaceId, TrackCode, RaceNumber, ResultsJson }
-        // topByRace: anon { RaceId, HorseId, PostPosition, Finish }
-        // marks: full marks dict keyed "{raceId}_{horseId}" → symbol (◎/〇/▲/△/X)
-        var raceTops = topByRace
-            .Select(o =>
-            {
-                var t = o.GetType();
-                return new
-                {
-                    RaceId       = (string)t.GetProperty("RaceId")!.GetValue(o)!,
-                    HorseId      = (string)(t.GetProperty("HorseId")!.GetValue(o) ?? ""),
-                    PostPosition = (int?)t.GetProperty("PostPosition")!.GetValue(o),
-                    Finish       = (int)t.GetProperty("Finish")!.GetValue(o)!,
-                };
-            })
-            .GroupBy(x => x.RaceId)
-            .ToDictionary(g => g.Key, g => g.GroupBy(x => x.Finish).ToDictionary(f => f.Key, f => f.First()));
-
-        int honmei = 0, qBox = 0, tBox = 0, totalWon = 0, marked = 0;
-        var winningLines = new List<string>();
-
-        foreach (var rObj in dayRaces)
-        {
-            var t = rObj.GetType();
-            var raceId      = (string)t.GetProperty("RaceId")!.GetValue(rObj)!;
-            var trackCode   = (string?)t.GetProperty("TrackCode")!.GetValue(rObj);
-            var raceNumber  = (int?)t.GetProperty("RaceNumber")!.GetValue(rObj);
-            var resultsJson = (string?)t.GetProperty("ResultsJson")!.GetValue(rObj);
-
-            var raceMarks = marks
-                .Where(kv => kv.Key.StartsWith(raceId + "_"))
-                .ToDictionary(kv => kv.Key.Substring(raceId.Length + 1), kv => kv.Value);
-            if (raceMarks.Count == 0) continue; // unmarked race — skip from totals
-            marked++;
-
-            if (!raceTops.TryGetValue(raceId, out var topMap) || !topMap.ContainsKey(1) || !topMap.ContainsKey(2) || !topMap.ContainsKey(3))
-                continue; // incomplete results — shouldn't happen given the gate above, but be safe
-
-            var first  = topMap[1];
-            var second = topMap[2];
-            var third  = topMap[3];
-
-            var pickedSet = new HashSet<string>(raceMarks.Keys);
-            var honmeiHit   = raceMarks.TryGetValue(first.HorseId, out var firstMark) && firstMark == "◎";
-            var quinellaHit = pickedSet.Contains(first.HorseId) && pickedSet.Contains(second.HorseId);
-            var trioHit     = quinellaHit && pickedSet.Contains(third.HorseId);
-
-            if (!honmeiHit && !quinellaHit && !trioHit) continue;
-
-            // Parse payouts for this race.
-            int winPayout = 0, qPayout = 0, tPayout = 0;
-            try
-            {
-                using var doc = JsonDocument.Parse(resultsJson ?? "{}");
-                var root = doc.RootElement;
-                if (honmeiHit && first.PostPosition.HasValue)
-                {
-                    winPayout = FindPayout(root, "win", new[] { first.PostPosition.Value });
-                }
-                if (quinellaHit && first.PostPosition.HasValue && second.PostPosition.HasValue)
-                {
-                    var combo = new[] { first.PostPosition.Value, second.PostPosition.Value };
-                    Array.Sort(combo);
-                    qPayout = FindPayout(root, "quinella", combo);
-                }
-                if (trioHit && first.PostPosition.HasValue && second.PostPosition.HasValue && third.PostPosition.HasValue)
-                {
-                    var combo = new[] { first.PostPosition.Value, second.PostPosition.Value, third.PostPosition.Value };
-                    Array.Sort(combo);
-                    tPayout = FindPayout(root, "trio", combo);
-                }
-            }
-            catch (JsonException) { /* payouts stay 0 */ }
-
-            // Scale per-¥100 payouts by each leg's own configured stake.
-            var winYen = (int)Math.Round(winPayout * (stakes.Win      / 100.0));
-            var qYen   = (int)Math.Round(qPayout   * (stakes.Quinella / 100.0));
-            var tYen   = (int)Math.Round(tPayout   * (stakes.Trio     / 100.0));
-            var raceWon = winYen + qYen + tYen;
-
-            if (honmeiHit)   honmei++;
-            if (quinellaHit) qBox++;
-            if (trioHit)     tBox++;
-            totalWon += raceWon;
-
-            var trackName = (trackCode != null && TrackNames.TryGetValue(trackCode, out var n)) ? n : (trackCode ?? "?");
-            var hitTags = new List<string>();
-            if (honmeiHit)   hitTags.Add($"◎ Win ¥{winYen:N0}");
-            if (quinellaHit) hitTags.Add($"Q ¥{qYen:N0}");
-            if (trioHit)     hitTags.Add($"T ¥{tYen:N0}");
-            winningLines.Add($"{trackName} R{raceNumber} — {string.Join(" · ", hitTags)}");
-        }
-
-        if (marked == 0) return null;
-        return new DayRecap(dateKey, dayRaces.Count, marked, honmei, qBox, tBox, totalWon, winningLines);
-    }
-
-    /// <summary>Find the payout for a specific combination in a typed payouts array.</summary>
-    private static int FindPayout(JsonElement root, string betType, int[] combo)
-    {
-        if (!root.TryGetProperty(betType, out var arr) || arr.ValueKind != JsonValueKind.Array) return 0;
-        foreach (var slot in arr.EnumerateArray())
-        {
-            if (!slot.TryGetProperty("combo", out var slotCombo) || slotCombo.ValueKind != JsonValueKind.Array) continue;
-            if (slotCombo.GetArrayLength() != combo.Length) continue;
-            var slotArr = slotCombo.EnumerateArray().Select(e => e.GetInt32()).ToArray();
-            Array.Sort(slotArr);
-            if (!slotArr.SequenceEqual(combo)) continue;
-            return slot.TryGetProperty("payout", out var p) ? p.GetInt32() : 0;
-        }
-        return 0;
-    }
-
-    private async Task<Dictionary<string, string>> LoadMarksAsync()
-    {
+        var marks = new Dictionary<string, string>();
+        var locked = new HashSet<string>();
         var raw = await _state.GetStringAsync(MarksStateKey);
-        if (string.IsNullOrWhiteSpace(raw)) return new();
+        if (string.IsNullOrWhiteSpace(raw)) return (marks, locked);
         try
         {
             using var doc = JsonDocument.Parse(raw);
-            if (!doc.RootElement.TryGetProperty("marks", out var marksEl)) return new();
-            var dict = new Dictionary<string, string>();
-            foreach (var prop in marksEl.EnumerateObject())
+            var root = doc.RootElement;
+            if (root.TryGetProperty("marks", out var marksEl) && marksEl.ValueKind == JsonValueKind.Object)
             {
-                var v = prop.Value.GetString();
-                if (string.IsNullOrEmpty(v) || v == "X") continue;
-                dict[prop.Name] = v;
+                foreach (var prop in marksEl.EnumerateObject())
+                {
+                    var v = prop.Value.GetString();
+                    if (string.IsNullOrEmpty(v) || v == "X") continue;
+                    marks[prop.Name] = v;
+                }
             }
-            return dict;
+            if (root.TryGetProperty("raceMeta", out var metaEl) && metaEl.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in metaEl.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.Object
+                        && prop.Value.TryGetProperty("lockStateAtSave", out var lk)
+                        && lk.ValueKind == JsonValueKind.True)
+                        locked.Add(prop.Name);
+                }
+            }
         }
-        catch (JsonException) { return new(); }
+        catch (JsonException) { }
+        return (marks, locked);
     }
 
     private async Task<HashSet<string>> LoadSentDatesAsync()
@@ -296,9 +238,9 @@ public sealed class DayRecapNotifier
 public sealed record DayRecap(
     string DateKey,
     int RacesTotal,
-    int RacesMarked,
-    int HonmeiHits,
-    int QBoxHits,
-    int TBoxHits,
+    int RacesMarked,   // = placed (locked + marked) races
+    int RacesWon,      // races where the placed template hit
+    int TotalStakedYen,
     int TotalWonYen,
+    int NetYen,
     List<string> WinningLines);

@@ -184,13 +184,13 @@ public sealed class ClaudeRecapWriter
                 Processed:         false,
                 DiscordWebhookUrl: webhookUrl,
                 Summary: new RecapSummary(
-                    RacesTotal:   recap.RacesTotal,
-                    RacesMarked:  recap.RacesMarked,
-                    HonmeiHits:   recap.HonmeiHits,
-                    QBoxHits:     recap.QBoxHits,
-                    TBoxHits:     recap.TBoxHits,
-                    TotalWonYen:  recap.TotalWonYen,
-                    WinningLines: recap.WinningLines
+                    RacesTotal:     recap.RacesTotal,
+                    RacesMarked:    recap.RacesMarked,
+                    RacesWon:       recap.RacesWon,
+                    TotalStakedYen: recap.TotalStakedYen,
+                    TotalWonYen:    recap.TotalWonYen,
+                    NetYen:         recap.NetYen,
+                    WinningLines:   recap.WinningLines
                 ),
                 Races: racePayloads
             );
@@ -255,10 +255,10 @@ public sealed record ClaudeRecapPayload(
 public sealed record RecapSummary(
     int RacesTotal,
     int RacesMarked,
-    int HonmeiHits,
-    int QBoxHits,
-    int TBoxHits,
+    int RacesWon,
+    int TotalStakedYen,
     int TotalWonYen,
+    int NetYen,
     List<string> WinningLines);
 
 public sealed record RecapRacePayload(

@@ -534,42 +534,76 @@ function updateQuickStats() {
         }
     }
 
-    // Day P/L: sum across races whose results we have. Spend uses same model as
-    // buildRaceWinBadgesHtml — 1 Win + C(marks,2) Q + C(marks,3) T per race.
-    const legacyStake = parseFloat(globalOreProSettings?.bet_estimate_stake_yen) || 100;
-    const winStake = parseFloat(globalOreProSettings?.bet_stake_win_yen)      || legacyStake;
-    const qStake   = parseFloat(globalOreProSettings?.bet_stake_quinella_yen) || legacyStake;
-    const tStake   = parseFloat(globalOreProSettings?.bet_stake_trio_yen)     || legacyStake;
+    // Day Net (sunk-cost basis): a LOCKED race = a placed bet. Its full template stake
+    // counts the moment it's placed (in the red), BEFORE the race runs. Winnings credit
+    // back as results land — computed from the ACTUAL template bets (place/wide/trio per
+    // the ladder), not the obsolete Win/Q/T model.
     let wonTotal = 0;
     let spentTotal = 0;
-    let racesGraded = 0;
+    let placedCount = 0;
     dateRaceIds.forEach(r_id => {
+        if (!isRaceLocked(r_id)) return;
         const race = { info: globalRaceInfo[r_id], entries: globalRaceEntries[r_id] || [] };
-        const recap = evaluateRaceRecap(race);
-        if (!recap.hasCompleteTop3) return;
-        racesGraded++;
-        const payouts = lookupRacePayouts(race, recap.ppByRank);
-        const marksCount = Object.keys(collectRaceMainMarks(r_id) || {}).length;
-        if (marksCount === 0) return;  // user didn't bet this race
-        const qCombos = marksCount >= 2 ? marksCount * (marksCount - 1) / 2 : 0;
-        const tCombos = marksCount >= 3 ? marksCount * (marksCount - 1) * (marksCount - 2) / 6 : 0;
-        spentTotal += winStake + (qCombos * qStake) + (tCombos * tStake);
-        if (recap.honmeiHit)   wonTotal += payouts.win      * winStake / 100;
-        if (recap.quinellaHit) wonTotal += payouts.quinella * qStake   / 100;
-        if (recap.trioHit)     wonTotal += payouts.trio     * tStake   / 100;
+        const out = evaluateTemplateOutcome(race);
+        if (out.markCount === 0) return; // locked but no marks → no bet
+        placedCount++;
+        spentTotal += out.staked;
+        wonTotal   += out.won;
     });
-    if (racesGraded === 0 || spentTotal === 0) {
+    if (placedCount === 0) {
         qsPL.textContent = '—';
-        qsPLSub.textContent = 'no results yet';
+        qsPLSub.textContent = 'no bets placed';
         qsPL.classList.remove('quick-stat-pos', 'quick-stat-neg');
     } else {
         const net = Math.round(wonTotal - spentTotal);
         const sign = net >= 0 ? '+' : '−';
         qsPL.textContent = `${sign}¥${Math.abs(net).toLocaleString()}`;
-        qsPLSub.textContent = `¥${Math.round(spentTotal).toLocaleString()} staked`;
+        qsPLSub.textContent = `¥${Math.round(spentTotal).toLocaleString()} staked · ¥${Math.round(wonTotal).toLocaleString()} won`;
         qsPL.classList.toggle('quick-stat-pos', net >= 0);
         qsPL.classList.toggle('quick-stat-neg', net < 0);
     }
+}
+
+// All-time sunk-cost tally — lives in the Voting tab (server-derived from locked = placed
+// bets). Rises as you lock bets, credits back as results land. Survives restart + identical
+// across devices. API keys are PascalCase (Program.cs pins PropertyNamingPolicy = null).
+async function refreshSunkCostStat() {
+    const netEl = document.getElementById('voting-sunk-net');
+    if (!netEl) return; // panel only exists on the Voting tab
+    const stakedEl = document.getElementById('voting-sunk-staked');
+    const wonEl    = document.getElementById('voting-sunk-won');
+    const betsEl   = document.getElementById('voting-sunk-bets');
+    const scopeEl  = document.getElementById('voting-sunk-scope');
+    try {
+        const res = await fetch('/api/sunk-cost', { cache: 'no-store' });
+        if (!res.ok) return;
+        const d = await res.json();
+        const net     = Number(d.NetYen)         || 0; // won − staked (negative = in the hole)
+        const staked  = Number(d.TotalStakedYen) || 0;
+        const won     = Number(d.TotalWonYen)    || 0;
+        const placed  = Number(d.PlacedRaces)    || 0;
+        const pending = Number(d.PendingRaces)   || 0;
+        const sign = net >= 0 ? '+' : '−';
+        netEl.textContent = `${sign}¥${Math.abs(net).toLocaleString()}`;
+        netEl.classList.toggle('quick-stat-pos', net >= 0);
+        netEl.classList.toggle('quick-stat-neg', net < 0);
+        if (stakedEl) stakedEl.textContent = `¥${staked.toLocaleString()}`;
+        if (wonEl)    wonEl.textContent    = `¥${won.toLocaleString()}`;
+        if (betsEl)   betsEl.textContent   = pending ? `${placed} (${pending} live)` : `${placed}`;
+        if (scopeEl)  scopeEl.textContent  = d.ResetAt ? `since ${d.ResetAt}` : 'all-time';
+    } catch (_) { /* leave prior values */ }
+}
+
+async function resetSunkCost() {
+    if (!confirm('Reset the sunk-cost tally? It will then count only races from today (JST) forward.')) return;
+    try {
+        await fetch('/api/sunk-cost/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+    } catch (_) { /* ignore */ }
+    refreshSunkCostStat();
 }
 
 function renderEnginePicks() {
@@ -3717,6 +3751,12 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
             if (isAutoLockPastVotesEnabled() && dateTimeline === 'past') {
                 raceLocks[r_id] = true;
             }
+            // Restore a persisted lock (sunk-cost basis: a locked race = a placed bet).
+            // lockStateAtSave is saved into the marks blob but historically was never
+            // re-applied on load, so locks evaporated on refresh. Now they survive.
+            if (globalRaceMeta[r_id]?.lockStateAtSave === true) {
+                raceLocks[r_id] = true;
+            }
             race.entries.forEach((row, idx) => { row.original_index = idx; row._raceId = r_id; });
             globalRaceEntries[r_id] = race.entries;
             globalRaceClass[r_id] = raceClassFlags(race?.info?.race_class);
@@ -4120,6 +4160,13 @@ function toggleRaceLock(event, r_id) {
 
     updateRaceActionButtons(r_id);
     updateAutoBetHighlighting();
+    updateQuickStats(); // locking = placing a bet → Day Net moves immediately
+    // Persist the lock so it survives refresh AND so the backend can read it as the
+    // sunk-cost "placed bet" signal. touchRaceMeta re-snapshots lockStateAtSave.
+    touchRaceMeta(r_id);
+    saveMarksToServer()
+        .then(() => refreshSunkCostStat())  // locking = placing a bet → tally moves
+        .catch(() => { /* best-effort; lock still live in-session */ });
 }
 
 /**
@@ -4134,6 +4181,7 @@ function lockSingleRaceAfterSubmit(raceId) {
     const rid = String(raceId || '').trim();
     if (!rid || raceLocks[rid]) return 0;
     raceLocks[rid] = true;
+    touchRaceMeta(rid); // persist lockStateAtSave; the apply flow saves the blob once after.
     const tbody = document.getElementById(`tbody-${rid}`);
     if (tbody) tbody.innerHTML = buildTableBody(rid, globalRaceEntries[rid]);
     updateRaceActionButtons(rid);
@@ -4151,6 +4199,7 @@ function lockAllRacesForRaceDay(raceId) {
         if ((globalRaceInfo[rid]?.clean_date || '') !== date) return;
         if (!raceLocks[rid]) {
             raceLocks[rid] = true;
+            touchRaceMeta(rid); // persist lockStateAtSave; caller saves the blob once after.
             locked++;
         }
         const tbody = document.getElementById(`tbody-${rid}`);
@@ -4159,6 +4208,43 @@ function lockAllRacesForRaceDay(raceId) {
     });
     updateAutoBetHighlighting();
     return locked;
+}
+
+// Voting-tab "Lock All Bets": locks every MARKED race on the active day in one go and
+// persists once. Locking = "placed bet", so this is the manual catch-all when
+// auto-lock-after-submit didn't fire (e.g. races were already submitted on a prior pass).
+async function lockAllBetsForActiveDay() {
+    const date = currentActiveDate;
+    if (!date) { alert('No active day selected.'); return; }
+
+    const ids = Object.keys(globalRaceInfo).filter(r_id =>
+        (globalRaceInfo[r_id]?.clean_date || '') === date &&
+        Object.keys(collectRaceMainMarks(r_id) || {}).length > 0);
+
+    if (ids.length === 0) { alert(`No marked races to lock for ${date}.`); return; }
+
+    let locked = 0;
+    ids.forEach(r_id => {
+        if (raceLocks[r_id]) return;
+        raceLocks[r_id] = true;
+        touchRaceMeta(r_id);
+        locked++;
+        const tbody = document.getElementById(`tbody-${r_id}`);
+        if (tbody) tbody.innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
+        updateRaceActionButtons(r_id);
+    });
+
+    if (locked > 0) {
+        try { await saveMarksToServer(); } catch (_) { /* lock still live in-session */ }
+    }
+    updateAutoBetHighlighting();
+    updateQuickStats();
+    refreshSunkCostStat();
+    if (currentMainView === 'voting') renderLiveViewPanel();
+
+    const already = ids.length - locked;
+    alert(`Locked ${locked} bet${locked === 1 ? '' : 's'} for ${date}`
+        + (already > 0 ? ` (${already} already locked).` : '.'));
 }
 
 async function toggleMark(r_id, h_id, symbol) {
@@ -5208,6 +5294,154 @@ function lookupRacePayouts(race, ppByRank) {
     };
 }
 
+// ── Template-aware bet outcome (sunk-cost / winnings) ──────────────────────
+// The OLD model assumed you always bet Win + Q Box + T Box. You don't — OrePro
+// auto-fires ONE template per mark-count (your 6-slot ladder). This evaluator
+// mirrors that ladder so winnings reflect the bets you ACTUALLY placed.
+// Keep in sync with OREPRO_CAPABILITIES.md + the C# TemplateBetEvaluator.
+const BET_UNIT_YEN = 100; // each ladder combo is a ¥100 ticket
+
+// All marked runners for a race WITH their post positions. Unlike collectRaceMainMarks
+// (symbol-keyed → drops duplicate △), this keeps every marked horse — required for the
+// 5/6-mark templates that carry multiple △.
+function collectRaceMarkedRunners(raceId) {
+    const validSymbols = new Set(["◎", "〇", "▲", "△"]);
+    const ppByHorse = {};
+    (globalRaceEntries[raceId] || []).forEach(row => {
+        const hid = String(row?.Horse_ID ?? '').split('.')[0].trim();
+        const pp = parseInt(row?.PP, 10);
+        if (hid && Number.isFinite(pp) && pp > 0) ppByHorse[hid] = pp;
+    });
+    const runners = [];
+    for (const [key, symbol] of Object.entries(globalMarks)) {
+        if (!symbol || !validSymbols.has(symbol)) continue;
+        const us = key.indexOf('_');
+        if (us < 0) continue;
+        const r_id = key.slice(0, us), h_id = key.slice(us + 1);
+        if (r_id !== raceId || !h_id) continue;
+        runners.push({ horseId: h_id, symbol, pp: ppByHorse[h_id] || null });
+    }
+    return runners;
+}
+
+function findSlotPayout(arr, combo) {
+    if (!Array.isArray(arr)) return 0;
+    const key = JSON.stringify([...combo].sort((a, b) => a - b));
+    for (const slot of arr) {
+        const sc = Array.isArray(slot?.combo) ? [...slot.combo].sort((a, b) => a - b) : null;
+        if (sc && JSON.stringify(sc) === key) return parseInt(slot?.payout, 10) || 0;
+    }
+    return 0;
+}
+
+function nCk(n, k) { // combinations
+    if (k < 0 || k > n) return 0;
+    let r = 1;
+    for (let i = 0; i < k; i++) r = r * (n - i) / (i + 1);
+    return Math.round(r);
+}
+
+// ── The bet-plan seam (FUTURE-PROOF for dynamic bets) ───────────────────────
+// A race's placed bets = a list of bet LINES. Today buildRaceBetLines() derives
+// them from the mark-count ladder, but this is the ONE place the bet shape is
+// decided: a future "dynamic bet" source (OrePro easy-mode-off custom bets read
+// back via api_post_bet_customize get, or an explicit per-race bet record) can
+// return the same line shape and every downstream consumer — staked, won, labels —
+// works unchanged. Each line is self-describing:
+//   { ticket, method, label, horses:[{pp}], axisPp?, comboCount, stakePerCombo }
+// so staked = Σ comboCount·stakePerCombo and won is priced per line, with NO
+// dependency on "mark count" beyond how the ladder happens to build them today.
+function buildRaceBetLines(race) {
+    const info = race?.info || {};
+    const raceId = String(info.race_id || '').trim();
+    const runners = collectRaceMarkedRunners(raceId);
+    const n = runners.length;
+    if (n === 0) return { runners, lines: [], staked: 0 };
+
+    const honmei = runners.find(r => r.symbol === "◎") || runners[0];
+    // Ladder line shapes (combo counts mirror OREPRO_CAPABILITIES.md).
+    let lines;
+    if (n === 1)      lines = [{ ticket: 'place', method: 'normal', label: '複勝',       horses: [honmei],         comboCount: 1 }];
+    else if (n === 2) lines = [{ ticket: 'wide',  method: 'box',    label: 'ワイド',     horses: runners.slice(),  comboCount: nCk(n, 2) }];
+    else if (n === 3) lines = [{ ticket: 'trio',  method: 'box',    label: '3連複',      horses: runners.slice(),  comboCount: nCk(n, 3) },
+                               { ticket: 'wide',  method: 'box',    label: 'ワイド',     horses: runners.slice(),  comboCount: nCk(n, 2) }];
+    else if (n === 4) lines = [{ ticket: 'trio',  method: 'box',    label: '3連複',      horses: runners.slice(),  comboCount: nCk(n, 3) }];
+    else              lines = [{ ticket: 'trio',  method: 'nagashi1', label: '3連複ながし', horses: runners.filter(r => r !== honmei), axisPp: honmei.pp, comboCount: nCk(n - 1, 2) }];
+
+    // Spread the (editable) ladder total across all combos → per-combo stake. A dynamic
+    // source would instead set stakePerCombo on each line directly.
+    const totalCombos = lines.reduce((s, l) => s + (l.comboCount || 0), 0) || 1;
+    const totalStake = stakeForMarkCount(n);
+    const perCombo = totalStake / totalCombos;
+    lines.forEach(l => { l.stakePerCombo = perCombo; });
+    return { runners, lines, staked: totalStake };
+}
+
+// Score one bet line against the finishing result. Returns ¥ won for that line.
+// Extend here for new (ticket, method) combos when dynamic bets arrive.
+function scoreBetLine(line, t3, t3set, payouts) {
+    const stakeFactor = (line.stakePerCombo || 0) / 100; // payouts are per-¥100
+    const pps = (line.horses || []).map(h => h.pp).filter(Boolean);
+    let won = 0;
+    if (line.ticket === 'place') {
+        const pp = pps[0];
+        if (pp && t3set.has(pp)) won += findSlotPayout(payouts.place, [pp]) * stakeFactor;
+    } else if (line.ticket === 'wide' && line.method === 'box') {
+        for (let i = 0; i < pps.length; i++) for (let j = i + 1; j < pps.length; j++)
+            if (t3set.has(pps[i]) && t3set.has(pps[j]))
+                won += findSlotPayout(payouts.wide, [pps[i], pps[j]]) * stakeFactor;
+    } else if (line.ticket === 'trio' && line.method === 'box') {
+        const set = new Set(pps);
+        if (t3.every(pp => set.has(pp))) won += findSlotPayout(payouts.trio, t3) * stakeFactor;
+    } else if (line.ticket === 'trio' && line.method === 'nagashi1') {
+        if (line.axisPp && t3set.has(line.axisPp)) {
+            const opp = new Set(pps);
+            const others = t3.filter(pp => pp !== line.axisPp);
+            if (others.length === 2 && others.every(pp => opp.has(pp)))
+                won += findSlotPayout(payouts.trio, t3) * stakeFactor;
+        }
+    }
+    // Unknown (ticket, method) → 0 for now; add a branch when dynamic bets introduce it.
+    return Math.round(won);
+}
+
+// Evaluate what the race's placed bets actually won. Returns staked, won, and per-line
+// detail for display. Source-agnostic: consumes whatever buildRaceBetLines() produced.
+function evaluateTemplateOutcome(race) {
+    const info = race?.info || {};
+    const raceId = String(info.race_id || '').trim();
+    const raceLabel = `${trackName(info.place)} R${info.race_number || '?'}`.trim();
+    const plan = buildRaceBetLines(race);
+    const out = { raceId, raceLabel, markCount: plan.runners.length, hasResults: false,
+                  staked: plan.staked, won: 0, lines: [], anyHit: false };
+    if (plan.runners.length === 0) return out;
+
+    const entries = Array.isArray(race?.entries) ? race.entries : [];
+    const top3pp = {};
+    entries.forEach(row => {
+        const rank = parseFinishRank(row?.Finish);
+        if (!rank || rank < 1 || rank > 3) return;
+        const pp = parseInt(row?.PP, 10);
+        if (top3pp[rank] == null && Number.isFinite(pp) && pp > 0) top3pp[rank] = pp;
+    });
+    if (!(top3pp[1] && top3pp[2] && top3pp[3])) return out; // unsettled → staked known, won 0
+    out.hasResults = true;
+
+    let payouts = null;
+    try { const raw = info.results_json; payouts = typeof raw === 'string' ? JSON.parse(raw) : raw; }
+    catch (_) { payouts = null; }
+    if (!payouts) return out;
+
+    const t3 = [top3pp[1], top3pp[2], top3pp[3]];
+    const t3set = new Set(t3);
+    for (const line of plan.lines) {
+        const won = scoreBetLine(line, t3, t3set, payouts);
+        if (won > 0) { out.won += won; out.lines.push({ label: line.label, payout: won }); }
+    }
+    out.anyHit = out.won > 0;
+    return out;
+}
+
 function getDayOverallHitSummary(targetDate) {
     const date = String(targetDate || '').trim();
     const timeline = globalDateTimelineByDate[date] || null;
@@ -5396,25 +5630,10 @@ function toggleWinningVotesFocus() {
 }
 
 function computeRaceNet(race) {
-    const recap = evaluateRaceRecap(race);
-    if (!recap.hasCompleteTop3) return null;
-    const marksCount = Object.keys(collectRaceMainMarks(recap.raceId) || {}).length;
-    if (!marksCount) return null;
-
-    const payouts = lookupRacePayouts(race, recap.ppByRank);
-    const legacyStake = parseFloat(globalOreProSettings?.bet_estimate_stake_yen) || 100;
-    const winStake = parseFloat(globalOreProSettings?.bet_stake_win_yen)      || legacyStake;
-    const qStake   = parseFloat(globalOreProSettings?.bet_stake_quinella_yen) || legacyStake;
-    const tStake   = parseFloat(globalOreProSettings?.bet_stake_trio_yen)     || legacyStake;
-
-    const wonYen = (recap.honmeiHit   ? payouts.win      * winStake / 100 : 0)
-                 + (recap.quinellaHit ? payouts.quinella * qStake   / 100 : 0)
-                 + (recap.trioHit     ? payouts.trio     * tStake   / 100 : 0);
-    const qCombos = marksCount >= 2 ? marksCount * (marksCount - 1) / 2 : 0;
-    const tCombos = marksCount >= 3 ? marksCount * (marksCount - 1) * (marksCount - 2) / 6 : 0;
-    const spentYen = winStake + (qCombos * qStake) + (tCombos * tStake);
-    const anyHit = recap.honmeiHit || recap.quinellaHit || recap.trioHit;
-    return { wonYen, spentYen, netYen: wonYen - spentYen, anyHit };
+    // Placed (locked) bets only, priced from the ACTUAL template (place/wide/trio).
+    const out = evaluateTemplateOutcome(race);
+    if (out.markCount === 0 || !isRaceLocked(out.raceId) || !out.hasResults) return null;
+    return { wonYen: out.won, spentYen: out.staked, netYen: out.won - out.staked, anyHit: out.anyHit };
 }
 
 function buildDayTotalNetHtml(date) {
@@ -5447,44 +5666,28 @@ function buildDayTotalNetHtml(date) {
 }
 
 function buildRaceWinBadgesHtml(race) {
-    const recap = evaluateRaceRecap(race);
-    if (!recap.hasCompleteTop3) return "";
-
-    // Look up actual ¥ payouts from HR data. Per-¥100 ticket; scaled to the
-    // operator's per-leg stake (win/quinella/trio) so labels reflect what they
-    // actually would have won at their real bet sizing.
-    const payouts = lookupRacePayouts(race, recap.ppByRank);
-    const legacyStake = parseFloat(globalOreProSettings?.bet_estimate_stake_yen) || 100;
-    const winStake = parseFloat(globalOreProSettings?.bet_stake_win_yen)      || legacyStake;
-    const qStake   = parseFloat(globalOreProSettings?.bet_stake_quinella_yen) || legacyStake;
-    const tStake   = parseFloat(globalOreProSettings?.bet_stake_trio_yen)     || legacyStake;
-    const fmtYen = (n, stake) => n > 0 ? `¥${Math.round(n * stake / 100).toLocaleString()}` : '';
-
-    const winYen = fmtYen(payouts.win, winStake);
-    const qYen   = fmtYen(payouts.quinella, qStake);
-    const tYen   = fmtYen(payouts.trio, tStake);
+    // Reflect the ACTUAL template bets (place/wide/trio per the ladder), not the old
+    // Win/Q/T assumption. Only show badges for a placed (locked) bet, and only on a
+    // settled race.
+    const out = evaluateTemplateOutcome(race);
+    if (out.markCount === 0 || !isRaceLocked(out.raceId) || !out.hasResults) return "";
 
     const badges = [];
-    if (recap.honmeiHit)   badges.push(`<span class="race-hit-pill race-hit-honmei" title="◎ Honmei hit${winYen ? ` — paid ${winYen}` : ''}">◎ Win${winYen ? ` ${winYen}` : ''}</span>`);
-    if (recap.quinellaHit) badges.push(`<span class="race-hit-pill race-hit-quinella" title="Quinella Box hit${qYen ? ` — paid ${qYen}` : ''}">Q Box${qYen ? ` ${qYen}` : ''}</span>`);
-    if (recap.trioHit)     badges.push(`<span class="race-hit-pill race-hit-trio" title="Trio Box hit${tYen ? ` — paid ${tYen}` : ''}">T Box${tYen ? ` ${tYen}` : ''}</span>`);
+    // Aggregate per-label payouts (a 3-mark wide box can have multiple winning legs).
+    const byLabel = {};
+    out.lines.forEach(l => { byLabel[l.label] = (byLabel[l.label] || 0) + l.payout; });
+    const pillClass = { '複勝': 'race-hit-honmei', 'ワイド': 'race-hit-quinella', '3連複': 'race-hit-trio', '3連複ながし': 'race-hit-trio' };
+    Object.entries(byLabel).forEach(([label, pay]) => {
+        const cls = pillClass[label] || 'race-hit-trio';
+        badges.push(`<span class="race-hit-pill ${cls}" title="${label} hit — paid ¥${pay.toLocaleString()}">${label} ¥${pay.toLocaleString()}</span>`);
+    });
 
-    if (!badges.length) return "";
-
-    // Net pill: per-race won minus per-race spend across all three legs.
-    // Spend model matches the day-recap: 1 Win ticket + C(marks,2) Q combos + C(marks,3) T combos.
-    const wonYen   = (recap.honmeiHit   ? payouts.win      * winStake / 100 : 0)
-                   + (recap.quinellaHit ? payouts.quinella * qStake   / 100 : 0)
-                   + (recap.trioHit     ? payouts.trio     * tStake   / 100 : 0);
-    const marksCount = Object.keys(collectRaceMainMarks(recap.raceId) || {}).length;
-    const qCombos = marksCount >= 2 ? marksCount * (marksCount - 1) / 2 : 0;
-    const tCombos = marksCount >= 3 ? marksCount * (marksCount - 1) * (marksCount - 2) / 6 : 0;
-    const spentYen = winStake + (qCombos * qStake) + (tCombos * tStake);
-    const netYen = Math.round(wonYen - spentYen);
+    // Always show the net pill for a placed bet (even a loss — that's the sunk-cost point).
+    const netYen = Math.round(out.won - out.staked);
     const netSign = netYen >= 0 ? '+' : '-';
     const netAbs = Math.abs(netYen).toLocaleString();
     const netClass = netYen >= 0 ? 'race-hit-net-pos' : 'race-hit-net-neg';
-    const netTitle = `Net for this race: ¥${netSign}${netAbs} (won ¥${Math.round(wonYen).toLocaleString()} − spent ¥${spentYen.toLocaleString()})`;
+    const netTitle = `Net for this race: ${netSign}¥${netAbs} (won ¥${Math.round(out.won).toLocaleString()} − staked ¥${out.staked.toLocaleString()})`;
     badges.push(`<span class="race-hit-pill race-hit-net ${netClass}" title="${netTitle}">Net ${netSign}¥${netAbs}</span>`);
 
     return `<span class="race-hit-wrap">${badges.join('')}</span>`;
@@ -6084,6 +6287,34 @@ let globalOreProApplyState = {};
 // loadOreProSettingsLite at page init.
 let globalOreProSettings = {};
 
+// --- Mark-count template-cost ladder (sunk-cost basis) ---
+// OrePro auto-fires ONE template keyed by how many marks a race carries; each costs a
+// fixed total. The ladder is editable in Settings (bet_template_costs); this mirrors the
+// backend default + StakeForMarkCount so Day P/L, the sunk-cost stat, and Discord agree.
+const DEFAULT_BET_TEMPLATE_COSTS = [100, 100, 400, 400, 600, 1000];
+
+function getBetTemplateCosts() {
+    const raw = globalOreProSettings?.bet_template_costs;
+    if (typeof raw === 'string' && raw.trim()) {
+        try {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr) && arr.length && arr.every(c => Number.isFinite(Number(c)) && Number(c) >= 0)) {
+                return arr.map(Number);
+            }
+        } catch (_) { /* fall through to default */ }
+    }
+    return DEFAULT_BET_TEMPLATE_COSTS;
+}
+
+// Total ¥ a race carrying `markCount` marks cost to bet. 0 marks → ¥0; counts beyond the
+// ladder clamp to the last entry. Mirrors SettingsService.StakeForMarkCount.
+function stakeForMarkCount(markCount) {
+    const ladder = getBetTemplateCosts();
+    const n = Number(markCount) || 0;
+    if (n <= 0 || ladder.length === 0) return 0;
+    return ladder[Math.min(n, ladder.length) - 1];
+}
+
 // When true, render race times in the user's local timezone with AM/PM. When false,
 // keep JST 24h (the historical default — operator mentally maps it).
 let globalDisplayLocalTime = false;
@@ -6587,7 +6818,10 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
 
         if ((requestCompleted || rowStatus === 'ok') && isAutoLockAfterSubmitEnabled()) {
             // Lock ONLY this race — applying one race shouldn't lock others you're still editing.
-            lockSingleRaceAfterSubmit(raceId);
+            if (lockSingleRaceAfterSubmit(raceId) > 0) {
+                saveMarksToServer().then(() => refreshSunkCostStat()).catch(() => {}); // persist auto-lock (sunk-cost basis)
+                updateQuickStats();
+            }
         }
 
         const out = document.getElementById('orepro-sync-results');
@@ -6750,7 +6984,13 @@ async function applyAllDayVotesToOrePro() {
         }
 
         // Lock only the races we actually submitted (not empty/no-mark races for the day).
-        if (okCount > 0 && isAutoLockAfterSubmitEnabled()) eligible.forEach(lockSingleRaceAfterSubmit);
+        if (okCount > 0 && isAutoLockAfterSubmitEnabled()) {
+            const lockedCount = eligible.reduce((n, rid) => n + lockSingleRaceAfterSubmit(rid), 0);
+            if (lockedCount > 0) {
+                saveMarksToServer().then(() => refreshSunkCostStat()).catch(() => {}); // persist auto-locks once
+                updateQuickStats();
+            }
+        }
 
         await loadOreProApplyState();
         if (okCount > 0) loadVoteHistory().then(renderVoteHistory); // Phase 30: refresh badges
@@ -7263,7 +7503,7 @@ function switchMainView(view) {
     updateLiveViewPopoutAvailability();
     updateWinningVotesFocusButton();
 
-    if (isVoting) renderLiveViewPanel();
+    if (isVoting) { renderLiveViewPanel(); refreshSunkCostStat(); }
 }
 
 // ── Phase 31: Horse Deep-Dive Tab ──────────────────────────────────────────
@@ -8934,6 +9174,7 @@ async function updateSidebarSettings() {
     applyRaceTableLayoutSettings();
     renderEnginePicks();
     updateQuickStats();
+    refreshSunkCostStat();
 
     if (previousDataEngine !== appConfig.backend.dataEngine) {
         appendConsoleLine(`[Engine] Switched data engine to ${appConfig.backend.dataEngine.toUpperCase()}. Reloading races...`);
@@ -9356,6 +9597,7 @@ function startLiveHub() {
     conn.on('ResultsUpdated', payload => {
         if (!payload) return;
         patchRaceEntries(payload.raceId, payload.entries, ['finish']);
+        refreshSunkCostStat(); // results landing credits wins back against the tally
     });
 
     conn.start()
@@ -9385,6 +9627,10 @@ async function loadOrchestratorSettings() {
         set('setting-betStakeWin',      s.bet_stake_win_yen      ?? legacyStake);
         set('setting-betStakeQuinella', s.bet_stake_quinella_yen ?? legacyStake);
         set('setting-betStakeTrio',     s.bet_stake_trio_yen     ?? legacyStake);
+        // Template-cost ladder: stored as a JSON int[], shown as comma-separated.
+        let ladderCsv = DEFAULT_BET_TEMPLATE_COSTS.join(',');
+        try { const a = JSON.parse(s.bet_template_costs || ''); if (Array.isArray(a) && a.length) ladderCsv = a.join(','); } catch (_) {}
+        set('setting-betTemplateCosts', ladderCsv);
 
         // Checkbox for "navigate to bet_complete.html after submit"
         const navCb = document.getElementById('setting-orepro-nav-to-complete');
@@ -9443,6 +9689,29 @@ async function saveBetStake(leg, value) {
     try { await reEstimateActiveDay(); } catch (_) { /* fine */ }
     // Re-render past-race hit chips (they read stake at render time).
     if (typeof rerenderAllRaceTables === 'function') rerenderAllRaceTables();
+}
+
+// Save the mark-count template-cost ladder. Input is comma-separated ¥ amounts (1 mark,
+// 2, 3, …); stored as a JSON int[] in app_settings (bet_template_costs).
+async function saveBetTemplateCosts(value) {
+    const parts = String(value || '')
+        .split(',')
+        .map(x => parseInt(x.trim(), 10))
+        .filter(n => Number.isFinite(n) && n >= 0);
+    if (parts.length === 0) {
+        // Reject empties — restore the displayed value from the current setting.
+        const el = document.getElementById('setting-betTemplateCosts');
+        if (el) el.value = getBetTemplateCosts().join(',');
+        return;
+    }
+    const json = JSON.stringify(parts);
+    await saveOrchestratorSetting('bet_template_costs', json);
+    globalOreProSettings = { ...(globalOreProSettings || {}), bet_template_costs: json };
+    // Normalize the field to the parsed list and refresh anything that prices stakes.
+    const el = document.getElementById('setting-betTemplateCosts');
+    if (el) el.value = parts.join(',');
+    try { updateQuickStats(); } catch (_) {}
+    try { refreshSunkCostStat(); } catch (_) {}
 }
 
 async function saveOrchestratorSetting(key, value) {
