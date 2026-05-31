@@ -444,6 +444,7 @@ function updateQuickStats() {
     const qsAgreementSub = document.getElementById('qs-agreement-sub');
     const qsPL = document.getElementById('qs-pl');
     const qsPLSub = document.getElementById('qs-pl-sub');
+    updateLockAllBetsButton(); // keep Lock All / Unlock All label in sync with lock state
     if (!qsMarks) return;
 
     const activeDate = currentActiveDate;
@@ -3194,32 +3195,41 @@ function getEngineMarkPlanForRace(r_id, opts = {}) {
     const hasOverlay = top.some(e => e.odds !== null && e.odds >= T.OVERLAY_LO && e.odds <= T.OVERLAY_HI);
     const hasAxis = standout >= T.AXIS_GAP && favOdds !== null;
 
-    // ── Base count from shape ────────────────────────────────────────────────
-    let count, shape;
-    if (wideOpen) {                          shape = 'wide-open';      count = 4; }
-    else if (openPackBehindStandout) {       shape = 'standout+pack';  count = 5; }
-    else if (naturalCount === 1 && standout >= T.STANDOUT_GAP) { shape = 'lone-favorite'; count = 1; }
-    else if (naturalCount === 2) {           shape = 'two-clear';      count = 2; }
-    else if (naturalCount === 3) {           shape = 'tight-top3';     count = 3; }
-    else {                                   shape = 'tight-pack';     count = 4; }
+    // ── Shape classification (no count yet) ──────────────────────────────────
+    let shape;
+    if (wideOpen)                                              shape = 'wide-open';
+    else if (openPackBehindStandout)                          shape = 'standout+pack';
+    else if (naturalCount === 1 && standout >= T.STANDOUT_GAP) shape = 'lone-favorite';
+    else if (naturalCount === 2)                              shape = 'two-clear';
+    else if (naturalCount === 3)                              shape = 'tight-top3';
+    else                                                      shape = 'tight-pack';
 
-    // ── Risk modulation ──────────────────────────────────────────────────────
-    if (risk <= T.SAFE_MAX) {
-        // SAFE: shrink the boxes toward the anchor; never nagashi.
-        if (shape === 'standout+pack') count = hasAxis ? 1 : 2; // just back the standout
-        else if (shape === 'wide-open') count = 0;              // no anchor → abstain
-        else if (count >= 3) count -= 1;                        // 4→3, 3→2 (1,2 unchanged)
-    } else if (risk >= T.CHAOS_MIN) {
-        // CHAOS: spread / hunt value.
-        if (shape === 'lone-favorite') count = hasAxis ? 5 : 2; // swing off the chalk via nagashi
-        else if (shape === 'standout+pack') count = r >= 0.85 ? 6 : 5;
-        else if (shape === 'wide-open') count = hasAxis ? 6 : 4; // wide net only with an axis
-        else count = Math.min(4, count + 1);                    // tighten boxes up a notch
+    // ── Count from (shape × risk) — WIDE-NET BACKBONE ────────────────────────
+    // The 3-mark trio+wide box (count 3) is the workhorse: it cashes whenever ANY 2 of
+    // 3 picks finish top-3, which backtests (May 2 / May 23) show is what actually wins
+    // on JRA cards — the ワイド line carried the old default's profits. count 4 (trio box
+    // ONLY, no wide line) is intentionally NEVER used: it drops the wide safety net and
+    // was the all-or-nothing template that went 0-for last night. SAFE shrinks to cheaper
+    // nets (複勝 / 2-horse wide); CHAOS escalates a genuine ◎ standout into a nagashi but
+    // otherwise keeps the 3-horse wide net on value-tilted picks.
+    const zone = risk <= T.SAFE_MAX ? 'SAFE' : risk >= T.CHAOS_MIN ? 'CHAOS' : 'BLEND';
+    let count;
+    switch (shape) {
+        case 'lone-favorite': count = zone === 'SAFE' ? 1 : 3; break;
+        case 'two-clear':     count = zone === 'SAFE' ? 2 : 3; break;
+        case 'tight-top3':    count = 3; break;
+        case 'tight-pack':    count = zone === 'SAFE' ? 2 : 3; break;
+        // Nagashi (count 5) is a rare, high-variance swing — reserve it for a genuine ◎
+        // standout only at the very top of the slider. Backtests show escalating to nagashi
+        // otherwise just burns the wide net's edge (0-hit cards). Chaos still hunts value,
+        // but via the 3-horse wide net on the value-tilted power ranking, not wide-less bets.
+        case 'standout+pack': count = (zone === 'CHAOS' && hasAxis && r >= 0.85) ? 5 : 3; break;
+        default:              count = zone === 'SAFE' ? 0 : 3; break; // wide-open: no safe anchor → abstain
     }
-    // BLEND keeps the shape's base count.
 
-    // Nagashi-needs-standout: counts 5-6 require a genuine ◎ axis, else cap at box.
-    if (count >= 5 && !hasAxis) count = 4;
+    // Nagashi-needs-standout: counts 5-6 require a genuine ◎ axis; else fall back to the
+    // 3-horse wide net (NOT the wide-less trio box).
+    if (count >= 5 && !hasAxis) count = 3;
 
     // ── Abstention (return 0) — the core "bet fewer, better races" lever ──────
     if (risk >= T.CHAOS_MIN && !hasOverlay && underpricedFav) return empty('chalk-no-overlay');
@@ -4325,41 +4335,76 @@ function lockAllRacesForRaceDay(raceId) {
     return locked;
 }
 
-// Voting-tab "Lock All Bets": locks every MARKED race on the active day in one go and
-// persists once. Locking = "placed bet", so this is the manual catch-all when
-// auto-lock-after-submit didn't fire (e.g. races were already submitted on a prior pass).
-async function lockAllBetsForActiveDay() {
+// Marked race-ids on the active day (a "bet" = a race carrying at least one main mark).
+function getActiveDayMarkedRaceIds() {
+    const date = currentActiveDate;
+    if (!date) return [];
+    return Object.keys(globalRaceInfo).filter(r_id =>
+        (globalRaceInfo[r_id]?.clean_date || '') === date &&
+        Object.keys(collectRaceMainMarks(r_id) || {}).length > 0);
+}
+
+// True when every marked race on the active day is already locked (and there's ≥1).
+function areAllActiveDayBetsLocked() {
+    const ids = getActiveDayMarkedRaceIds();
+    return ids.length > 0 && ids.every(r_id => !!raceLocks[r_id]);
+}
+
+// Voting-tab "Lock All / Unlock All Bets": one button that flips based on state.
+// Locking = "placed bet" (counts toward sunk cost / Day Net); this is the manual
+// catch-all when auto-lock-after-submit didn't fire, and now also the way to UNDO it.
+async function toggleLockAllBetsForActiveDay() {
     const date = currentActiveDate;
     if (!date) { alert('No active day selected.'); return; }
 
-    const ids = Object.keys(globalRaceInfo).filter(r_id =>
-        (globalRaceInfo[r_id]?.clean_date || '') === date &&
-        Object.keys(collectRaceMainMarks(r_id) || {}).length > 0);
+    const ids = getActiveDayMarkedRaceIds();
+    if (ids.length === 0) { alert(`No marked races for ${date}.`); return; }
 
-    if (ids.length === 0) { alert(`No marked races to lock for ${date}.`); return; }
-
-    let locked = 0;
+    const unlocking = areAllActiveDayBetsLocked(); // all locked → this click unlocks
+    let changed = 0;
     ids.forEach(r_id => {
-        if (raceLocks[r_id]) return;
-        raceLocks[r_id] = true;
+        const want = !unlocking; // locking → true, unlocking → false
+        if (!!raceLocks[r_id] === want) return;
+        raceLocks[r_id] = want;
         touchRaceMeta(r_id);
-        locked++;
+        changed++;
         const tbody = document.getElementById(`tbody-${r_id}`);
         if (tbody) tbody.innerHTML = buildTableBody(r_id, globalRaceEntries[r_id]);
         updateRaceActionButtons(r_id);
     });
 
-    if (locked > 0) {
-        try { await saveMarksToServer(); } catch (_) { /* lock still live in-session */ }
+    if (changed > 0) {
+        try { await saveMarksToServer(); } catch (_) { /* state still live in-session */ }
     }
     updateAutoBetHighlighting();
     updateQuickStats();
     refreshSunkCostStat();
+    updateLockAllBetsButton();
     if (currentMainView === 'voting') renderLiveViewPanel();
 
-    const already = ids.length - locked;
-    alert(`Locked ${locked} bet${locked === 1 ? '' : 's'} for ${date}`
-        + (already > 0 ? ` (${already} already locked).` : '.'));
+    if (unlocking) {
+        const already = ids.length - changed;
+        alert(`Unlocked ${changed} bet${changed === 1 ? '' : 's'} for ${date}`
+            + (already > 0 ? ` (${already} already unlocked).` : '.'));
+    } else {
+        const already = ids.length - changed;
+        alert(`Locked ${changed} bet${changed === 1 ? '' : 's'} for ${date}`
+            + (already > 0 ? ` (${already} already locked).` : '.'));
+    }
+}
+
+// Swap the button between 🔒 Lock All and 🔓 Unlock All depending on whether the
+// active day's marked races are all locked. Safe no-op if the button isn't present.
+function updateLockAllBetsButton() {
+    const btn = document.getElementById('btn-lock-all-bets');
+    if (!btn) return;
+    if (areAllActiveDayBetsLocked()) {
+        btn.textContent = '🔓 Unlock All Bets';
+        btn.title = 'All marked races for the selected day are locked — click to UNLOCK them all (removes them from placed-bet / sunk-cost tracking).';
+    } else {
+        btn.textContent = '🔒 Lock All Bets';
+        btn.title = 'Lock every marked race for the selected day — locking marks them as placed bets so they count toward your sunk cost / Day Net.';
+    }
 }
 
 async function toggleMark(r_id, h_id, symbol) {
@@ -7555,6 +7600,7 @@ function renderLiveViewPanel() {
     const recapPanel = document.getElementById('voting-recap-panel');
     if (!sidebarTitle || !sidebarDisplay || !mainTitle || !recapPanel) return;
 
+    updateLockAllBetsButton(); // sync Lock All / Unlock All on voting-tab render
     const date = String(currentActiveDate || '').trim();
     const timeline = globalDateTimelineByDate[date] || '';
     sidebarTitle.textContent = `By Racecourse · ${date || 'No day selected'}`;

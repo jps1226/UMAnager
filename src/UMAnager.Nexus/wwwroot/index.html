@@ -269,7 +269,7 @@
                 <button id="btn-orepro-open" onclick="openOreProCompanion()" class="toolbar-btn toolbar-btn-muted">🌐 Open OrePro</button>
                 <button id="btn-orepro-auto-day" onclick="autoBetActiveDay()" class="toolbar-btn toolbar-btn-primary" title="Auto-pick the rest of the day with the current risk slider. Only updates marks within UMAnager — nothing is sent to OrePro until you click Apply Day Votes.">⚡ Auto Bet Day</button>
                 <button id="btn-orepro-apply-day" onclick="applyAllDayVotesToOrePro()" class="toolbar-btn toolbar-btn-primary" title="Send all unsubmitted voted races for the selected day to OrePro (apply + submit each one).">📤 Apply Day Votes</button>
-                <button id="btn-lock-all-bets" onclick="lockAllBetsForActiveDay()" class="toolbar-btn toolbar-btn-muted" title="Lock every marked race for the selected day — locking marks them as placed bets so they count toward your sunk cost / Day Net.">🔒 Lock All Bets</button>
+                <button id="btn-lock-all-bets" onclick="toggleLockAllBetsForActiveDay()" class="toolbar-btn toolbar-btn-muted" title="Lock every marked race for the selected day — locking marks them as placed bets so they count toward your sunk cost / Day Net.">🔒 Lock All Bets</button>
                 <button id="btn-orepro-clear-day" onclick="clearActiveDayBets()" class="toolbar-btn toolbar-btn-muted" title="Clear all saved marks for the selected day so you can re-evaluate the card">🧹 Clear Day Bets</button>
                 <button id="btn-reestimate-day" onclick="reEstimateActiveDay()" class="toolbar-btn toolbar-btn-muted">🧮 Re-estimate Day</button>
             </div>
@@ -637,6 +637,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260531-10"></script>
+<script src="/static/script.js?v=20260531-13"></script>
 </body>
 </html>
