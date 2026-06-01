@@ -3156,6 +3156,10 @@ const ENGINE_TUNING = {
     OVERLAY_HI: 70,       //   engine likes → "overlay/value present" in the race
     SAFE_MAX: 35,         // risk ≤ this = SAFE stance
     CHAOS_MIN: 65,        // risk ≥ this = CHAOS stance
+    // Default-OrePro safety-net mode: the marginal (4th, then 3rd) mark is TRIMMED if its
+    // win odds exceed this risk-scaled ceiling (a "true longshot" the engine won't back).
+    OREPRO_TRIM_BASE: 8,  // odds ceiling at risk 0 (≈ trim anything longer than 8:1)
+    OREPRO_TRIM_SPAN: 40, // ceiling rises by SPAN × (risk/100); CHAOS keeps all (∞)
 };
 
 // The engine's full decision for a race: { count, assignments:[{h_id,symbol}],
@@ -3233,12 +3237,21 @@ function getEngineMarkPlanForRace(r_id, opts = {}) {
     // is irrelevant, so skip the custom shape→count + abstention logic and just mark the
     // top contenders (more of them, knowing the safety net is there).
     if (getBetMode() === 'orepro_default') {
-        const wideCount = Math.min(zone === 'SAFE' ? 3 : zone === 'CHAOS' ? 5 : 4, fieldSize);
-        const seqW = markSequenceForCount(wideCount);
+        // AIM for 4 marks (Win + 馬連 box + 3連複 box of 4). But TRIM a trailing mark when it's
+        // a true longshot — keep the 4th/3rd only if its win odds are within a risk-scaled
+        // ceiling. Low risk trims hard (toward 2); CHAOS keeps the longshots. Floor 2 so a
+        // 馬連 box always forms. (You build matching 2- and 3-horse OrePro templates.)
+        const trimCeil = zone === 'CHAOS' ? Infinity : (T.OREPRO_TRIM_BASE + r * T.OREPRO_TRIM_SPAN);
+        let target = Math.min(4, fieldSize);
+        while (target > 2) {
+            const m = scored[target - 1];           // the marginal (lowest-ranked) candidate mark
+            if (m.odds === null || m.odds > trimCeil) target--; else break; // drop trailing longshot
+        }
+        const seqW = markSequenceForCount(target);
         const aW = [];
         for (let i = 0; i < seqW.length && i < scored.length; i++) aW.push({ h_id: scored[i].h_id, symbol: seqW[i] });
-        return { count: wideCount, assignments: aW, reason: shape, shape,
-                 detail: { mode: 'orepro_default', standout: +standout.toFixed(2), naturalCount, wideCount } };
+        return { count: target, assignments: aW, reason: shape, shape,
+                 detail: { mode: 'orepro_default', trimCeil: trimCeil === Infinity ? null : Math.round(trimCeil), standout: +standout.toFixed(2), naturalCount, target } };
     }
 
     let count;
