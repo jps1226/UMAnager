@@ -298,6 +298,16 @@
                 </div>
             </div>
         </div>
+        <div id="orepro-import-box" class="voting-sunk-cost dev-only" style="margin-top:8px;">
+            <div class="voting-sunk-cost-head">
+                <span class="voting-sunk-cost-title">⤵ Import OrePro Day <span class="voting-sunk-scope">dev</span></span>
+                <button onclick="importOreProPastedText()" class="toolbar-btn toolbar-btn-muted" title="Parse the pasted 俺プロフ day text, resolve each race+horse to our DB, and set your real marks (locked, actual ¥).">Import</button>
+            </div>
+            <div style="padding:6px 2px 2px;">
+                <textarea id="orepro-import-text" placeholder="Paste a 俺プロフ day's text (track / race# / 払戻金 / ◎◯▲△ horses / 購入金額 …)" style="width:100%; min-height:90px; font-size:11px; resize:vertical; box-sizing:border-box;"></textarea>
+                <div id="orepro-import-status" style="font-size:11px; color:#7ed6df; margin-top:4px; white-space:pre-wrap;"></div>
+            </div>
+        </div>
         <div id="voting-day-total" class="voting-day-total" style="display:none;"></div>
         <div id="voting-recap-panel" class="voting-recap-panel" style="display:none;"></div>
         <div id="voting-races-main" class="voting-races-main"></div>
@@ -648,6 +658,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260601-2"></script>
+<script src="/static/script.js?v=20260601-3"></script>
 </body>
 </html>

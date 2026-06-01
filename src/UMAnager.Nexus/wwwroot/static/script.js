@@ -685,6 +685,74 @@ async function backfillHistoricalBets() {
     }
 }
 
+// Parse a pasted 俺プロフ day (the plain-text export) into import records. Mirrors the
+// server-side resolver's expected shape: { track, num, purchase, payout, marks:[{sym,horse}] }.
+function parseOreProDayText(text) {
+    const TRACKS = new Set(['中山','阪神','中京','東京','京都','福島','新潟','小倉','札幌','函館']);
+    const lines = String(text || '').split(/\r?\n/);
+    const recs = [];
+    let cur = null;
+    for (let i = 0; i < lines.length; i++) {
+        const l = lines[i].trim();
+        const m = l.match(/^(\S+)\s+(\d+)R\b/);            // "中山 12R 4歳以上2勝クラス"
+        if (m && TRACKS.has(m[1])) {
+            if (cur) recs.push(cur);
+            cur = { track: m[1], num: parseInt(m[2], 10), purchase: 0, payout: 0, marks: [] };
+        } else if (cur) {
+            if (l.startsWith('払戻金')) {
+                const mm = l.match(/([\d,]+)円/);            // payout on same line after a tab
+                cur.payout = mm ? parseInt(mm[1].replace(/,/g, ''), 10) : 0;
+            } else if (l && '◎◯〇▲△'.indexOf(l[0]) >= 0) {
+                cur.marks.push({ sym: l[0], horse: l.slice(1).trim() });
+            } else if (l.startsWith('購入金額')) {
+                const next = (lines[i + 1] || '').match(/([\d,]+)円/); // amount on the NEXT line
+                if (next) cur.purchase = parseInt(next[1].replace(/,/g, ''), 10);
+            }
+        }
+    }
+    if (cur) recs.push(cur);
+    return recs;
+}
+
+// Dev tool: parse the pasted OrePro day text → POST to the import resolver (sets real marks
+// on the matched races + actual ¥) → reload marks so they show on the cards.
+async function importOreProPastedText() {
+    const ta = document.getElementById('orepro-import-text');
+    const status = document.getElementById('orepro-import-status');
+    const setStatus = (t) => { if (status) status.textContent = t; };
+    const recs = parseOreProDayText(ta ? ta.value : '');
+    if (!recs.length) { setStatus('No races found in the pasted text.'); return; }
+    const staked = recs.reduce((s, r) => s + (r.purchase || 0), 0);
+    const payout = recs.reduce((s, r) => s + (r.payout || 0), 0);
+    setStatus(`Parsed ${recs.length} races (staked ¥${staked.toLocaleString()}, returned ¥${payout.toLocaleString()}). Importing…`);
+    try {
+        const res = await fetch('/api/sunk-cost/import', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ records: recs })
+        });
+        const d = await res.json();
+        const matched = d.RacesMatched ?? d.racesMatched ?? 0;
+        const written = d.MarksWritten ?? d.marksWritten ?? 0;
+        const unresolved = d.Unresolved ?? d.unresolved ?? [];
+        const sum = d.summary ?? d.Summary ?? {};
+        // Reload marks so globalRaceMeta/globalMarks pick up the freshly-written marks.
+        try {
+            const mr = await fetch('/api/marks');
+            const mp = normalizeMarksPayload(await mr.json());
+            globalMarks = mp.marks; globalRaceMeta = mp.raceMeta; globalMarksVersion = mp.version;
+        } catch (_) {}
+        refreshSunkCostStat(); updateQuickStats(); updateAutoBetHighlighting();
+        let line = `Imported ${matched} race(s), ${written} marks${unresolved.length ? `, ${unresolved.length} unresolved` : ''}.`;
+        if (sum && sum.NetYen != null) line += ` All-time: net ¥${Number(sum.NetYen).toLocaleString()} over ${sum.PlacedRaces} bets.`;
+        setStatus(line);
+        if (unresolved.length) {
+            alert(`${matched} races imported.\n\n${unresolved.length} could not be matched to our DB:\n- ` + unresolved.slice(0, 30).join('\n- '));
+        }
+    } catch (err) {
+        setStatus('Import failed: ' + (err?.message || err));
+    }
+}
+
 function renderEnginePicks() {
     const container = document.getElementById('sidebar-engine-picks');
     if (!container) return;
