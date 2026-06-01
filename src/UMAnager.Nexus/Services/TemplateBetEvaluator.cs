@@ -46,7 +46,7 @@ public static class TemplateBetEvaluator
     }
 
     /// <summary>The bet-plan seam — build a race's bet lines + total staked from the marked runners.</summary>
-    public static (List<BetLine> Lines, int Staked) BuildLines(IReadOnlyList<MarkedRunner> runners, int[] ladder)
+    public static (List<BetLine> Lines, int Staked) BuildLines(IReadOnlyList<MarkedRunner> runners, int[] ladder, string betMode = "custom", int oreProStake = 0)
     {
         var n = runners.Count;
         var lines = new List<BetLine>();
@@ -54,6 +54,30 @@ public static class TemplateBetEvaluator
 
         var honmei = runners.FirstOrDefault(r => r.Symbol == "◎") ?? runners[0];
         var allPps = runners.Where(r => r.Pp.HasValue).Select(r => r.Pp!.Value).ToList();
+
+        // Default-OrePro safety net: Win(単勝) on ◎ + 馬連 box + 3連複 box on all marks, with a
+        // Win-heavy allocation (n≥3: 50/30/20; n=2: 50/50). Mirrors the JS buildRaceBetLines
+        // orepro branch — keep both in sync.
+        if (betMode == "orepro_default")
+        {
+            var stake = oreProStake > 0 ? oreProStake : 10000;
+            var hasTrio = n >= 3;
+            double winA = 0.5, quinA = hasTrio ? 0.3 : 0.5, trioA = hasTrio ? 0.2 : 0.0;
+            if (honmei.Pp.HasValue)
+                lines.Add(new BetLine { Ticket = "win", Method = "normal", Label = "単勝", Pps = new[] { honmei.Pp.Value }, ComboCount = 1, StakePerCombo = stake * winA });
+            if (n >= 2)
+            {
+                var c = NCk(n, 2);
+                lines.Add(new BetLine { Ticket = "quinella", Method = "box", Label = "馬連", Pps = allPps, ComboCount = c, StakePerCombo = c > 0 ? stake * quinA / c : 0 });
+            }
+            if (n >= 3)
+            {
+                var c = NCk(n, 3);
+                lines.Add(new BetLine { Ticket = "trio", Method = "box", Label = "3連複", Pps = allPps, ComboCount = c, StakePerCombo = c > 0 ? stake * trioA / c : 0 });
+            }
+            var stakedO = (int)Math.Round(lines.Sum(l => l.StakePerCombo * l.ComboCount));
+            return (lines, stakedO);
+        }
 
         if (n == 1)
         {
@@ -91,10 +115,11 @@ public static class TemplateBetEvaluator
         IReadOnlyList<MarkedRunner> markedRunners,
         int? pp1, int? pp2, int? pp3,
         JsonElement? payouts,
-        int[] ladder)
+        int[] ladder,
+        string betMode = "custom", int oreProStake = 0)
     {
         var n = markedRunners.Count;
-        var (lines, staked) = BuildLines(markedRunners, ladder);
+        var (lines, staked) = BuildLines(markedRunners, ladder, betMode, oreProStake);
         var labels = new List<string>();
         if (n == 0) return new BetOutcome(0, false, 0, 0, labels);
         if (pp1 is null || pp2 is null || pp3 is null || payouts is null)
@@ -118,7 +143,21 @@ public static class TemplateBetEvaluator
         var f = line.StakePerCombo / 100.0; // payouts are per-¥100
         var pps = line.Pps;
         double won = 0;
-        if (line.Ticket == "place")
+        if (line.Ticket == "win")
+        {
+            // 単勝 — single horse must finish 1st (t3[0] = winner).
+            if (pps.Count > 0 && t3.Length > 0 && t3[0] == pps[0]) won += FindPayout(root, "win", new[] { pps[0] }) * f;
+        }
+        else if (line.Ticket == "quinella" && line.Method == "box")
+        {
+            // 馬連 box — any pair of picks that are the top 2 (t3[0], t3[1]) in either order.
+            var top2 = new HashSet<int> { t3[0], t3[1] };
+            for (int i = 0; i < pps.Count; i++)
+                for (int j = i + 1; j < pps.Count; j++)
+                    if (top2.Contains(pps[i]) && top2.Contains(pps[j]))
+                        won += FindPayout(root, "quinella", new[] { pps[i], pps[j] }) * f;
+        }
+        else if (line.Ticket == "place")
         {
             if (pps.Count > 0 && t3set.Contains(pps[0])) won += FindPayout(root, "place", new[] { pps[0] }) * f;
         }

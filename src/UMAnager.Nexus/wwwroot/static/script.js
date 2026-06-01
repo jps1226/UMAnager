@@ -237,6 +237,21 @@ function getOreProDefaultStake() {
     return Number.isFinite(v) && v > 0 ? v : 10000;
 }
 
+// Per-race bet record — what was ACTUALLY bet on a race, frozen at placement so later
+// global Bet-Mode/stake changes don't rewrite history. Stored in the marks blob's
+// raceMeta.betProfile = { mode, stake }. Null = price by the current global setting.
+function normalizeBetProfile(bp) {
+    if (!bp || typeof bp !== 'object' || Array.isArray(bp)) return null;
+    const mode = String(bp.mode || '').toLowerCase() === 'orepro_default' ? 'orepro_default'
+               : String(bp.mode || '').toLowerCase() === 'custom' ? 'custom' : null;
+    if (!mode) return null;
+    const stake = parseInt(bp.stake, 10);
+    return { mode, stake: Number.isFinite(stake) && stake > 0 ? stake : null };
+}
+function getRaceBetProfile(r_id) {
+    return normalizeBetProfile(globalRaceMeta[r_id]?.betProfile);
+}
+
 // Slider 0-100 → SAFE (<40), CHAOS (>60), BLEND (40-60).
 // BLEND defers to BOX_OPTIMIZATION for divergent role assignments.
 function riskZone(riskValue) {
@@ -630,6 +645,37 @@ async function resetSunkCost() {
         });
     } catch (_) { /* ignore */ }
     refreshSunkCostStat();
+}
+
+// Retroactively record every locked (placed) race as Default-OrePro 4-horse @ ¥10k — your
+// historical bet style — so the all-time total prices history correctly. Server-side +
+// re-runnable. Each race's record is then frozen against future global Bet-Mode changes.
+async function backfillHistoricalBets() {
+    if (!confirm('Record all locked (placed) races as Default OrePro 4-horse @ ¥10,000?\n\n'
+        + 'This sets what each past race counts as for total sunk cost. Re-runnable; overwrites any existing record.')) return;
+    try {
+        const res = await fetch('/api/sunk-cost/backfill', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'orepro_default', stake: 10000 })
+        });
+        const d = await res.json();
+        // reload marks so globalRaceMeta picks up the new betProfiles (keeps frontend Day Net in sync)
+        try {
+            const mr = await fetch('/api/marks');
+            const mp = normalizeMarksPayload(await mr.json());
+            globalMarks = mp.marks; globalRaceMeta = mp.raceMeta; globalMarksVersion = mp.version;
+        } catch (_) {}
+        refreshSunkCostStat();
+        updateQuickStats();
+        alert(`Recorded ${d?.stamped ?? 0} race(s) as Default OrePro @ ¥10,000.`
+            + (d?.summary ? `\n\nTotal: net ¥${Number(d.summary.NetYen||0).toLocaleString()} `
+                + `(¥${Number(d.summary.TotalStakedYen||0).toLocaleString()} staked, `
+                + `¥${Number(d.summary.TotalWonYen||0).toLocaleString()} won, `
+                + `${d.summary.PlacedRaces||0} bets).` : ''));
+    } catch (err) {
+        alert('Backfill failed: ' + (err?.message || err));
+    }
 }
 
 function renderEnginePicks() {
@@ -2148,7 +2194,8 @@ function normalizeMarksPayload(payload) {
                 lockStateAtSave: typeof meta.lockStateAtSave === 'boolean' ? meta.lockStateAtSave : null,
                 activeSymbols: Array.isArray(meta.activeSymbols)
                     ? meta.activeSymbols.map(symbol => String(symbol || '').trim()).filter(Boolean)
-                    : []
+                    : [],
+                betProfile: normalizeBetProfile(meta.betProfile)
             };
         });
     }
@@ -4534,7 +4581,8 @@ async function saveMarksToServer() {
             },
             manualAdjustments: Number.isFinite(Number(meta.manualAdjustments)) ? Number(meta.manualAdjustments) : 0,
             lockStateAtSave: typeof meta.lockStateAtSave === 'boolean' ? meta.lockStateAtSave : null,
-            activeSymbols: Array.isArray(meta.activeSymbols) ? meta.activeSymbols.map(symbol => String(symbol || '').trim()).filter(Boolean) : []
+            activeSymbols: Array.isArray(meta.activeSymbols) ? meta.activeSymbols.map(symbol => String(symbol || '').trim()).filter(Boolean) : [],
+            betProfile: normalizeBetProfile(meta.betProfile)
         }])
     );
 
@@ -5563,6 +5611,12 @@ function buildRaceBetLines(race) {
 
     const honmei = runners.find(r => r.symbol === "◎") || runners[0];
 
+    // Price by this race's FROZEN bet record if it has one (set at placement / backfill),
+    // else by the current global Bet Mode. This is what keeps history stable when the
+    // global setting changes later.
+    const _profile = getRaceBetProfile(raceId);
+    const _mode = _profile?.mode || getBetMode();
+
     // "Default OrePro" safety-net mode: Win(単勝) on ◎ + 馬連 box + 3連複 box on ALL marks.
     // Stake allocation mirrors the user's actual OrePro template (NOT an even split) —
     // a Win-heavy anchor + box coverage:
@@ -5570,8 +5624,8 @@ function buildRaceBetLines(race) {
     //   n=2: 単勝 50% / 馬連 box 50%                    (no trio with 2 horses)
     // Per-combo stake = line allocation ÷ that line's 点数. Keep in sync with the OrePro
     // templates the user builds (OREPRO_CAPABILITIES.md).
-    if (getBetMode() === 'orepro_default') {
-        const oStake = getOreProDefaultStake();
+    if (_mode === 'orepro_default') {
+        const oStake = _profile?.stake || getOreProDefaultStake();
         const hasTrio = n >= 3;
         const alloc = { win: 0.5, quinella: hasTrio ? 0.3 : 0.5, trio: hasTrio ? 0.2 : 0 };
         const oLines = [];

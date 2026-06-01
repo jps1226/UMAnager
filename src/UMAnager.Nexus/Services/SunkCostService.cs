@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
 
@@ -52,10 +53,28 @@ public sealed class SunkCostService
         return DateTime.SpecifyKind(jst, DateTimeKind.Utc); // match RaceDate convention
     }
 
-    /// <summary>Compute the current sunk-cost summary from locked (placed) races.</summary>
+    public const string ImportedStateKey = "imported_bets";
+
+    /// <summary>Compute the current sunk-cost summary.</summary>
     public async Task<SunkCostSummary> GetSummaryAsync(CancellationToken ct = default)
     {
-        var (marks, lockedRaces) = await LoadMarksAndLocksAsync();
+        // IMPORT IS TRUTH: if real OrePro history has been imported, that ledger IS the
+        // all-time tally — actual ¥ staked/returned per race, exact and dedup-by-race-id.
+        // The marks-derived estimate below is only the fallback before anything is imported.
+        var imported = await LoadImportedAsync();
+        if (imported.Count > 0)
+        {
+            var resetImp = await GetResetCutoffAsync();
+            long stk = imported.Sum(b => (long)b.Purchase);
+            long wn  = imported.Sum(b => (long)b.Payout);
+            int  hit = imported.Count(b => b.Payout > 0);
+            return new SunkCostSummary(
+                PlacedRaces: imported.Count, SettledRaces: imported.Count, PendingRaces: 0, HitRaces: hit,
+                TotalStakedYen: stk, TotalWonYen: wn, SunkCostYen: stk - wn, NetYen: wn - stk,
+                ResetAt: resetImp?.ToString("yyyy-MM-dd"));
+        }
+
+        var (marks, lockedRaces, profiles) = await LoadMarksAndLocksAsync();
 
         // Placed races = locked AND carry at least one (non-X) mark.
         var markCountByRace = new Dictionary<string, int>();
@@ -123,7 +142,12 @@ public sealed class SunkCostService
             try { doc = JsonDocument.Parse(race.ResultsJson ?? "{}"); payouts = doc.RootElement; }
             catch (JsonException) { }
 
-            var outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, ladder);
+            // Price by this race's FROZEN bet record if it has one (set at placement /
+            // backfill), else the current ladder. Keeps history stable across setting changes.
+            profiles.TryGetValue(race.RaceId, out var prof);
+            var betMode = prof?.Mode ?? "custom";
+            var oreProStake = prof?.Stake ?? 0;
+            var outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, ladder, betMode, oreProStake);
             doc?.Dispose();
 
             totalStaked += outcome.Staked;
@@ -160,13 +184,15 @@ public sealed class SunkCostService
         return null;
     }
 
-    /// <summary>Load the marks dict (non-X) and the set of locked race-ids from the marks blob.</summary>
-    private async Task<(Dictionary<string, string> Marks, HashSet<string> Locked)> LoadMarksAndLocksAsync()
+    /// <summary>Load the marks dict (non-X), the set of locked race-ids, and any frozen
+    /// per-race bet profiles (raceMeta.betProfile) from the marks blob.</summary>
+    private async Task<(Dictionary<string, string> Marks, HashSet<string> Locked, Dictionary<string, RaceBetProfile> Profiles)> LoadMarksAndLocksAsync()
     {
         var marks = new Dictionary<string, string>();
         var locked = new HashSet<string>();
+        var profiles = new Dictionary<string, RaceBetProfile>();
         var raw = await _state.GetStringAsync(MarksStateKey);
-        if (string.IsNullOrWhiteSpace(raw)) return (marks, locked);
+        if (string.IsNullOrWhiteSpace(raw)) return (marks, locked, profiles);
         try
         {
             using var doc = JsonDocument.Parse(raw);
@@ -184,19 +210,105 @@ public sealed class SunkCostService
             {
                 foreach (var prop in metaEl.EnumerateObject())
                 {
-                    if (prop.Value.ValueKind == JsonValueKind.Object
-                        && prop.Value.TryGetProperty("lockStateAtSave", out var lockEl)
-                        && lockEl.ValueKind == JsonValueKind.True)
-                    {
+                    if (prop.Value.ValueKind != JsonValueKind.Object) continue;
+                    if (prop.Value.TryGetProperty("lockStateAtSave", out var lockEl) && lockEl.ValueKind == JsonValueKind.True)
                         locked.Add(prop.Name);
+                    if (prop.Value.TryGetProperty("betProfile", out var bp) && bp.ValueKind == JsonValueKind.Object)
+                    {
+                        var mode = bp.TryGetProperty("mode", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
+                        int stake = bp.TryGetProperty("stake", out var s) && s.ValueKind == JsonValueKind.Number && s.TryGetInt32(out var sv) ? sv : 0;
+                        if (mode == "orepro_default" || mode == "custom") profiles[prop.Name] = new RaceBetProfile(mode, stake);
                     }
                 }
             }
         }
         catch (JsonException) { /* return whatever parsed */ }
-        return (marks, locked);
+        return (marks, locked, profiles);
+    }
+
+    /// <summary>Load the imported OrePro-history ledger (keyed by netkeiba race id).</summary>
+    private async Task<List<ImportedBet>> LoadImportedAsync()
+    {
+        var list = new List<ImportedBet>();
+        var raw = await _state.GetStringAsync(ImportedStateKey);
+        if (string.IsNullOrWhiteSpace(raw)) return list;
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                foreach (var p in doc.RootElement.EnumerateObject())
+                {
+                    var o = p.Value;
+                    int purchase = o.TryGetProperty("purchase", out var pu) && pu.ValueKind == JsonValueKind.Number && pu.TryGetInt32(out var pv) ? pv : 0;
+                    int payout   = o.TryGetProperty("payout",   out var pa) && pa.ValueKind == JsonValueKind.Number && pa.TryGetInt32(out var av) ? av : 0;
+                    list.Add(new ImportedBet(p.Name, purchase, payout));
+                }
+        }
+        catch (JsonException) { }
+        return list;
+    }
+
+    /// <summary>Merge a batch of imported OrePro-history records into the ledger, deduped by
+    /// race id (re-uploading the same export overwrites, never double-counts). Returns the
+    /// total ledger size after merge.</summary>
+    public async Task<int> MergeImportedBetsAsync(JsonElement records, CancellationToken ct = default)
+    {
+        var raw = await _state.GetStringAsync(ImportedStateKey);
+        JsonObject ledger;
+        try { ledger = (!string.IsNullOrWhiteSpace(raw) && JsonNode.Parse(raw) is JsonObject o) ? o : new JsonObject(); }
+        catch (JsonException) { ledger = new JsonObject(); }
+
+        if (records.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var rec in records.EnumerateArray())
+            {
+                if (rec.ValueKind != JsonValueKind.Object) continue;
+                if (!rec.TryGetProperty("raceId", out var ridEl) || ridEl.ValueKind != JsonValueKind.String) continue;
+                var rid = ridEl.GetString();
+                if (string.IsNullOrWhiteSpace(rid)) continue;
+                ledger[rid] = JsonNode.Parse(rec.GetRawText());
+            }
+        }
+        await _state.SetStringAsync(ImportedStateKey, ledger.ToJsonString());
+        _logger.LogInformation("[SunkCost] Imported ledger now holds {Count} races.", ledger.Count);
+        return ledger.Count;
+    }
+
+    /// <summary>Clear the imported OrePro-history ledger.</summary>
+    public async Task ClearImportedBetsAsync(CancellationToken ct = default)
+        => await _state.SetStringAsync(ImportedStateKey, "{}");
+
+    /// <summary>Retroactively stamp a frozen bet profile on every LOCKED race in the marks
+    /// blob, so the all-time tally prices them as actually bet (immune to later global
+    /// Bet-Mode changes). Re-runnable. Returns the number of races stamped.</summary>
+    public async Task<int> BackfillProfilesForLockedAsync(string mode, int stake, CancellationToken ct = default)
+    {
+        var raw = await _state.GetStringAsync(MarksStateKey);
+        if (string.IsNullOrWhiteSpace(raw)) return 0;
+        JsonNode? root;
+        try { root = JsonNode.Parse(raw); } catch (JsonException) { return 0; }
+        if (root is not JsonObject obj || obj["raceMeta"] is not JsonObject meta) return 0;
+
+        int count = 0;
+        foreach (var kv in meta)
+        {
+            if (kv.Value is not JsonObject rm) continue;
+            bool isLocked = rm["lockStateAtSave"] is JsonValue jv && jv.TryGetValue<bool>(out var b) && b;
+            if (!isLocked) continue;
+            rm["betProfile"] = new JsonObject { ["mode"] = mode, ["stake"] = stake };
+            count++;
+        }
+        if (count > 0)
+        {
+            await _state.SetStringAsync(MarksStateKey, obj.ToJsonString());
+            _logger.LogInformation("[SunkCost] Backfilled {Count} locked races as {Mode} @ ¥{Stake}.", count, mode, stake);
+        }
+        return count;
     }
 }
+
+public sealed record RaceBetProfile(string Mode, int Stake);
+public sealed record ImportedBet(string RaceId, int Purchase, int Payout);
 
 public sealed record SunkCostSummary(
     int PlacedRaces,
