@@ -5563,19 +5563,24 @@ function buildRaceBetLines(race) {
 
     const honmei = runners.find(r => r.symbol === "◎") || runners[0];
 
-    // "Default OrePro" safety-net mode: Win(単勝) on ◎ + 馬連 box + 3連複 box on ALL marks,
-    // with the fixed total stake spread across every combo (like the ladder). This is the
-    // classic big-net bet for A/B comparison against the lean custom templates.
+    // "Default OrePro" safety-net mode: Win(単勝) on ◎ + 馬連 box + 3連複 box on ALL marks.
+    // Stake allocation mirrors the user's actual OrePro template (NOT an even split) —
+    // a Win-heavy anchor + box coverage:
+    //   n≥3: 単勝 50% / 馬連 box 30% / 3連複 box 20%   (e.g. ¥5,000 / ¥3,000 / ¥2,000)
+    //   n=2: 単勝 50% / 馬連 box 50%                    (no trio with 2 horses)
+    // Per-combo stake = line allocation ÷ that line's 点数. Keep in sync with the OrePro
+    // templates the user builds (OREPRO_CAPABILITIES.md).
     if (getBetMode() === 'orepro_default') {
-        const oLines = [];
-        if (honmei.pp) oLines.push({ ticket: 'win',      method: 'normal', label: '単勝', horses: [honmei],        comboCount: 1 });
-        if (n >= 2)    oLines.push({ ticket: 'quinella', method: 'box',    label: '馬連', horses: runners.slice(), comboCount: nCk(n, 2) });
-        if (n >= 3)    oLines.push({ ticket: 'trio',     method: 'box',    label: '3連複', horses: runners.slice(), comboCount: nCk(n, 3) });
-        const oCombos = oLines.reduce((s, l) => s + (l.comboCount || 0), 0) || 1;
         const oStake = getOreProDefaultStake();
-        const oPer = oStake / oCombos;
-        oLines.forEach(l => { l.stakePerCombo = oPer; });
-        return { runners, lines: oLines, staked: oStake };
+        const hasTrio = n >= 3;
+        const alloc = { win: 0.5, quinella: hasTrio ? 0.3 : 0.5, trio: hasTrio ? 0.2 : 0 };
+        const oLines = [];
+        if (honmei.pp) oLines.push({ ticket: 'win',      method: 'normal', label: '単勝', horses: [honmei],        comboCount: 1,         _line: oStake * alloc.win });
+        if (n >= 2)    oLines.push({ ticket: 'quinella', method: 'box',    label: '馬連', horses: runners.slice(), comboCount: nCk(n, 2), _line: oStake * alloc.quinella });
+        if (n >= 3)    oLines.push({ ticket: 'trio',     method: 'box',    label: '3連複', horses: runners.slice(), comboCount: nCk(n, 3), _line: oStake * alloc.trio });
+        let staked = 0;
+        oLines.forEach(l => { l.stakePerCombo = l.comboCount > 0 ? l._line / l.comboCount : 0; staked += l.stakePerCombo * l.comboCount; delete l._line; });
+        return { runners, lines: oLines, staked: Math.round(staked) };
     }
 
     // Ladder line shapes (combo counts mirror OREPRO_CAPABILITIES.md).
