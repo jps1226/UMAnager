@@ -53,27 +53,11 @@ public sealed class SunkCostService
         return DateTime.SpecifyKind(jst, DateTimeKind.Utc); // match RaceDate convention
     }
 
-    public const string ImportedStateKey = "imported_bets";
-
-    /// <summary>Compute the current sunk-cost summary.</summary>
+    /// <summary>Compute the current sunk-cost summary across all placed (locked + marked)
+    /// races. Imported OrePro-history races carry ACTUAL ¥ (betProfile.actualStaked/Won) and
+    /// use it verbatim; live races template-derive. One unified, deduped tally.</summary>
     public async Task<SunkCostSummary> GetSummaryAsync(CancellationToken ct = default)
     {
-        // IMPORT IS TRUTH: if real OrePro history has been imported, that ledger IS the
-        // all-time tally — actual ¥ staked/returned per race, exact and dedup-by-race-id.
-        // The marks-derived estimate below is only the fallback before anything is imported.
-        var imported = await LoadImportedAsync();
-        if (imported.Count > 0)
-        {
-            var resetImp = await GetResetCutoffAsync();
-            long stk = imported.Sum(b => (long)b.Purchase);
-            long wn  = imported.Sum(b => (long)b.Payout);
-            int  hit = imported.Count(b => b.Payout > 0);
-            return new SunkCostSummary(
-                PlacedRaces: imported.Count, SettledRaces: imported.Count, PendingRaces: 0, HitRaces: hit,
-                TotalStakedYen: stk, TotalWonYen: wn, SunkCostYen: stk - wn, NetYen: wn - stk,
-                ResetAt: resetImp?.ToString("yyyy-MM-dd"));
-        }
-
         var (marks, lockedRaces, profiles) = await LoadMarksAndLocksAsync();
 
         // Placed races = locked AND carry at least one (non-X) mark.
@@ -142,9 +126,19 @@ public sealed class SunkCostService
             try { doc = JsonDocument.Parse(race.ResultsJson ?? "{}"); payouts = doc.RootElement; }
             catch (JsonException) { }
 
-            // Price by this race's FROZEN bet record if it has one (set at placement /
-            // backfill), else the current ladder. Keeps history stable across setting changes.
             profiles.TryGetValue(race.RaceId, out var prof);
+
+            // Imported OrePro-history race: use the ACTUAL ¥ staked/returned verbatim (truth).
+            if (prof?.ActualStaked is int aStaked)
+            {
+                doc?.Dispose();
+                totalStaked += aStaked;
+                var aWon = prof.ActualWon ?? 0;
+                settled++; totalWon += aWon; if (aWon > 0) hits++;
+                continue;
+            }
+
+            // Live race: price by the frozen bet record's mode/stake if present, else the ladder.
             var betMode = prof?.Mode ?? "custom";
             var oreProStake = prof?.Stake ?? 0;
             var outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, ladder, betMode, oreProStake);
@@ -217,7 +211,10 @@ public sealed class SunkCostService
                     {
                         var mode = bp.TryGetProperty("mode", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
                         int stake = bp.TryGetProperty("stake", out var s) && s.ValueKind == JsonValueKind.Number && s.TryGetInt32(out var sv) ? sv : 0;
-                        if (mode == "orepro_default" || mode == "custom") profiles[prop.Name] = new RaceBetProfile(mode, stake);
+                        int? aStaked = bp.TryGetProperty("actualStaked", out var ase) && ase.ValueKind == JsonValueKind.Number && ase.TryGetInt32(out var asv) ? asv : null;
+                        int? aWon = bp.TryGetProperty("actualWon", out var awe) && awe.ValueKind == JsonValueKind.Number && awe.TryGetInt32(out var awv) ? awv : null;
+                        if (mode is "orepro_default" or "custom" || aStaked.HasValue)
+                            profiles[prop.Name] = new RaceBetProfile(mode ?? "orepro_default", stake, aStaked, aWon);
                     }
                 }
             }
@@ -226,57 +223,86 @@ public sealed class SunkCostService
         return (marks, locked, profiles);
     }
 
-    /// <summary>Load the imported OrePro-history ledger (keyed by netkeiba race id).</summary>
-    private async Task<List<ImportedBet>> LoadImportedAsync()
+    // JP track name → JRA track code (2-digit). Local/NAR tracks are unmapped (skipped).
+    private static readonly IReadOnlyDictionary<string, string> TrackNameToCode = new Dictionary<string, string>
     {
-        var list = new List<ImportedBet>();
-        var raw = await _state.GetStringAsync(ImportedStateKey);
-        if (string.IsNullOrWhiteSpace(raw)) return list;
-        try
-        {
-            using var doc = JsonDocument.Parse(raw);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object)
-                foreach (var p in doc.RootElement.EnumerateObject())
-                {
-                    var o = p.Value;
-                    int purchase = o.TryGetProperty("purchase", out var pu) && pu.ValueKind == JsonValueKind.Number && pu.TryGetInt32(out var pv) ? pv : 0;
-                    int payout   = o.TryGetProperty("payout",   out var pa) && pa.ValueKind == JsonValueKind.Number && pa.TryGetInt32(out var av) ? av : 0;
-                    list.Add(new ImportedBet(p.Name, purchase, payout));
-                }
-        }
-        catch (JsonException) { }
-        return list;
-    }
+        ["札幌"]="01",["函館"]="02",["福島"]="03",["新潟"]="04",["東京"]="05",
+        ["中山"]="06",["中京"]="07",["京都"]="08",["阪神"]="09",["小倉"]="10",
+    };
 
-    /// <summary>Merge a batch of imported OrePro-history records into the ledger, deduped by
-    /// race id (re-uploading the same export overwrites, never double-counts). Returns the
-    /// total ledger size after merge.</summary>
-    public async Task<int> MergeImportedBetsAsync(JsonElement records, CancellationToken ct = default)
+    public sealed record ImportRecord(string Track, int RaceNum, int Purchase, int Payout, List<(string Sym, string Horse)> Marks);
+    public sealed record ImportResult(int RacesMatched, int MarksWritten, List<string> Unresolved);
+
+    /// <summary>Import REAL marks from a parsed OrePro 俺プロフ export: resolve each race by
+    /// (track, race#, the set of marked horse names) → our race_id, map each marked horse →
+    /// horse_id+post, and WRITE the marks into the marks blob (+ lock the race as placed +
+    /// stamp the actual ¥ staked/returned). Idempotent per race. So those past races show your
+    /// real marks in the program and price at their actual ¥.</summary>
+    public async Task<ImportResult> ImportMarksFromRecordsAsync(IReadOnlyList<ImportRecord> records, CancellationToken ct = default)
     {
-        var raw = await _state.GetStringAsync(ImportedStateKey);
-        JsonObject ledger;
-        try { ledger = (!string.IsNullOrWhiteSpace(raw) && JsonNode.Parse(raw) is JsonObject o) ? o : new JsonObject(); }
-        catch (JsonException) { ledger = new JsonObject(); }
+        var unresolved = new List<string>();
+        var raw = await _state.GetStringAsync(MarksStateKey);
+        JsonObject root;
+        try { root = (!string.IsNullOrWhiteSpace(raw) && JsonNode.Parse(raw) is JsonObject o) ? o : new JsonObject(); }
+        catch (JsonException) { root = new JsonObject(); }
+        if (root["marks"] is not JsonObject marksObj) { marksObj = new JsonObject(); root["marks"] = marksObj; }
+        if (root["raceMeta"] is not JsonObject metaObj) { metaObj = new JsonObject(); root["raceMeta"] = metaObj; }
 
-        if (records.ValueKind == JsonValueKind.Array)
+        // Normalize the circled-O variant (◯ U+25EF) to the app's 〇 (U+3007); others pass through.
+        static string NormSym(string s) => s == "◯" ? "〇" : s;
+
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        int racesMatched = 0, marksWritten = 0;
+
+        foreach (var rec in records)
         {
-            foreach (var rec in records.EnumerateArray())
+            if (!TrackNameToCode.TryGetValue(rec.Track, out var code))
+            { unresolved.Add($"{rec.Track} {rec.RaceNum}R (non-JRA / unknown track)"); continue; }
+
+            var names = rec.Marks.Select(m => m.Horse).Distinct().ToList();
+            var rows = await (from e in db.RaceEntries.AsNoTracking()
+                              join h in db.Horses on e.HorseId equals h.HorseId
+                              join r in db.Races on e.RaceId equals r.RaceId
+                              where r.TrackCode == code && r.RaceNumber == rec.RaceNum && names.Contains(h.NameJa)
+                              select new { e.RaceId, e.HorseId, h.NameJa }).ToListAsync(ct);
+            if (rows.Count == 0) { unresolved.Add($"{rec.Track} {rec.RaceNum}R (no matching race/horses)"); continue; }
+
+            // The race that contains the most of this record's marked horses is the match.
+            var best = rows.GroupBy(x => x.RaceId).OrderByDescending(g => g.Count()).First();
+            var raceId = best.Key;
+            var horseByName = best.GroupBy(x => x.NameJa).ToDictionary(g => g.Key, g => g.First().HorseId);
+
+            int wroteHere = 0;
+            foreach (var (sym, horse) in rec.Marks)
             {
-                if (rec.ValueKind != JsonValueKind.Object) continue;
-                if (!rec.TryGetProperty("raceId", out var ridEl) || ridEl.ValueKind != JsonValueKind.String) continue;
-                var rid = ridEl.GetString();
-                if (string.IsNullOrWhiteSpace(rid)) continue;
-                ledger[rid] = JsonNode.Parse(rec.GetRawText());
+                if (!horseByName.TryGetValue(horse, out var hid)) { unresolved.Add($"{rec.Track} {rec.RaceNum}R: horse '{horse}' not in matched race"); continue; }
+                marksObj[$"{raceId}_{hid}"] = NormSym(sym);
+                wroteHere++; marksWritten++;
             }
-        }
-        await _state.SetStringAsync(ImportedStateKey, ledger.ToJsonString());
-        _logger.LogInformation("[SunkCost] Imported ledger now holds {Count} races.", ledger.Count);
-        return ledger.Count;
-    }
+            if (wroteHere == 0) continue;
+            racesMatched++;
 
-    /// <summary>Clear the imported OrePro-history ledger.</summary>
-    public async Task ClearImportedBetsAsync(CancellationToken ct = default)
-        => await _state.SetStringAsync(ImportedStateKey, "{}");
+            // Lock (placed) + stamp actual ¥ so this race prices at its real OrePro outcome.
+            metaObj[raceId] = new JsonObject
+            {
+                ["lockStateAtSave"] = true,
+                ["markSource"] = "orepro-import",
+                ["betProfile"] = new JsonObject
+                {
+                    ["mode"] = "orepro_default",
+                    ["stake"] = rec.Purchase,
+                    ["actualStaked"] = rec.Purchase,
+                    ["actualWon"] = rec.Payout,
+                    ["source"] = "orepro_import",
+                },
+            };
+        }
+
+        await _state.SetStringAsync(MarksStateKey, root.ToJsonString());
+        _logger.LogInformation("[SunkCost] Imported marks: {Races} races, {Marks} marks, {Unresolved} unresolved.",
+            racesMatched, marksWritten, unresolved.Count);
+        return new ImportResult(racesMatched, marksWritten, unresolved);
+    }
 
     /// <summary>Retroactively stamp a frozen bet profile on every LOCKED race in the marks
     /// blob, so the all-time tally prices them as actually bet (immune to later global
@@ -307,8 +333,7 @@ public sealed class SunkCostService
     }
 }
 
-public sealed record RaceBetProfile(string Mode, int Stake);
-public sealed record ImportedBet(string RaceId, int Purchase, int Payout);
+public sealed record RaceBetProfile(string Mode, int Stake, int? ActualStaked = null, int? ActualWon = null);
 
 public sealed record SunkCostSummary(
     int PlacedRaces,

@@ -45,25 +45,42 @@ public sealed class SunkCostController : ControllerBase
         return Ok(new { stamped = count, mode, stake, summary });
     }
 
-    /// <summary>Import a batch of OrePro-history records (parsed from a 俺プロフ export).
-    /// Body: { "records": [ { "raceId","track","num","name","purchase","payout","marks" }, ... ] }
-    /// or just the array. Deduped by raceId; import is the authoritative all-time tally.</summary>
+    /// <summary>Import REAL marks from a parsed 俺プロフ export. Body: { "records":[ {
+    /// "track","num","purchase","payout","marks":[{"sym","horse"}] }, ... ] } (or the bare
+    /// array). Resolves each race by track+race#+horse-set → our race_id, writes the marks,
+    /// locks the race, and stamps the actual ¥. So past races show your real marks.</summary>
     [HttpPost("import")]
     public async Task<IActionResult> Import([FromBody] System.Text.Json.JsonElement body, CancellationToken ct)
     {
-        var records = body;
+        var arr = body;
         if (body.ValueKind == System.Text.Json.JsonValueKind.Object
-            && body.TryGetProperty("records", out var r)) records = r;
-        var total = await _sunk.MergeImportedBetsAsync(records, ct);
-        var summary = await _sunk.GetSummaryAsync(ct);
-        return Ok(new { ledgerTotal = total, summary });
-    }
+            && body.TryGetProperty("records", out var r)) arr = r;
 
-    /// <summary>Clear the imported OrePro-history ledger.</summary>
-    [HttpPost("import/clear")]
-    public async Task<IActionResult> ClearImport(CancellationToken ct)
-    {
-        await _sunk.ClearImportedBetsAsync(ct);
-        return Ok(await _sunk.GetSummaryAsync(ct));
+        var records = new List<SunkCostService.ImportRecord>();
+        if (arr.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var rec in arr.EnumerateArray())
+            {
+                if (rec.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                string track = rec.TryGetProperty("track", out var t) && t.ValueKind == System.Text.Json.JsonValueKind.String ? t.GetString() ?? "" : "";
+                int num = rec.TryGetProperty("num", out var n) && n.ValueKind == System.Text.Json.JsonValueKind.Number && n.TryGetInt32(out var nv) ? nv : 0;
+                int purchase = rec.TryGetProperty("purchase", out var p) && p.ValueKind == System.Text.Json.JsonValueKind.Number && p.TryGetInt32(out var pv) ? pv : 0;
+                int payout = rec.TryGetProperty("payout", out var pa) && pa.ValueKind == System.Text.Json.JsonValueKind.Number && pa.TryGetInt32(out var av) ? av : 0;
+                var marks = new List<(string, string)>();
+                if (rec.TryGetProperty("marks", out var ms) && ms.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    foreach (var m in ms.EnumerateArray())
+                    {
+                        var sym = m.TryGetProperty("sym", out var sy) && sy.ValueKind == System.Text.Json.JsonValueKind.String ? sy.GetString() : null;
+                        var horse = m.TryGetProperty("horse", out var ho) && ho.ValueKind == System.Text.Json.JsonValueKind.String ? ho.GetString() : null;
+                        if (!string.IsNullOrWhiteSpace(sym) && !string.IsNullOrWhiteSpace(horse)) marks.Add((sym!, horse!.Trim()));
+                    }
+                if (!string.IsNullOrWhiteSpace(track) && num > 0 && marks.Count > 0)
+                    records.Add(new SunkCostService.ImportRecord(track.Trim(), num, purchase, payout, marks));
+            }
+        }
+
+        var result = await _sunk.ImportMarksFromRecordsAsync(records, ct);
+        var summary = await _sunk.GetSummaryAsync(ct);
+        return Ok(new { result.RacesMatched, result.MarksWritten, result.Unresolved, summary });
     }
 }

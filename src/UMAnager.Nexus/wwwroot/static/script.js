@@ -244,9 +244,16 @@ function normalizeBetProfile(bp) {
     if (!bp || typeof bp !== 'object' || Array.isArray(bp)) return null;
     const mode = String(bp.mode || '').toLowerCase() === 'orepro_default' ? 'orepro_default'
                : String(bp.mode || '').toLowerCase() === 'custom' ? 'custom' : null;
-    if (!mode) return null;
-    const stake = parseInt(bp.stake, 10);
-    return { mode, stake: Number.isFinite(stake) && stake > 0 ? stake : null };
+    const stake  = parseInt(bp.stake, 10);
+    const aStake = parseInt(bp.actualStaked, 10);  // imported: real ¥ staked (OrePro truth)
+    const aWon   = parseInt(bp.actualWon, 10);      // imported: real ¥ returned
+    const out = {};
+    if (mode) out.mode = mode;
+    if (Number.isFinite(stake)  && stake  > 0) out.stake = stake;
+    if (Number.isFinite(aStake) && aStake >= 0) out.actualStaked = aStake;
+    if (Number.isFinite(aWon)   && aWon   >= 0) out.actualWon = aWon;
+    if (bp.source) out.source = String(bp.source);
+    return Object.keys(out).length ? out : null;
 }
 function getRaceBetProfile(r_id) {
     return normalizeBetProfile(globalRaceMeta[r_id]?.betProfile);
