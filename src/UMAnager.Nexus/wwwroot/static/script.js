@@ -224,6 +224,19 @@ function getVotingMarkMode() {
     return m === 'TRADITIONAL_ROLES' ? 'TRADITIONAL_ROLES' : 'BOX_OPTIMIZATION';
 }
 
+// Bet mode (A/B comparison): 'custom' = our mark-count ladder (複勝/ワイド/3連複…);
+// 'orepro_default' = the classic OrePro safety net — Win(単勝) + 馬連 box + 3連複 box on
+// ALL marks at a fixed total stake. Changes both the engine's marking (wider in default
+// mode, since the boxes reward coverage) and the bet model used for Day Net / win badges.
+function getBetMode() {
+    const m = String(appConfig.ui?.betMode || 'custom').toLowerCase();
+    return m === 'orepro_default' ? 'orepro_default' : 'custom';
+}
+function getOreProDefaultStake() {
+    const v = parseInt(appConfig.ui?.oreproDefaultStake, 10);
+    return Number.isFinite(v) && v > 0 ? v : 10000;
+}
+
 // Slider 0-100 → SAFE (<40), CHAOS (>60), BLEND (40-60).
 // BLEND defers to BOX_OPTIMIZATION for divergent role assignments.
 function riskZone(riskValue) {
@@ -3213,6 +3226,21 @@ function getEngineMarkPlanForRace(r_id, opts = {}) {
     // nets (複勝 / 2-horse wide); CHAOS escalates a genuine ◎ standout into a nagashi but
     // otherwise keeps the 3-horse wide net on value-tilted picks.
     const zone = risk <= T.SAFE_MAX ? 'SAFE' : risk >= T.CHAOS_MIN ? 'CHAOS' : 'BLEND';
+
+    // Bet-mode override: in "Default OrePro" safety-net mode (Win + 馬連 box + 3連複 box on
+    // all marks at a fixed stake) the boxes reward COVERAGE, so cast a wider, count-blind net
+    // — extra marks widen the boxes and partial results still pay. The precise ladder count
+    // is irrelevant, so skip the custom shape→count + abstention logic and just mark the
+    // top contenders (more of them, knowing the safety net is there).
+    if (getBetMode() === 'orepro_default') {
+        const wideCount = Math.min(zone === 'SAFE' ? 3 : zone === 'CHAOS' ? 5 : 4, fieldSize);
+        const seqW = markSequenceForCount(wideCount);
+        const aW = [];
+        for (let i = 0; i < seqW.length && i < scored.length; i++) aW.push({ h_id: scored[i].h_id, symbol: seqW[i] });
+        return { count: wideCount, assignments: aW, reason: shape, shape,
+                 detail: { mode: 'orepro_default', standout: +standout.toFixed(2), naturalCount, wideCount } };
+    }
+
     let count;
     switch (shape) {
         case 'lone-favorite': count = zone === 'SAFE' ? 1 : 3; break;
@@ -5521,6 +5549,22 @@ function buildRaceBetLines(race) {
     if (n === 0) return { runners, lines: [], staked: 0 };
 
     const honmei = runners.find(r => r.symbol === "◎") || runners[0];
+
+    // "Default OrePro" safety-net mode: Win(単勝) on ◎ + 馬連 box + 3連複 box on ALL marks,
+    // with the fixed total stake spread across every combo (like the ladder). This is the
+    // classic big-net bet for A/B comparison against the lean custom templates.
+    if (getBetMode() === 'orepro_default') {
+        const oLines = [];
+        if (honmei.pp) oLines.push({ ticket: 'win',      method: 'normal', label: '単勝', horses: [honmei],        comboCount: 1 });
+        if (n >= 2)    oLines.push({ ticket: 'quinella', method: 'box',    label: '馬連', horses: runners.slice(), comboCount: nCk(n, 2) });
+        if (n >= 3)    oLines.push({ ticket: 'trio',     method: 'box',    label: '3連複', horses: runners.slice(), comboCount: nCk(n, 3) });
+        const oCombos = oLines.reduce((s, l) => s + (l.comboCount || 0), 0) || 1;
+        const oStake = getOreProDefaultStake();
+        const oPer = oStake / oCombos;
+        oLines.forEach(l => { l.stakePerCombo = oPer; });
+        return { runners, lines: oLines, staked: oStake };
+    }
+
     // Ladder line shapes (combo counts mirror OREPRO_CAPABILITIES.md).
     let lines;
     if (n === 1)      lines = [{ ticket: 'place', method: 'normal', label: '複勝',       horses: [honmei],         comboCount: 1 }];
@@ -5545,7 +5589,17 @@ function scoreBetLine(line, t3, t3set, payouts) {
     const stakeFactor = (line.stakePerCombo || 0) / 100; // payouts are per-¥100
     const pps = (line.horses || []).map(h => h.pp).filter(Boolean);
     let won = 0;
-    if (line.ticket === 'place') {
+    if (line.ticket === 'win') {
+        // 単勝 — single horse must finish 1st (t3[0] = winner).
+        const pp = pps[0];
+        if (pp && t3[0] === pp) won += findSlotPayout(payouts.win, [pp]) * stakeFactor;
+    } else if (line.ticket === 'quinella' && line.method === 'box') {
+        // 馬連 box — any pair of picks that are the top 2 (t3[0], t3[1]) in either order.
+        const top2 = new Set([t3[0], t3[1]]);
+        for (let i = 0; i < pps.length; i++) for (let j = i + 1; j < pps.length; j++)
+            if (top2.has(pps[i]) && top2.has(pps[j]))
+                won += findSlotPayout(payouts.quinella, [pps[i], pps[j]]) * stakeFactor;
+    } else if (line.ticket === 'place') {
         const pp = pps[0];
         if (pp && t3set.has(pp)) won += findSlotPayout(payouts.place, [pp]) * stakeFactor;
     } else if (line.ticket === 'wide' && line.method === 'box') {
@@ -9173,6 +9227,8 @@ async function showSettingsModal() {
     document.getElementById('setting-umamusumeMode').checked = localStorage.getItem(UMM_STORAGE_KEY) === '1';
     document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
     document.getElementById('setting-votingMarkMode').value = getVotingMarkMode();
+    { const bm = document.getElementById('setting-betMode'); if (bm) bm.value = getBetMode(); }
+    { const os = document.getElementById('setting-oreproDefaultStake'); if (os) os.value = getOreProDefaultStake(); }
     document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     document.getElementById('setting-tvModeSplitPercent').value = Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent))
         ? Number(appConfig.ui?.tvModeSplitPercent)
@@ -9301,6 +9357,8 @@ async function updateSidebarSettings() {
         showConsole: document.getElementById('setting-showConsole').checked,
         highlightAutoBets: document.getElementById('setting-highlightAutoBets').checked,
         votingMarkMode: (document.getElementById('setting-votingMarkMode').value === 'TRADITIONAL_ROLES') ? 'TRADITIONAL_ROLES' : 'BOX_OPTIMIZATION',
+        betMode: (document.getElementById('setting-betMode')?.value === 'orepro_default') ? 'orepro_default' : 'custom',
+        oreproDefaultStake: (() => { const v = parseInt(document.getElementById('setting-oreproDefaultStake')?.value, 10); return Number.isFinite(v) && v > 0 ? v : 10000; })(),
         tvModeSplitPercent: parseClampedPercent('setting-tvModeSplitPercent', Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent)) ? Number(appConfig.ui?.tvModeSplitPercent) : 50),
         tvModePanelsFlipped: document.getElementById('setting-tvModePanelsFlipped').checked,
         formulaWeights: {

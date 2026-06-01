@@ -414,6 +414,17 @@
                             </select>
                         </label>
                         <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
+                            <span title="Custom = our lean mark-count ladder (複勝/ワイド/3連複…). Default OrePro = the classic safety net: Win + 馬連 box + 3連複 box on all marks at a fixed stake. Changes how the engine marks AND how Day Net / win badges are priced.">💴 Bet Mode</span>
+                            <select id="setting-betMode" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:170px;">
+                                <option value="custom">Custom Templates</option>
+                                <option value="orepro_default">Default OrePro (Win+Q+T)</option>
+                            </select>
+                        </label>
+                        <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
+                            <span title="Total ¥ per race for Default OrePro mode, split across the Win + 馬連 box + 3連複 box combos.">💴 Default-OrePro Stake/Race ¥</span>
+                            <input type="number" id="setting-oreproDefaultStake" min="100" max="1000000" step="100" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:110px;">
+                        </label>
+                        <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
                             <span>📺 TV Mode Split %</span>
                             <input type="number" id="setting-tvModeSplitPercent" min="20" max="80" step="1" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:90px;">
                         </label>
@@ -637,6 +648,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260531-13"></script>
+<script src="/static/script.js?v=20260531-14"></script>
 </body>
 </html>
