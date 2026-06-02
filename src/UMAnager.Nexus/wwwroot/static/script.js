@@ -253,6 +253,32 @@ function normalizeBetProfile(bp) {
     if (Number.isFinite(aStake) && aStake >= 0) out.actualStaked = aStake;
     if (Number.isFinite(aWon)   && aWon   >= 0) out.actualWon = aWon;
     if (bp.source) out.source = String(bp.source);
+    // betLines: the frozen per-line bet breakdown (set at placement / future custom tickets).
+    // Each line self-describing: { ticket, method, label, horses:[{pp}], axisPp?, comboCount, stakePerCombo }.
+    if (Array.isArray(bp.betLines) && bp.betLines.length) {
+        const lines = bp.betLines.map(l => {
+            if (!l || typeof l !== 'object') return null;
+            const horses = Array.isArray(l.horses) ? l.horses.map(h => {
+                const pp = parseInt(h?.pp, 10);
+                return Number.isFinite(pp) && pp > 0 ? { pp } : null;
+            }).filter(Boolean) : [];
+            const comboCount = parseInt(l.comboCount, 10);
+            const stakePerCombo = Number(l.stakePerCombo);
+            const line = {
+                ticket: String(l.ticket || ''),
+                method: String(l.method || ''),
+                label: l.label ? String(l.label) : '',
+                horses,
+                comboCount: Number.isFinite(comboCount) && comboCount > 0 ? comboCount : 0,
+                stakePerCombo: Number.isFinite(stakePerCombo) && stakePerCombo >= 0 ? stakePerCombo : 0
+            };
+            const axisPp = parseInt(l.axisPp, 10);
+            if (Number.isFinite(axisPp) && axisPp > 0) line.axisPp = axisPp;
+            return line.ticket ? line : null;
+        }).filter(Boolean);
+        if (lines.length) out.betLines = lines;
+    }
+    if (bp.extrapolated === true) out.extrapolated = true;
     return Object.keys(out).length ? out : null;
 }
 function getRaceBetProfile(r_id) {
@@ -1182,6 +1208,8 @@ async function init() {
     applyDevModeBodyClass();
     // Restore UMM theme from localStorage (theme is client-side; no round-trip needed).
     applyUmmTheme(localStorage.getItem(UMM_STORAGE_KEY) === '1');
+    // Preload the Uma headshot map so icons are ready when race cards first render.
+    if (localStorage.getItem(UMM_STORAGE_KEY) === '1') { await loadUmmIconMap(); }
     relocateSearchBar();
 
     // Phase 21: Load race name translation dictionary
@@ -1625,9 +1653,18 @@ function buildNameWithHover(id, name, listType, trackedStatus, intensity, isMixe
         nameClass = `name-text ${colorClass}`;
     }
     
+    // 🎤 Uma Musume headshot — show next to any character horse (sire/dam/BMS or
+    // runner) when UMM theme is on. Map is name-keyed; render-time injection
+    // covers normal renders, refreshUmmIcons() covers toggle/late-load.
+    let ummIcon = "";
+    if (document.body.classList.contains('umm-mode')) {
+        const iconUrl = ummIconFor(displayName);
+        if (iconUrl) ummIcon = ummIconImg(iconUrl);
+    }
+
     return `
     <div class="name-container">
-        <span class="${nameClass}">${escapedName}</span>
+        ${ummIcon}<span class="${nameClass}">${escapedName}</span>
         <div class="hover-menu">
             ${btnHtml}
             ${profileHtml}
@@ -4465,10 +4502,32 @@ function toggleRaceLock(event, r_id) {
 // Lock a SINGLE race after it's been applied/submitted (edit-protection for just that
 // race). Used by the per-race Apply path so applying one race doesn't lock the marks on
 // other races you're still working on for the day.
+// Freeze the placed bet's per-line breakdown onto the race meta at lock time, so the bet's
+// exact shape + per-line stake is recorded as-placed: future-proof for custom-ticket
+// analysis, and immune to later Bet-Mode / template changes. First-freeze-wins (idempotent);
+// never touches imported races (they carry real OrePro ¥ already).
+function freezeBetProfileAtLock(rid) {
+    const meta = globalRaceMeta[rid];
+    if (meta?.betProfile && meta.betProfile.actualStaked != null) return; // imported: real ¥, leave it
+    if (meta?.betProfile?.betLines?.length) return;                        // already frozen
+    const plan = buildRaceBetLines({ info: { race_id: rid } });
+    if (!plan.lines || !plan.lines.length) return;
+    const lines = plan.lines.map(l => ({
+        ticket: l.ticket, method: l.method, label: l.label,
+        horses: (l.horses || []).map(h => ({ pp: h.pp })),
+        comboCount: l.comboCount, stakePerCombo: l.stakePerCombo,
+        ...(l.axisPp ? { axisPp: l.axisPp } : {})
+    }));
+    const bp = { mode: getRaceBetProfile(rid)?.mode || getBetMode(), stake: plan.staked, betLines: lines };
+    if (plan.runners.length >= 5) bp.extrapolated = true; // 5-6 mark templates are extrapolated
+    globalRaceMeta[rid] = { ...(meta || {}), betProfile: bp };
+}
+
 function lockSingleRaceAfterSubmit(raceId) {
     const rid = String(raceId || '').trim();
     if (!rid || raceLocks[rid]) return 0;
     raceLocks[rid] = true;
+    freezeBetProfileAtLock(rid); // record the bet's line breakdown as placed
     touchRaceMeta(rid); // persist lockStateAtSave; the apply flow saves the blob once after.
     const tbody = document.getElementById(`tbody-${rid}`);
     if (tbody) tbody.innerHTML = buildTableBody(rid, globalRaceEntries[rid]);
@@ -4487,6 +4546,7 @@ function lockAllRacesForRaceDay(raceId) {
         if ((globalRaceInfo[rid]?.clean_date || '') !== date) return;
         if (!raceLocks[rid]) {
             raceLocks[rid] = true;
+            freezeBetProfileAtLock(rid); // record the bet's line breakdown as placed
             touchRaceMeta(rid); // persist lockStateAtSave; caller saves the blob once after.
             locked++;
         }
@@ -4529,6 +4589,7 @@ async function toggleLockAllBetsForActiveDay() {
         const want = !unlocking; // locking → true, unlocking → false
         if (!!raceLocks[r_id] === want) return;
         raceLocks[r_id] = want;
+        if (want) freezeBetProfileAtLock(r_id); // record the bet's line breakdown as placed
         touchRaceMeta(r_id);
         changed++;
         const tbody = document.getElementById(`tbody-${r_id}`);
@@ -5667,6 +5728,23 @@ function nCk(n, k) { // combinations
     return Math.round(r);
 }
 
+// OrePro "default" template allocation. Target split of the per-race stake is
+// 単勝 50% / 馬連 box 30% / 3連複 box 20%; each box's per-combo amount is rounded to
+// the nearest ¥100 (floored at ¥100), and 単勝 takes whatever remains. This reproduces
+// the user's factory-default templates EXACTLY at 1/2/3/4 & 7 marks (verified against
+// OrePro screenshots); 5–6 are extrapolated and happen to land on clean ¥100 multiples.
+// n=2 has no trio (need ≥3 horses) → 単勝 50% / 馬連 box 50%.
+function oreproDefaultLineStakes(n, oStake) {
+    const round100 = x => Math.max(100, Math.round(x / 100) * 100);
+    if (n <= 1) return { winStake: oStake, q: null, t: null };
+    const qCombos = nCk(n, 2);
+    if (n === 2) return { winStake: oStake * 0.5, q: { combos: qCombos, per: round100(oStake * 0.5 / qCombos) }, t: null };
+    const tCombos = nCk(n, 3);
+    const qPer = round100(oStake * 0.3 / qCombos);
+    const tPer = round100(oStake * 0.2 / tCombos);
+    return { winStake: oStake - qPer * qCombos - tPer * tCombos, q: { combos: qCombos, per: qPer }, t: { combos: tCombos, per: tPer } };
+}
+
 // ── The bet-plan seam (FUTURE-PROOF for dynamic bets) ───────────────────────
 // A race's placed bets = a list of bet LINES. Today buildRaceBetLines() derives
 // them from the mark-count ladder, but this is the ONE place the bet shape is
@@ -5692,6 +5770,16 @@ function buildRaceBetLines(race) {
     const _profile = getRaceBetProfile(raceId);
     const _mode = _profile?.mode || getBetMode();
 
+    // If this race froze its bet lines at placement (or carries explicit custom-ticket
+    // lines), use them verbatim — the bet is recorded as actually placed, immune to later
+    // global Bet-Mode / template changes. This is the future-proof path for custom tickets.
+    const _frozen = _profile?.betLines;
+    if (Array.isArray(_frozen) && _frozen.length) {
+        const lines = _frozen.map(l => ({ ...l, horses: (l.horses || []).map(h => ({ ...h })) }));
+        const staked = lines.reduce((s, l) => s + (l.stakePerCombo || 0) * (l.comboCount || 0), 0);
+        return { runners, lines, staked: Math.round(staked) };
+    }
+
     // "Default OrePro" safety-net mode: Win(単勝) on ◎ + 馬連 box + 3連複 box on ALL marks.
     // Stake allocation mirrors the user's actual OrePro template (NOT an even split) —
     // a Win-heavy anchor + box coverage:
@@ -5701,14 +5789,15 @@ function buildRaceBetLines(race) {
     // templates the user builds (OREPRO_CAPABILITIES.md).
     if (_mode === 'orepro_default') {
         const oStake = _profile?.stake || getOreProDefaultStake();
-        const hasTrio = n >= 3;
-        const alloc = { win: 0.5, quinella: hasTrio ? 0.3 : 0.5, trio: hasTrio ? 0.2 : 0 };
+        const a = oreproDefaultLineStakes(n, oStake); // OrePro's real ¥100-floor allocation
         const oLines = [];
-        if (honmei.pp) oLines.push({ ticket: 'win',      method: 'normal', label: '単勝', horses: [honmei],        comboCount: 1,         _line: oStake * alloc.win });
-        if (n >= 2)    oLines.push({ ticket: 'quinella', method: 'box',    label: '馬連', horses: runners.slice(), comboCount: nCk(n, 2), _line: oStake * alloc.quinella });
-        if (n >= 3)    oLines.push({ ticket: 'trio',     method: 'box',    label: '3連複', horses: runners.slice(), comboCount: nCk(n, 3), _line: oStake * alloc.trio });
-        let staked = 0;
-        oLines.forEach(l => { l.stakePerCombo = l.comboCount > 0 ? l._line / l.comboCount : 0; staked += l.stakePerCombo * l.comboCount; delete l._line; });
+        if (honmei.pp && a.winStake > 0)
+            oLines.push({ ticket: 'win',      method: 'normal', label: '単勝',  horses: [honmei],        comboCount: 1,          stakePerCombo: a.winStake });
+        if (a.q)
+            oLines.push({ ticket: 'quinella', method: 'box',    label: '馬連',  horses: runners.slice(), comboCount: a.q.combos, stakePerCombo: a.q.per });
+        if (a.t)
+            oLines.push({ ticket: 'trio',     method: 'box',    label: '3連複', horses: runners.slice(), comboCount: a.t.combos, stakePerCombo: a.t.per });
+        const staked = oLines.reduce((s, l) => s + l.stakePerCombo * l.comboCount, 0);
         return { runners, lines: oLines, staked: Math.round(staked) };
     }
 
@@ -9410,6 +9499,60 @@ function closeSettingsModal() {
 
 const UMM_STORAGE_KEY = 'umanager-umm-theme';
 
+// ── Uma Musume headshot icons ────────────────────────────────────────────────
+// Maps a horse name → GameTora circular icon URL, built from the roster's
+// standing-portrait paths (chara_stand_<charId>_… → chr_icon_<charId>.png).
+// Lets us flag any sire/dam/BMS (or runner) that is an Uma Musume character.
+let ummIconByName = null;
+function ummNormalizeName(s) { return (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' '); }
+function ummIconUrlFromImage(imageUrl) {
+    const m = String(imageUrl || '').match(/chara_stand_(\d+)_/);
+    return m ? `https://gametora.com/images/umamusume/characters/icons/chr_icon_${m[1]}.png` : null;
+}
+function ummIconFor(name) {
+    if (!ummIconByName) return null;
+    return ummIconByName[ummNormalizeName(name)] || null;
+}
+function ummIconImg(url) {
+    return `<img class="umm-uma-icon" src="${escapeHtml(url)}" alt="" loading="lazy" onerror="this.remove()">`;
+}
+async function loadUmmIconMap() {
+    if (ummIconByName) return ummIconByName;
+    try {
+        const res = await fetch('/api/umamusume/characters');
+        if (!res.ok) return (ummIconByName = {});
+        const data = await res.json();
+        const map = {};
+        (data.characters || []).forEach(c => {
+            const icon = ummIconUrlFromImage(c.image_url);
+            if (!icon) return;
+            const key = ummNormalizeName(c.name_en);
+            if (key) map[key] = icon;
+        });
+        ummIconByName = map;
+    } catch (e) {
+        console.warn('UMM icon map load failed:', e);
+        ummIconByName = {};
+    }
+    return ummIconByName;
+}
+// DOM pass: add/remove headshots on already-rendered name cells (covers the
+// toggle case and first paint that happened before the map finished loading).
+function refreshUmmIcons() {
+    if (!document.body.classList.contains('umm-mode')) {
+        document.querySelectorAll('.umm-uma-icon').forEach(el => el.remove());
+        return;
+    }
+    if (!ummIconByName) return;
+    document.querySelectorAll('.name-container').forEach(c => {
+        if (c.querySelector('.umm-uma-icon')) return;
+        const span = c.querySelector('.name-text');
+        if (!span) return;
+        const url = ummIconFor(span.textContent);
+        if (url) span.insertAdjacentHTML('beforebegin', ummIconImg(url));
+    });
+}
+
 function applyUmmTheme(enabled) {
     document.body.classList.toggle('umm-mode', enabled);
     // Swap the Pedigree Lists group header emoji
@@ -9418,6 +9561,9 @@ function applyUmmTheme(enabled) {
         summary.textContent = enabled ? '🎤 Pedigree Lists' : '🎯 Pedigree Lists';
     }
     localStorage.setItem(UMM_STORAGE_KEY, enabled ? '1' : '0');
+    // Headshot icons follow the theme.
+    if (enabled) loadUmmIconMap().then(refreshUmmIcons);
+    else refreshUmmIcons();
 }
 
 async function toggleUmamusumeMode(event) {

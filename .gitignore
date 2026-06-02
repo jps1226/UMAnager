@@ -35,6 +35,13 @@ memory/
 # Browser HAR captures — may contain session cookies / auth tokens
 *.har
 
+# Local dev scratch — ad-hoc SQL queries, recap output, import tooling
+q_*.sql
+query.sql
+recap_data.json
+run-recap.ps1
+import_days/
+
 # OS
 .DS_Store
 Thumbs.db

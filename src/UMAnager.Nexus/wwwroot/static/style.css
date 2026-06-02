@@ -2512,11 +2512,32 @@ td.bk-color-7 { background: #efa65e !important; color: #000 !important; font-wei
    All rules scoped so the default dark theme is untouched when OFF.
    ══════════════════════════════════════════════════════════════════════════ */
 
-/* ── Sidebar shell ── */
-body.umm-mode #sidebar {
-    background: linear-gradient(180deg, #fdf4fb 0%, #fef8ff 100%);
-    border-right: 1.5px solid #f0c0e0;
+/* ── Sidebar shell ── (the element is .sidebar, not #sidebar) */
+body.umm-mode .sidebar {
+    background: rgba(255,250,253,0.28);
+    backdrop-filter: blur(7px);
+    -webkit-backdrop-filter: blur(7px);
+    border-right: 1.5px solid rgba(240,176,216,0.7);
 }
+body.umm-mode .sidebar-brand-title { color: #f0409a; }
+body.umm-mode .sidebar-footer {
+    background: linear-gradient(180deg, rgba(251,244,255,0), rgba(251,244,255,0.92) 16px, #fbf4ff 100%);
+}
+body.umm-mode .sidebar-select-full {
+    background: #fff; color: #5a1840; border: 1.5px solid #f0b0d8; border-radius: 8px;
+}
+body.umm-mode .sidebar-label { color: #a03070; }
+
+/* Group cards — bodies were dark #1a1c23 navy; make them white to match */
+body.umm-mode .sidebar-group {
+    background: rgba(255,255,255,0.66);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    border: 1px solid #f3c6e6;
+    box-shadow: 0 2px 8px rgba(240,64,154,0.1);
+}
+body.umm-mode .sidebar-group[open] > summary { border-bottom-color: #f3c6e6; }
+body.umm-mode .tab-bar { border-bottom: 2px solid #f0c0e0; }
 
 /* ── Group summary headers — game's green gradient ── */
 body.umm-mode .sidebar-group > summary {
@@ -2589,6 +2610,16 @@ body.umm-mode .ww-horse-chip {
     color: #5a1840;
 }
 
+/* ── Watchlist / Engine-pick / Vote-history rows (.ww-item family) ── */
+body.umm-mode .ww-item { background: #fff; border-color: #f8cce8; }
+body.umm-mode .ww-item:hover { background: #fdeef7; }
+body.umm-mode .ww-name { color: #5a1840; }
+body.umm-mode .ww-meta { color: #b070a0; }
+body.umm-mode .ww-empty { color: #c090b0; }
+body.umm-mode .ww-engine-pick { background: #fdeef7; border-color: #f0b0d8; }
+body.umm-mode .ww-engine-pick:hover { background: #fbe0f0; }
+body.umm-mode .ww-voted-item { border-color: #f0cf90; }
+
 /* ── Characters button (hidden until umm-mode ON) ── */
 #umm-characters-btn {
     display: none;
@@ -2612,6 +2643,207 @@ body.umm-mode .ww-horse-chip {
 }
 #umm-characters-btn:hover { opacity: 0.88; transform: translateY(-1px); }
 body.umm-mode #umm-characters-btn { display: flex; }
+
+/* ═══ Main content palette (Phase 24 — cream cards + pink/magenta accents) ═══
+   Scoped under body.umm-mode so the dark theme is byte-identical when OFF.
+   The dense data grid stays functional: color-coded cells (odds/finish/bracket)
+   set their own bg/!important, and the row-highlight intensities are low-alpha
+   overlays that tint cream correctly — so dark default text stays legible. */
+
+/* Page surface — Uma Musume avenue backdrop with a cream scrim baked in
+   (the gradient layer flattens the photo's contrast so frosted cards stay
+   readable everywhere). Fixed + cover so content scrolls over the calm
+   paved foreground. main-content is transparent to let the scene through. */
+body.umm-mode {
+    background:
+        linear-gradient(rgba(253,242,251,0.42), rgba(251,244,255,0.48)),
+        url('/static/umm-bg.png') center top / cover fixed,
+        #fbf4ff;
+}
+body.umm-mode .main-content { background: transparent; }
+
+/* Top-bar clocks → white card with magenta type */
+body.umm-mode .clock-container {
+    background: rgba(255,255,255,0.78);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1.5px solid #f3c6e6;
+    box-shadow: 0 2px 8px rgba(240,64,154,0.12);
+}
+body.umm-mode .clock-label { color: #b070a0; }
+body.umm-mode .clock-time  { color: #a02878; }
+
+/* View switcher (Main / Voting / Horse) + toolbar pills */
+body.umm-mode .toolbar-btn {
+    background: #fce8f5;
+    color: #a03070;
+    border: 1.5px solid #f0b0d8;
+    border-radius: 999px;
+}
+body.umm-mode .toolbar-btn:hover { background: #f8d0ec; border-color: #e890cc; }
+body.umm-mode .view-switcher .toolbar-btn.is-active,
+body.umm-mode .toolbar-btn-primary {
+    background: linear-gradient(135deg, #ff7eb9 0%, #f0409a 100%);
+    color: #fff;
+    border-color: #f0409a;
+    box-shadow: 0 2px 10px rgba(240,64,154,0.35);
+}
+body.umm-mode .toolbar-btn-muted { background: #eedcea; border-color: #e0b8d4; color: #8a5078; }
+body.umm-mode .main-toolbar { border-bottom-color: #f0c0e0; }
+
+/* Date navigator card */
+body.umm-mode .active-date-nav {
+    background: rgba(255,255,255,0.72);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1.5px solid #f3c6e6;
+}
+body.umm-mode .quick-stats {
+    background: rgba(255,255,255,0.72);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid #f3c6e6;
+}
+body.umm-mode .active-date-label { color: #5a1840; }
+body.umm-mode .active-date-meta  { color: #b070a0; }
+
+/* Quick-stat readouts */
+body.umm-mode .quick-stat-label { color: #b070a0; }
+body.umm-mode .quick-stat-value { color: #7a2060; }
+body.umm-mode .quick-stat-value.quick-stat-pos { color: #2a9d4a; }
+body.umm-mode .quick-stat-value.quick-stat-neg { color: #e0408a; }
+body.umm-mode .phase-badge-sub { color: #b070a0; }
+
+/* Risk slider chrome */
+body.umm-mode .top-bar-risk-label { color: #a03070; }
+body.umm-mode .top-bar-risk-scale { color: #c090b0; }
+body.umm-mode .top-bar-risk input[type=range] { accent-color: #f0409a; }
+
+/* Main horse search */
+body.umm-mode #horse-search {
+    background: #fff;
+    border: 1.5px solid #f0b0d8;
+    color: #5a1840;
+    border-radius: 8px;
+}
+body.umm-mode #horse-search::placeholder { color: #c090b0; }
+
+/* Race-card header bar → cream card, pink border, deep-magenta title */
+body.umm-mode .race-header {
+    background-color: rgba(255,255,255,0.84);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: #5a1840;
+    border: 1.5px solid #f3c6e6;
+    box-shadow: 0 2px 8px rgba(240,64,154,0.1);
+}
+body.umm-mode .race-header:hover { color: #f0409a; }
+
+/* Race-card action buttons */
+body.umm-mode .btn-autopick {
+    background: linear-gradient(135deg, #ff7eb9, #f0409a);
+    color: #fff; border-color: #f0409a;
+}
+body.umm-mode .btn-reorder,
+body.umm-mode .btn-clear-bets,
+body.umm-mode .active-date-nav-btn {
+    background: #fce8f5; color: #a03070; border-color: #f0b0d8;
+}
+body.umm-mode .btn-lock-bets {
+    background: #fff4dc; color: #9a6010; border-color: #e8c878;
+}
+body.umm-mode .btn-lock-bets.is-locked {
+    background: linear-gradient(135deg, #a8e6a8, #5cb85c); color: #fff; border-color: #5cb85c;
+}
+
+/* ── The data grid → cream surface, dark text ──
+   Colored cells (odds/bracket/finish badges) keep their own bg via !important. */
+body.umm-mode table {
+    background: rgba(255,255,255,0.92);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    box-shadow: 0 3px 12px rgba(180,100,220,0.14);
+}
+body.umm-mode th, body.umm-mode td { border-color: #f0d4e8; }
+body.umm-mode td { color: #3a1040; }
+body.umm-mode th {
+    background-color: #fbe4f2;
+    color: #a03070;
+    box-shadow: 0 2px 4px rgba(240,64,154,0.15);
+}
+body.umm-mode tr:hover td { background-color: rgba(255,126,185,0.06); }
+
+/* Top-3 finish text — darken gold/silver/bronze for legibility on cream */
+body.umm-mode td.finish-pos-1 { color: #b8860b; }
+body.umm-mode td.finish-pos-2 { color: #707888; }
+body.umm-mode td.finish-pos-3 { color: #a05a2b; }
+
+/* Race-header pedigree/watchlist highlight bars → soft pastel tints on cream.
+   The dark theme paints these solid dark (!important, 3-class); body.umm-mode
+   gives 4-class specificity so these win. Intensity gradient + a colored
+   left-border keep the bloodline(gold)/watch(blue)/mixed(green) signal. */
+body.umm-mode .race-header.has-bld.intensity-light       { background-color: #fdf3cf !important; }
+body.umm-mode .race-header.has-bld.intensity-medium      { background-color: #f9ea9e !important; }
+body.umm-mode .race-header.has-bld.intensity-strong      { background-color: #f3dd72 !important; }
+body.umm-mode .race-header.has-bld.intensity-very-strong { background-color: #ecd047 !important; }
+body.umm-mode .race-header.has-watch.intensity-light       { background-color: #e6eefb !important; }
+body.umm-mode .race-header.has-watch.intensity-medium      { background-color: #cadcf7 !important; }
+body.umm-mode .race-header.has-watch.intensity-strong      { background-color: #a9c8f0 !important; }
+body.umm-mode .race-header.has-watch.intensity-very-strong { background-color: #8ab2ea !important; }
+body.umm-mode .race-header.row-mixed.intensity-light       { background-color: #e8f2d9 !important; }
+body.umm-mode .race-header.row-mixed.intensity-medium      { background-color: #d3e8b8 !important; }
+body.umm-mode .race-header.row-mixed.intensity-strong      { background-color: #bcd998 !important; }
+body.umm-mode .race-header.row-mixed.intensity-very-strong { background-color: #a3c873 !important; }
+body.umm-mode .race-header.has-bld   { border-left: 4px solid #e0b020; }
+body.umm-mode .race-header.has-watch { border-left: 4px solid #6495ed; }
+body.umm-mode .race-header.row-mixed { border-left: 4px solid #7cb342; }
+
+/* Table-row bloodline/watch/mixed highlights — the dark theme paints these as
+   pale translucent rgba (washed-out yellow on the cream table). Repaint as
+   clearly-visible saturated honey(gold)/blue/green so they read on white while
+   keeping the bloodline=gold semantic. */
+body.umm-mode tr.row-bld.intensity-light       { background-color: #fcecb3 !important; }
+body.umm-mode tr.row-bld.intensity-medium      { background-color: #f9dd85 !important; }
+body.umm-mode tr.row-bld.intensity-strong      { background-color: #f3c95a !important; }
+body.umm-mode tr.row-bld.intensity-very-strong { background-color: #ecb73a !important; }
+body.umm-mode tr.row-bld                        { background-color: #fdf3cf !important; }
+body.umm-mode tr.row-watch.intensity-light       { background-color: #d4e4fb !important; }
+body.umm-mode tr.row-watch.intensity-medium      { background-color: #b3cef6 !important; }
+body.umm-mode tr.row-watch.intensity-strong      { background-color: #8fb6ef !important; }
+body.umm-mode tr.row-watch.intensity-very-strong { background-color: #6fa0e8 !important; }
+body.umm-mode tr.row-watch                        { background-color: #e9f1fd !important; }
+body.umm-mode tr.row-mixed.intensity-light       { background-color: #ddf0c8 !important; }
+body.umm-mode tr.row-mixed.intensity-medium      { background-color: #c4e4a3 !important; }
+body.umm-mode tr.row-mixed.intensity-strong      { background-color: #a8d57c !important; }
+body.umm-mode tr.row-mixed.intensity-very-strong { background-color: #8fc659 !important; }
+body.umm-mode tr.row-mixed                        { background-color: #eaf5dd !important; }
+
+/* Tracked-ancestor name colors — the dark theme paints matches bright gold/blue/
+   orchid, which vanish on the honey/blue/green highlight rows ("yellow on yellow").
+   Darken them so the matched sire/dam/bms stays legible on its own row tint. */
+body.umm-mode span.name-text.tracked-bld   { color: #8a5600 !important; }
+body.umm-mode span.name-text.tracked-watch { color: #1e4fa0 !important; }
+body.umm-mode span.name-text.tracked-mixed { color: #9c2f8c !important; }
+
+/* Uma Musume headshot icon next to character horses in race-card name cells.
+   Absolutely positioned + vertically centred on the name so it can grow into
+   the cell's vertical padding without increasing row height. Left space is
+   reserved only on containers that actually carry an icon (:has). */
+.umm-uma-icon {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 42px; height: 42px;
+    border-radius: 50%;
+    object-fit: cover;
+    object-position: center top;
+    border: 1.5px solid #f0a8d0;
+    box-shadow: 0 1px 3px rgba(240,64,154,0.35);
+    background: #fff;
+}
+.name-container:has(.umm-uma-icon) { padding-left: 48px; }
+
 td.bk-color-8 { background: #dc809a !important; color: #000 !important; font-weight: 700; text-align: center; }
 
 /* ── Phase 31: Horse Deep-Dive Tab ────────────────────────────────────────── */
