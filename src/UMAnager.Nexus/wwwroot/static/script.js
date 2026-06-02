@@ -5598,57 +5598,6 @@ function setRaceCollapsedState(r_id, shouldCollapse) {
     arrow.innerText = shouldCollapse ? '▶' : '▼';
 }
 
-function evaluateRaceRecap(race) {
-    const info = race?.info || {};
-    const raceId = String(info.race_id || '').trim();
-    const raceLabel = `${trackName(info.place)} R${info.race_number || '?'}`.trim();
-    const entries = Array.isArray(race?.entries) ? race.entries : [];
-
-    const finishByRank = {};
-    const ppByRank = {};
-    entries.forEach(row => {
-        const rank = parseFinishRank(row?.Finish);
-        if (!rank || rank < 1 || rank > 3) return;
-
-        const horseId = String(row?.Horse_ID ?? '').split('.')[0].trim();
-        if (!horseId) return;
-        if (!finishByRank[rank]) {
-            finishByRank[rank] = horseId;
-            const pp = parseInt(row?.PP, 10);
-            if (Number.isFinite(pp) && pp > 0) ppByRank[rank] = pp;
-        }
-    });
-
-    const hasCompleteTop3 = !!(finishByRank[1] && finishByRank[2] && finishByRank[3]);
-    if (!hasCompleteTop3) {
-        return {
-            raceId,
-            raceLabel,
-            hasCompleteTop3: false,
-            honmeiHit: false,
-            quinellaHit: false,
-            trioHit: false,
-            ppByRank: {}
-        };
-    }
-
-    const marks = collectRaceMainMarks(raceId);
-    const pickedSet = new Set(Object.values(marks).filter(Boolean));
-    const top1 = finishByRank[1];
-    const top2 = finishByRank[2];
-    const top3 = finishByRank[3];
-
-    return {
-        raceId,
-        raceLabel,
-        hasCompleteTop3: true,
-        honmeiHit: !!marks["◎"] && marks["◎"] === top1,
-        quinellaHit: pickedSet.has(top1) && pickedSet.has(top2),
-        trioHit: pickedSet.has(top1) && pickedSet.has(top2) && pickedSet.has(top3),
-        ppByRank
-    };
-}
-
 // Phase 11 backward: look up actual payouts for a past race from
 // race.info.results_json (populated by HR parser). Returns ¥ amounts per
 // hit type; 0 means data unavailable or combo not found.
@@ -5758,7 +5707,22 @@ function oreproDefaultLineStakes(n, oStake) {
 function buildRaceBetLines(race) {
     const info = race?.info || {};
     const raceId = String(info.race_id || '').trim();
-    const runners = collectRaceMarkedRunners(raceId);
+
+    // Scratched horses (取消/除外) are removed from the bet by OrePro, which shrinks the
+    // ticket's 点数 and stake — e.g. a 4-mark 3連複 box with one 除外 collapses to a single
+    // combo (¥400 → ¥100, as seen on Kyoto R9 2026-05-31). Drop them so the synthesized
+    // ticket matches what actually fires. Reads the authoritative entry.Scratched flag
+    // (backend-set from the SE 異常区分 code, removal codes 取消=1/除外=2 only). The field is
+    // absent until the backend ships it → this is a no-op today, no regression.
+    // NOTE: 中止 (raced but stopped, code 3) is NOT a scratch — that ticket stands and loses
+    // with full combos — so the backend must leave Scratched=false for it.
+    const scratchedHorseIds = new Set(
+        (Array.isArray(race?.entries) ? race.entries : [])
+            .filter(row => row?.Scratched === true)
+            .map(row => String(row?.Horse_ID ?? '').split('.')[0].trim())
+            .filter(Boolean)
+    );
+    const runners = collectRaceMarkedRunners(raceId).filter(r => !scratchedHorseIds.has(r.horseId));
     const n = runners.length;
     if (n === 0) return { runners, lines: [], staked: 0 };
 
@@ -5868,6 +5832,22 @@ function evaluateTemplateOutcome(race) {
                   staked: plan.staked, won: 0, lines: [], anyHit: false };
     if (plan.runners.length === 0) return out;
 
+    // IMPORTED races carry the ACTUAL OrePro money (actualStaked / actualWon) — this is the
+    // ground truth and OVERRIDES any synthesized template. Day-list text is lossy (no per-line
+    // breakdown), so we report the recorded staked/won directly. Without this, the synthesized
+    // 馬連/3連複 box would score "hits" on tickets the user never actually placed (e.g. a 馬連 box
+    // cashing while the real 3連複 box lost) — the source of the phantom-win bug.
+    const _imp = getRaceBetProfile(raceId);
+    if (_imp && _imp.actualStaked != null) {
+        const won = _imp.actualWon != null ? _imp.actualWon : 0;
+        out.staked = _imp.actualStaked;
+        out.won = won;
+        out.anyHit = won > 0;
+        out.hasResults = true; // imported = settled by definition
+        out.lines = won > 0 ? [{ label: '実績', payout: won }] : [];
+        return out;
+    }
+
     const entries = Array.isArray(race?.entries) ? race.entries : [];
     const top3pp = {};
     entries.forEach(row => {
@@ -5909,34 +5889,29 @@ function getDayOverallHitSummary(targetDate) {
         };
     }
 
+    // A "win" = the bet you ACTUALLY placed cashed. computeRaceNet prices the real
+    // template (place/wide/trio box/nagashi, or frozen/imported lines) for LOCKED races
+    // with settled results, and returns null otherwise — so this matches OrePro's 的中数
+    // and the Day-Total-Net display exactly. (Was the loose honmei||quinella||trio recap,
+    // which counted "would-have-hit" shapes you never bet → phantom wins.)
     const winningRaceIds = [];
     let total = 0;
     let correct = 0;
-    let votedRaces = 0;
 
     races.forEach(race => {
-        const r_id = String(race?.info?.race_id || '').trim();
-        if (!r_id) return;
-
-        const marks = collectRaceMainMarks(r_id);
-        const hasVotes = Object.keys(marks).length > 0;
-        if (!hasVotes) return;
-        votedRaces += 1;
-
-        const recap = evaluateRaceRecap(race);
-        if (!recap.hasCompleteTop3) return;
-
+        const net = computeRaceNet(race);
+        if (!net) return;
         total += 1;
-        const isCorrect = recap.honmeiHit || recap.quinellaHit || recap.trioHit;
-        if (isCorrect) {
+        if (net.anyHit) {
             correct += 1;
-            winningRaceIds.push(r_id);
+            const r_id = String(race?.info?.race_id || '').trim();
+            if (r_id) winningRaceIds.push(r_id);
         }
     });
 
     const rate = total > 0 ? Math.round((correct / total) * 100) : 0;
     return {
-        visible: votedRaces > 0 && total > 0,
+        visible: total > 0,
         total,
         correct,
         rate,
@@ -5949,15 +5924,18 @@ function getDayDetailedHitSummary(targetDate) {
     const timeline = globalDateTimelineByDate[date] || null;
     const races = Array.isArray(globalRacesByDate[date]) ? globalRacesByDate[date] : [];
 
+    // Actual-bet outcome (mirrors OrePro's 的中数 / 収支 / 回収率), priced from the real
+    // placed template via computeRaceNet (locked + settled only).
     const summary = {
         visible: false,
         date,
         timeline,
-        votedRaces: 0,
-        totalScored: 0,
-        honmei: 0,
-        quinella: 0,
-        trio: 0
+        betRaces: 0,   // placed (locked) + settled races
+        betHits: 0,    // of those, how many actually cashed
+        staked: 0,
+        won: 0,
+        net: 0,
+        recovery: 0
     };
 
     if (!date || timeline !== 'past' || !races.length) {
@@ -5965,23 +5943,17 @@ function getDayDetailedHitSummary(targetDate) {
     }
 
     races.forEach(race => {
-        const r_id = String(race?.info?.race_id || '').trim();
-        if (!r_id) return;
-
-        const marks = collectRaceMainMarks(r_id);
-        if (!Object.keys(marks).length) return;
-        summary.votedRaces += 1;
-
-        const recap = evaluateRaceRecap(race);
-        if (!recap.hasCompleteTop3) return;
-
-        summary.totalScored += 1;
-        if (recap.honmeiHit) summary.honmei += 1;
-        if (recap.quinellaHit) summary.quinella += 1;
-        if (recap.trioHit) summary.trio += 1;
+        const net = computeRaceNet(race);
+        if (!net) return;
+        summary.betRaces += 1;
+        summary.staked += net.spentYen;
+        summary.won += net.wonYen;
+        if (net.anyHit) summary.betHits += 1;
     });
 
-    summary.visible = summary.votedRaces > 0;
+    summary.net = Math.round(summary.won - summary.staked);
+    summary.recovery = summary.staked > 0 ? Math.round((summary.won / summary.staked) * 100) : 0;
+    summary.visible = summary.betRaces > 0;
     return summary;
 }
 
@@ -5997,20 +5969,18 @@ function buildVotingRecapHtml(targetDate) {
     }
 
     if (!summary.visible) {
-        return '<div class="voting-recap-note">No votes found for this day yet.</div>';
+        return '<div class="voting-recap-note">No placed (locked) bets for this day yet. Lock a race\'s marks to record it as a bet.</div>';
     }
 
-    if (!summary.totalScored) {
-        return `<div class="voting-recap-note">${escapeHtml(summary.date)} has votes, but result rows are not fully scored yet.</div>`;
-    }
-
+    const hitRate = pct(summary.betHits, summary.betRaces);
+    const sign = summary.net >= 0 ? '+' : '-';
+    const netCls = summary.net >= 0 ? 'is-positive' : 'is-negative';
     return `
     <div class="voting-recap-grid">
-        <div class="voting-recap-item"><span>Voted Races</span><strong>${summary.votedRaces}</strong></div>
-        <div class="voting-recap-item"><span>Scored Races</span><strong>${summary.totalScored}</strong></div>
-        <div class="voting-recap-item"><span>◎ Hit</span><strong>${summary.honmei}/${summary.totalScored} (${pct(summary.honmei, summary.totalScored)}%)</strong></div>
-        <div class="voting-recap-item"><span>Q Box Hit</span><strong>${summary.quinella}/${summary.totalScored} (${pct(summary.quinella, summary.totalScored)}%)</strong></div>
-        <div class="voting-recap-item"><span>T Box Hit</span><strong>${summary.trio}/${summary.totalScored} (${pct(summary.trio, summary.totalScored)}%)</strong></div>
+        <div class="voting-recap-item"><span>的中数 Bet Hits</span><strong>${summary.betHits}/${summary.betRaces} (${hitRate}%)</strong></div>
+        <div class="voting-recap-item"><span>収支 Net</span><strong class="${netCls}">${sign}¥${Math.abs(summary.net).toLocaleString()}</strong></div>
+        <div class="voting-recap-item"><span>回収率 Recovery</span><strong>${summary.recovery}%</strong></div>
+        <div class="voting-recap-item"><span>Staked / Won</span><strong>¥${Math.round(summary.staked).toLocaleString()} / ¥${Math.round(summary.won).toLocaleString()}</strong></div>
     </div>`;
 }
 
@@ -6131,7 +6101,8 @@ function buildRaceWinBadgesHtml(race) {
     const pillClass = { '複勝': 'race-hit-honmei', 'ワイド': 'race-hit-quinella', '3連複': 'race-hit-trio', '3連複ながし': 'race-hit-trio' };
     Object.entries(byLabel).forEach(([label, pay]) => {
         const cls = pillClass[label] || 'race-hit-trio';
-        badges.push(`<span class="race-hit-pill ${cls}" title="${label} hit — paid ¥${pay.toLocaleString()}">${label} ¥${pay.toLocaleString()}</span>`);
+        const labelEn = TICKET_LABEL_EN[label] || label;
+        badges.push(`<span class="race-hit-pill ${cls}" title="${labelEn} hit — paid ¥${pay.toLocaleString()}">${labelEn} ¥${pay.toLocaleString()}</span>`);
     });
 
     // Always show the net pill for a placed bet (even a loss — that's the sunk-cost point).
@@ -6561,6 +6532,103 @@ function chipTitleAttr(reason) {
     return ` title="${escapeHtml(text)}"`;
 }
 
+// Display-only English labels for bet ticket types (internal labels stay Japanese so
+// win-badge / line-scoring matching is unaffected).
+const TICKET_LABEL_EN = {
+    '単勝': 'Win', '複勝': 'Place', '馬連': 'Quinella', 'ワイド': 'Wide',
+    '3連複': 'Trio', '3連複ながし': 'Trio', '3連単': 'Trifecta', '実績': 'Actual'
+};
+
+// Per-race bet-line breakdown for the voting tab. Shows the actual ticket(s):
+//  - imported races (OrePro day text): the recorded total + reconstructed shape where the
+//    stake maps cleanly to a standard template (exact line list isn't captured on import);
+//  - in-app frozen / synthesized races: each line (type · 点数 · per-combo · total).
+// For PAST races each line is marked ✓¥won / ✗ from the actual result (template-aware,
+// honoring imported actuals). Returns '' when there is nothing to show.
+// Score each given bet line against the race's actual result. Returns a parallel array
+// of ¥-won (or null when the race isn't settled / payouts missing).
+function scoreLinesForDisplay(race, lines) {
+    const entries = Array.isArray(race?.entries) ? race.entries : [];
+    const top3pp = {};
+    entries.forEach(row => {
+        const r = parseFinishRank(row?.Finish);
+        const pp = parseInt(row?.PP, 10);
+        if (r >= 1 && r <= 3 && top3pp[r] == null && Number.isFinite(pp) && pp > 0) top3pp[r] = pp;
+    });
+    if (!(top3pp[1] && top3pp[2] && top3pp[3])) return lines.map(() => null);
+    let payouts = null;
+    try { const raw = race?.info?.results_json; payouts = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (_) {}
+    if (!payouts) return lines.map(() => null);
+    const t3 = [top3pp[1], top3pp[2], top3pp[3]];
+    const t3set = new Set(t3);
+    return lines.map(l => scoreBetLine(l, t3, t3set, payouts));
+}
+
+function buildVotingBetLinesHtml(race, timeline) {
+    const raceId = String(race?.info?.race_id || '').trim();
+    const profile = getRaceBetProfile(raceId);
+    const plan = buildRaceBetLines(race);
+    const isPast = timeline === 'past';
+    const imported = !!(profile && profile.actualStaked != null && !(profile.betLines && profile.betLines.length));
+
+    // Choose the line set to display.
+    let displayLines = plan.lines;
+    let wonByLine = null;        // parallel ¥-won (past only); null entry = unscored
+    let naive = false;           // imported single-template guess (exact combos uncaptured)
+
+    if (imported && plan.staked !== profile.actualStaked) {
+        // The synthesized template does NOT reproduce the recorded stake → this was a custom
+        // single-template bet (e.g. a ¥400 3連複 box, or a scratch-reduced ¥100 single combo).
+        // Reconstruct one line from the marks; exact per-combination detail wasn't captured.
+        naive = true;
+        const stake = profile.actualStaked;
+        const combos = Math.round(stake / 100);
+        const n = plan.runners.length;
+        const pps = plan.runners.map(r => r.pp).filter(Boolean).sort((a, b) => a - b);
+        const per = combos ? Math.round(stake / combos) : stake;
+        let label;
+        if (n >= 3 && combos === nCk(n, 3))      label = `Trio box [${pps.join('·')}]`;
+        else if (n >= 2 && combos === nCk(n, 2)) label = `2-horse box [${pps.join('·')}]`;
+        else if (combos === 1)                   label = `Single combo`;
+        else                                     label = `Box`;
+        displayLines = [{ _label: `${label} · ${combos} combo${combos === 1 ? '' : 's'} ×¥${per.toLocaleString()}`, _stake: stake }];
+        if (isPast) wonByLine = [profile.actualWon || 0];   // trust the recorded total
+    } else if (isPast) {
+        // Synthesized/matched lines (incl. the matched ¥10,000 default template) — score each.
+        wonByLine = scoreLinesForDisplay(race, displayLines);
+    }
+
+    if (!displayLines.length) return '';
+
+    const chips = displayLines.map((l, i) => {
+        let labelText, tot;
+        if (l._label) {
+            labelText = l._label;
+            tot = l._stake;
+        } else {
+            const combos = l.comboCount || 0;
+            const per = Math.round(l.stakePerCombo || 0);
+            tot = combos * per;
+            const pps = (l.horses || []).map(h => h.pp).filter(Boolean).sort((a, b) => a - b).join('·');
+            const axis = l.axisPp ? `axis ${l.axisPp} ` : '';
+            const method = l.method === 'box' ? ' box' : (l.method === 'nagashi1' ? ' wheel' : '');
+            const labelEn = TICKET_LABEL_EN[l.label] || l.label;
+            labelText = `${labelEn}${method} ${axis}[${pps}] · ${combos} combo${combos === 1 ? '' : 's'} ×¥${per.toLocaleString()}`;
+        }
+        let cls = '', res = '';
+        if (isPast && wonByLine && wonByLine[i] != null) {
+            const won = wonByLine[i];
+            cls = won > 0 ? 'is-positive' : 'is-negative';
+            res = won > 0 ? ` ✓ ¥${won.toLocaleString()}` : ' ✗';
+        }
+        const title = naive ? ` title="Imported from OrePro — exact per-combination breakdown wasn't captured (day-list text is lossy)."` : '';
+        return `<span class="bet-estimate-chip ${cls}"${title}>${escapeHtml(labelText)} = ¥${Number(tot).toLocaleString()}${res}</span>`;
+    });
+
+    const heading = isPast ? 'Placed' : 'To place';
+    return `<div class="bet-estimate-inline" style="flex-wrap:wrap;"><span style="font-size:11px;color:#9aa;align-self:center;margin-right:2px;">${heading}:</span>${chips.join('')}</div>`;
+}
+
 function buildRacecourseCheatHtml(targetDate) {
     const date = String(targetDate || '').trim();
     const timeline = globalDateTimelineByDate[date] || '';
@@ -6619,6 +6687,7 @@ function buildRacecourseCheatHtml(targetDate) {
             raceName: localizeRaceName(info.race_name) || localizeRaceClass(info.race_class),
             sortKey: sortKey ? sortKey.getTime() : Number.MAX_SAFE_INTEGER,
             winBadgesHtml: timeline === 'past' ? buildRaceWinBadgesHtml(raceObj) : '',
+            betLinesHtml: buildVotingBetLinesHtml(raceObj, timeline),
             orepro: oreproRaceMap.get(r_id) || null,
             betEstimate: raceBetEstimateCache[r_id] || null,
             marks: group.marks
@@ -6648,7 +6717,17 @@ function buildRacecourseCheatHtml(targetDate) {
                 </div>`;
             }
 
-            if (!raceCard.orepro && raceCard.betEstimate?.pending) {
+            // Actual / planned bet-line breakdown for this race (what you bet, with per-line
+            // hit/miss on past races). Replaces the old forward "potential win" estimate on
+            // finished races (that estimate is only meaningful before the off).
+            if (!raceCard.orepro && raceCard.betLinesHtml) {
+                html += raceCard.betLinesHtml;
+            }
+
+            // Forward "potential win" estimate — pre-race tool only; suppressed once finished.
+            if (timeline === 'past') {
+                // no forward estimate on settled races
+            } else if (!raceCard.orepro && raceCard.betEstimate?.pending) {
                 html += `
                 <div class="bet-estimate-inline">
                     <span class="bet-estimate-chip">Estimating Win / Q Box / T Box...</span>
@@ -8396,7 +8475,7 @@ function buildDailyRecapHtml(targetDate) {
         </div>
         <div class="day-recap-line">
             <div class="day-recap-line-head">
-                <span class="day-recap-label">Correct vs Total (any hit type)</span>
+                <span class="day-recap-label">Bet hits vs placed (actual tickets)</span>
                 <span class="day-recap-score">${summary.correct}/${summary.total} (${summary.rate}%)</span>
             </div>
         </div>
@@ -10078,7 +10157,7 @@ function patchRaceEntries(raceId, entries, fields) {
         }
 
         // Mirror into the in-memory race object so header re-render (and any
-        // future evaluateRaceRecap call) sees the fresh finish/odds/fav values.
+        // future evaluateTemplateOutcome call) sees the fresh finish/odds/fav values.
         if (inMemEntries) {
             const memRow = inMemEntries.find(x => String(x.Horse_ID ?? '').split('.')[0] === String(e.horseId));
             if (memRow) {
