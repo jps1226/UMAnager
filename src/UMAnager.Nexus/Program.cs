@@ -1,3 +1,16 @@
+// ============================================================
+// FILE: Program.cs  (UMAnager.Nexus)
+// LAYER: Entry point / host (ASP.NET Core x64)
+// PURPOSE: Composition root for the Nexus. Wires DI, runs inline schema DDL
+//          (ALTER/CREATE TABLE IF NOT EXISTS — the migration-free pattern),
+//          bootstraps the sire_performance MV, configures compression + static
+//          hosting, maps controllers and the /hubs/live SignalR hub.
+// KEY DEPENDENCIES: AppDbContext + every Service/Parsing class (registered here),
+//          NexusPipeServer + LiveOrchestrator + RaceCardRefreshService (hosted).
+// CAUTION: Schema changes go HERE as inline IF NOT EXISTS DDL, not EF migrations.
+//          Registration order matters for hosted services. app.Run binds 0.0.0.0:5000.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.IO.Compression;
 using System.Text.Json;
 using Microsoft.AspNetCore.ResponseCompression;
@@ -55,10 +68,12 @@ builder.Services.AddScoped<DayRecapNotifier>();
 builder.Services.AddSingleton<VoteHistoryService>();
 builder.Services.AddSingleton<SunkCostService>();
 builder.Services.AddSingleton<OreProVoteApplyService>();
+builder.Services.AddSingleton<OreProCustomBetService>();
 builder.Services.AddSingleton<LiveOrchestrator>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveOrchestrator>());
 builder.Services.AddSingleton<RaceCardRefreshService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<RaceCardRefreshService>());
+builder.Services.AddSingleton<RaceCardRtFetchService>();
 builder.Services.AddScoped<DifnRecordParsingService>();
 builder.Services.AddScoped<BreedingHorseBackfillService>();
 builder.Services.AddScoped<HnNameBackfillService>();

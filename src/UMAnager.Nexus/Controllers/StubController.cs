@@ -1,3 +1,13 @@
+// ============================================================
+// FILE: StubController.cs
+// LAYER: API (various unimplemented routes)
+// PURPOSE: Returns 200-with-status for endpoints the frontend optimistically calls but that
+//          aren't implemented (prefetch, snipe, scrape, day-delete, backup, cache-clear, etc.),
+//          so page load never throws on an optional call.
+// CAUTION: Some routes here were superseded by real controllers (OreProController, GchController) —
+//          those duplicates were removed; don't re-add them.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.AspNetCore.Mvc;
 
 namespace UMAnager.Nexus.Controllers;

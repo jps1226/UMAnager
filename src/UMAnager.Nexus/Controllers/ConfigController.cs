@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: ConfigController.cs
+// LAYER: API (api/config)
+// PURPOSE: Persists the UI config blob (column order, formula weights, sidebar tabs,
+//          risk slider, dev mode) in app_state.user_config_blob. GET deep-merges the saved
+//          blob over built-in defaults so new default keys appear without a re-save.
+// KEY DEPENDENCIES: AppStateService.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Mvc;

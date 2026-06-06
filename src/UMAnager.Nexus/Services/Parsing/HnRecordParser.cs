@@ -1,3 +1,10 @@
+// ============================================================
+// FILE: HnRecordParser.cs
+// LAYER: Parsing (static)
+// PURPOSE: HN (breeding-horse master, from BLDN) bytes → (HansyokuNum, romaji name). The only
+//          path to breeding_horses.NameEn — these never appear as KettoNum in the UM stream.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text;
 
 namespace UMAnager.Nexus.Services.Parsing;

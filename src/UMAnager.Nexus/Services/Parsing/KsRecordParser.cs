@@ -1,3 +1,10 @@
+// ============================================================
+// FILE: KsRecordParser.cs
+// LAYER: Parsing (static)
+// PURPOSE: KS (jockey master) bytes → (code, NameJa short-kanji, NameEn romaji, active flag).
+//          Ingested by JockeyTrainerIngestService into the jockeys table.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text;
 
 namespace UMAnager.Nexus.Services.Parsing;

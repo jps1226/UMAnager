@@ -1,3 +1,13 @@
+// ============================================================
+// FILE: OddsApplyService.cs
+// LAYER: Service
+// PURPOSE: Drains unprocessed O1 records from raw_staging, applies win odds + fav rank to
+//          race_entries (snapshotting PrevOdds for the ↑↓ delta), and appends a point to
+//          odds_history only when odds actually changed. Returns the touched race ids.
+// KEY DEPENDENCIES: AppDbContext, O1RecordParser.
+// CAUTION: Bumps entry.UpdatedAt on odds change so the /api/races ETag moves (else cards 304-stale).
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
 using UMAnager.Nexus.Services.Parsing;

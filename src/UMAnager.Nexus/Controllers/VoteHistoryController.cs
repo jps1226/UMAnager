@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: VoteHistoryController.cs
+// LAYER: API (api/votes)
+// PURPOSE: GET /api/votes/history — per-horse vote counts (for "Voted N×" badges) plus the
+//          50 most-recent vote rows with names (sidebar history).
+// KEY DEPENDENCIES: VoteHistoryService.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.AspNetCore.Mvc;
 using UMAnager.Nexus.Services;
 

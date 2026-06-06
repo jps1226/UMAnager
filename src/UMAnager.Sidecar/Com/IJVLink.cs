@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: IJVLink.cs
+// LAYER: Sidecar COM interop
+// PURPOSE: The JVDTLab.JVLink COM surface used by the Sidecar — JVInit/JVOpen/JVStatus/JVGets/
+//          JVRTOpen/JVClose/JVSetSavePath/ParentHWnd/JVSkip/JVFiledelete (DispId-keyed).
+// CAUTION: MUST be InterfaceIsIDispatch (late binding). Dual/vtable marshaling causes access
+//          violations. ParentHWnd=0 before JVOpen prevents the News dialog from hanging JVRead.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Runtime.InteropServices;
 
 namespace UMAnager.Sidecar.Com;

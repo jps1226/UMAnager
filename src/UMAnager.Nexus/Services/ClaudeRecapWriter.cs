@@ -1,3 +1,13 @@
+// ============================================================
+// FILE: ClaudeRecapWriter.cs
+// LAYER: Service (scoped)
+// PURPOSE: Writes recap_data.json to the project root after a day settles (Phase 22). A Claude
+//          Desktop routine polls for processed=false, generates a narrative, posts to Discord,
+//          and marks processed=true. Defines the recap DTO graph.
+// KEY DEPENDENCIES: AppDbContext.
+// CAUTION: Locates project root by walking up from AppContext.BaseDirectory looking for CLAUDE.md.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;

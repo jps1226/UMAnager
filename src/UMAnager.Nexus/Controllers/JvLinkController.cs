@@ -1,3 +1,15 @@
+// ============================================================
+// FILE: JvLinkController.cs
+// LAYER: API (api/jvlink) — operator/dev control surface for ingest
+// PURPOSE: Status of the Sidecar bridge plus the manual triggers: load master data /
+//          bloodline, ingest jockeys/trainers, run the one-shot backfills, fetch current
+//          odds / results, apply staged odds, historical race backfill, tail sidecar log.
+// KEY DEPENDENCIES: SidecarBridge + most Parsing/backfill services + OddsFetchService /
+//          ResultsFetchService / OddsApplyService / RaceCardRefreshService, AppStateService.
+// CAUTION: Many actions enqueue commands onto SidecarBridge.CommandQueue and return Accepted;
+//          they guard on IngestionStatus == "Streaming" to avoid overlapping pulls.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;

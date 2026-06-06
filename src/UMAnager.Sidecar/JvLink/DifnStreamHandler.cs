@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: DifnStreamHandler.cs
+// LAYER: Sidecar JV-Link stream handler
+// PURPOSE: JVOpen(dataSpec, option=4) for master-data streams — DIFN (horse/jockey/trainer
+//          masters) and BLDN (breeding-horse HN records). Sets the save path + ParentHWnd=0,
+//          downloads files, then JVGets-loops raw records back over the pipe.
+// KEY DEPENDENCIES: IJVLink, SidecarPipeClient.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Runtime.InteropServices;
 using System.Text;
 using UMAnager.Sidecar.Com;

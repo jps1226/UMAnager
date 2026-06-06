@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: OddsRecordParser.cs
+// LAYER: Parsing (static, zero-alloc span parser)
+// PURPOSE: O2 (quinella) + O5 (trio) odds bytes → slot arrays merged into races.OddsJson under
+//          "quinella"/"trio". Records are dynamically sized; the slot loop breaks at end-of-data.
+// CAUTION: Skips the "999999" sentinel (sold-but-no-odds / impossible combo).
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 namespace UMAnager.Nexus.Services.Parsing;
 
 /// <summary>

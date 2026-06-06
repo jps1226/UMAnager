@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: RtResultsStreamHandler.cs
+// LAYER: Sidecar JV-Link stream handler
+// PURPOSE: JVRTOpen("0B12", yyyyMMdd) → streams RA+SE+HR result records for every venue on that
+//          date back over the pipe. 0B12's provision unit is per-day (one call per date).
+// KEY DEPENDENCIES: IJVLink, SidecarPipeClient.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text;
 using UMAnager.Sidecar.Com;
 using UMAnager.Sidecar.Pipes;

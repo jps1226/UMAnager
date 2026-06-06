@@ -1,3 +1,16 @@
+// ============================================================
+// FILE: RacesController.cs
+// LAYER: API (api/races) — the heaviest endpoint in the app
+// PURPOSE: Builds the full race-card payload (pedigree names, last-3 form w/ Ninki-Δ,
+//          sire-fit %, jockey/trainer rolling stats, career record, odds) with ETag/304
+//          + in-memory body cache. Also calendar skeleton, per-day detail (?date=),
+//          odds-history series, and the voting-tab bet-estimate.
+// KEY DEPENDENCIES: AppDbContext, SettingsService, SirePerformanceService,
+//          JockeyTrainerStatsService, IMemoryCache.
+// CAUTION: The /api/races ETag is data-keyed "races-v8-…" — BUMP vN on any response-shape
+//          change or browsers serve a stale 304 body. SortTime is JST-wall-clock-in-UTC.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;

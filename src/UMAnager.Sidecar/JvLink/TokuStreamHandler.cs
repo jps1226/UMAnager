@@ -1,3 +1,13 @@
+// ============================================================
+// FILE: TokuStreamHandler.cs
+// LAYER: Sidecar JV-Link stream handler
+// PURPOSE: JVOpen("TOKURACESNPN", fromTime, option) → streams RA+SE race-card records back over
+//          the pipe. option=2 = cursor-based (fromTime = prior lastfiletimestamp); option=4 =
+//          dialog-less setup (fromTime = date filter, one-shot historical backfill). Returns the
+//          advanced lastFileTimestamp for the Nexus to persist as the cursor.
+// KEY DEPENDENCIES: IJVLink, SidecarPipeClient.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text;
 using UMAnager.Sidecar.Com;
 using UMAnager.Sidecar.Pipes;

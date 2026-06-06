@@ -1,3 +1,13 @@
+// ============================================================
+// FILE: DayRecapNotifier.cs
+// LAYER: Service (scoped)
+// PURPOSE: Once a JST race-day is ≥80% finished with all ResultsJson present, fires ONE Discord
+//          recap (placed/won/staked/net + winning lines) and hands off to ClaudeRecapWriter.
+//          Idempotent via app_state.day_recap_sent_dates. Defines the DayRecap record.
+// KEY DEPENDENCIES: AppDbContext, AppStateService, SettingsService, IDiscordNotifier,
+//          ClaudeRecapWriter, TemplateBetEvaluator.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
@@ -75,8 +85,7 @@ public sealed class DayRecapNotifier
             .ToList();
         if (dateKeys.Count == 0) return;
 
-        var (marks, locked) = await LoadMarksAndLocksAsync();
-        var ladder = await _settings.GetBetTemplateCostsAsync();
+        var (marks, locked, frozenLines) = await LoadMarksAndLocksAsync();
 
         foreach (var dateKey in dateKeys)
         {
@@ -136,7 +145,10 @@ public sealed class DayRecapNotifier
                 JsonElement? payouts = null; JsonDocument? pdoc = null;
                 try { pdoc = JsonDocument.Parse(r.ResultsJson ?? "{}"); payouts = pdoc.RootElement; }
                 catch (JsonException) { }
-                var outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, ladder);
+                // Applied races carry frozen lines → score them verbatim; else default template.
+                var outcome = frozenLines.TryGetValue(r.RaceId, out var fl) && fl.Count > 0
+                    ? TemplateBetEvaluator.EvaluateLines(fl, runners.Count, pp1, pp2, pp3, payouts)
+                    : TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts);
                 pdoc?.Dispose();
 
                 totalStaked += outcome.Staked;
@@ -185,12 +197,13 @@ public sealed class DayRecapNotifier
 
 
     /// <summary>Load the marks dict (non-X) and the set of locked (placed) race-ids.</summary>
-    private async Task<(Dictionary<string, string> Marks, HashSet<string> Locked)> LoadMarksAndLocksAsync()
+    private async Task<(Dictionary<string, string> Marks, HashSet<string> Locked, Dictionary<string, List<TemplateBetEvaluator.BetLine>> FrozenLines)> LoadMarksAndLocksAsync()
     {
         var marks = new Dictionary<string, string>();
         var locked = new HashSet<string>();
+        var frozen = new Dictionary<string, List<TemplateBetEvaluator.BetLine>>();
         var raw = await _state.GetStringAsync(MarksStateKey);
-        if (string.IsNullOrWhiteSpace(raw)) return (marks, locked);
+        if (string.IsNullOrWhiteSpace(raw)) return (marks, locked, frozen);
         try
         {
             using var doc = JsonDocument.Parse(raw);
@@ -208,15 +221,20 @@ public sealed class DayRecapNotifier
             {
                 foreach (var prop in metaEl.EnumerateObject())
                 {
-                    if (prop.Value.ValueKind == JsonValueKind.Object
-                        && prop.Value.TryGetProperty("lockStateAtSave", out var lk)
-                        && lk.ValueKind == JsonValueKind.True)
+                    if (prop.Value.ValueKind != JsonValueKind.Object) continue;
+                    if (prop.Value.TryGetProperty("lockStateAtSave", out var lk) && lk.ValueKind == JsonValueKind.True)
                         locked.Add(prop.Name);
+                    if (prop.Value.TryGetProperty("betProfile", out var bpEl) && bpEl.ValueKind == JsonValueKind.Object
+                        && bpEl.TryGetProperty("betLines", out var blEl) && blEl.ValueKind == JsonValueKind.Array)
+                    {
+                        var lines = TemplateBetEvaluator.ParseFrozenLines(blEl);
+                        if (lines.Count > 0) frozen[prop.Name] = lines;
+                    }
                 }
             }
         }
         catch (JsonException) { }
-        return (marks, locked);
+        return (marks, locked, frozen);
     }
 
     private async Task<HashSet<string>> LoadSentDatesAsync()

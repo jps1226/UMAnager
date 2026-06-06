@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: PipeEnvelope.cs  (Sidecar)
+// LAYER: IPC (binary wire format)
+// PURPOSE: Byte-identical copy of the Nexus PipeEnvelope: [4B len LE][2B type LE][payload],
+//          PipeMessageType Command(1)/RawRecord(2)/Status(3), PipeName "UMAnager_IPC".
+// CAUTION: Must stay in sync with src/UMAnager.Nexus/Models/PipeEnvelope.cs.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Buffers.Binary;
 using System.IO.Pipes;
 

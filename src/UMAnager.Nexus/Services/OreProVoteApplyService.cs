@@ -1,3 +1,14 @@
+// ============================================================
+// FILE: OreProVoteApplyService.cs
+// LAYER: Service
+// PURPOSE: Applies vote marks to orepro.netkeiba.com over plain HTTP using the user's stored
+//          session cookie (no browser automation). Per race: fetch shutuba → build post→seq map →
+//          POST /cart/ to set marks → generator/preview → optional submit. Records votes + apply-state.
+// KEY DEPENDENCIES: SettingsService (cookie/UA), AppStateService (apply-state), VoteHistoryService.
+// CAUTION: Converts JRA-VAN 16-char race id → 12-char OrePro/netkeiba id. Shutuba HTML charset
+//          is detected per-response. Mirrors the old companion .ps1 contract — frontend unchanged.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;

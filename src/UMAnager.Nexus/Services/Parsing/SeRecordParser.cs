@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: SeRecordParser.cs
+// LAYER: Parsing (static, zero-alloc span parser)
+// PURPOSE: SE (race entry) bytes → RaceEntry: post/bracket, weights, jockey name + code,
+//          trainer code, odds (raw÷10), fav rank, finish pos.
+// CAUTION: Pre-race rows have empty odds/fav/finish bytes → parser returns null (NOT 0); the
+//          DataStatus-guarded upsert preserves those NULLs so the UI knows the race hasn't run.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using UMAnager.Nexus.Data.Entities;
 
 namespace UMAnager.Nexus.Services.Parsing;

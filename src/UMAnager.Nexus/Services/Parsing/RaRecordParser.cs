@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: RaRecordParser.cs
+// LAYER: Parsing (static, zero-alloc span parser)
+// PURPOSE: RA (race info) bytes → Race entity: id/date/track/number/name, distance, surface
+//          (TrackCD first digit), RaceClass (JyokenCD slot 5 → debut/maiden/1-3win/open), SortTime.
+// CAUTION: Offsets commented 1-indexed (JRA-VAN), sliced 0-indexed. SortTime is JST wall-clock
+//          stored as Kind=Utc. Exposes MapJyokenCdToRaceClass (reused by RaceClassBackfillService).
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using UMAnager.Nexus.Data.Entities;
 
 namespace UMAnager.Nexus.Services.Parsing;

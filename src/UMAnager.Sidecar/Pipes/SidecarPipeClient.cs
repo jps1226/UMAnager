@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: SidecarPipeClient.cs
+// LAYER: Sidecar IPC (the client end of "UMAnager_IPC")
+// PURPOSE: Connects to the Nexus pipe; reads commands; streams raw record bytes
+//          (SendRawRecordAsync) and the per-stream Send*CompleteAsync status messages
+//          (DIFN/TOKU/ODDS/RESULTS) the Nexus pipe server keys on.
+// KEY DEPENDENCIES: PipeEnvelope.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
@@ -85,6 +94,18 @@ internal sealed class SidecarPipeClient
         var payload = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
         {
             event_type    = "STREAM_RESULTS_COMPLETE",
+            record_count  = recordCount,
+            skipped_count = skippedCount,
+            race_date     = raceDate,
+        }));
+        await new PipeEnvelope(PipeMessageType.Status, payload).WriteAsync(_pipe, ct);
+    }
+
+    public async Task SendRtCardCompleteAsync(int recordCount, int skippedCount, string raceDate, CancellationToken ct)
+    {
+        var payload = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            event_type    = "STREAM_RTCARD_COMPLETE",
             record_count  = recordCount,
             skipped_count = skippedCount,
             race_date     = raceDate,

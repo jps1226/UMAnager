@@ -1,3 +1,10 @@
+// ============================================================
+// FILE: DialogHelper.cs
+// LAYER: Sidecar (Win32 P/Invoke)
+// PURPOSE: Detects the JV-Link CD/ROM setup dialog that can appear after JVOpen so the operator
+//          can be prompted to click through it (FindWindow/EnumChildWindows helpers).
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Runtime.InteropServices;
 
 namespace UMAnager.Sidecar.Dialogs;

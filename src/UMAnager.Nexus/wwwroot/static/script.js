@@ -224,31 +224,361 @@ function getVotingMarkMode() {
     return m === 'TRADITIONAL_ROLES' ? 'TRADITIONAL_ROLES' : 'BOX_OPTIMIZATION';
 }
 
-// Bet mode (A/B comparison): 'custom' = our mark-count ladder (複勝/ワイド/3連複…);
-// 'orepro_default' = the classic OrePro safety net — Win(単勝) + 馬連 box + 3連複 box on
-// ALL marks at a fixed total stake. Changes both the engine's marking (wider in default
-// mode, since the boxes reward coverage) and the bet model used for Day Net / win badges.
-function getBetMode() {
-    const m = String(appConfig.ui?.betMode || 'custom').toLowerCase();
-    return m === 'orepro_default' ? 'orepro_default' : 'custom';
-}
 function getOreProDefaultStake() {
     const v = parseInt(appConfig.ui?.oreproDefaultStake, 10);
     return Number.isFinite(v) && v > 0 ? v : 10000;
 }
 
-// Per-race bet record — what was ACTUALLY bet on a race, frozen at placement so later
-// global Bet-Mode/stake changes don't rewrite history. Stored in the marks blob's
-// raceMeta.betProfile = { mode, stake }. Null = price by the current global setting.
+// ── Bet line types + presets (the composer) ──────────────────────────────────
+// A race's bet is a COMPOSITION: up to 3 LINES. Each line = a line TYPE (ticket+method) plus
+// a total ¥ for that line (the user enters the line total; per-combo = floor100(total/点数)).
+// The COUNT of marks is decided by the engine; the composition reinterprets those N marks into
+// stacked tickets. Chosen per-DAY (toolbar) and optionally overridden per-RACE (Voting tab).
+// MUST mirror C# TemplateBetEvaluator line scoring — when applied, the built lines are FROZEN
+// and the C# side scores that exact list, so the two never drift for placed bets.
+const MAX_BET_LINES = 3;
+
+// The supported line types. `combos(n)` = 点数 for n marks; `minMarks` gates availability.
+// `pick` says which marked runners the line uses: 'honmei' (◎ only), 'all' (box), or
+// 'opp' (◎ axis + the rest as opponents, for nagashi).
+const BET_LINE_TYPES = {
+    win:          { ticket: 'win',      method: 'normal',   label: 'Win (単勝)',           short: 'Win',          jpLabel: '単勝',        minMarks: 1, pick: 'honmei', combos: () => 1,
+                    describe: () => 'Win (単勝) on ◎ — pays only if ◎ finishes 1st. Highest variance, simplest bet.' },
+    place:        { ticket: 'place',    method: 'normal',   label: 'Place (複勝)',         short: 'Place',        jpLabel: '複勝',        minMarks: 1, pick: 'honmei', combos: () => 1,
+                    describe: () => 'Place (複勝) on ◎ — cashes if ◎ finishes in the top 3. The safest single-horse net.' },
+    quinella_box: { ticket: 'quinella', method: 'box',      label: 'Quinella BOX (馬連)',  short: 'Quinella box', jpLabel: '馬連',        minMarks: 2, pick: 'all',    combos: (n) => nCk(n, 2),
+                    describe: () => 'Quinella BOX (馬連) — any 2 of your marks finish 1st AND 2nd (either order). Tougher than wide.' },
+    wide_box:     { ticket: 'wide',     method: 'box',      label: 'Wide BOX (ワイド)',    short: 'Wide box',     jpLabel: 'ワイド',      minMarks: 2, pick: 'all',    combos: (n) => nCk(n, 2),
+                    describe: () => 'Wide BOX (ワイド) — any 2 of your marks both finish top 3 (either order). The easiest box to cash.' },
+    trio_box:     { ticket: 'trio',     method: 'box',      label: 'Trio BOX (3連複)',     short: 'Trio box',     jpLabel: '3連複',       minMarks: 3, pick: 'all',    combos: (n) => nCk(n, 3),
+                    describe: () => 'Trio BOX (3連複) — any 3 of your marks fill the top 3 (any order).' },
+    trio_nagashi: { ticket: 'trio',     method: 'nagashi1', label: 'Trio nagashi (3連複ながし)', short: 'Trio nagashi', jpLabel: '3連複ながし', minMarks: 3, pick: 'opp', combos: (n) => nCk(n - 1, 2),
+                    describe: () => 'Trio nagashi (3連複 ◎ながし) — ◎ MUST finish top 3, plus any 2 others join it. Cheaper than a box.' },
+};
+function isValidLineType(t) { return !!t && Object.prototype.hasOwnProperty.call(BET_LINE_TYPES, t); }
+
+// Preset bundles: each leads with a CHASE line + safer SAFETY net(s). Default ¥ are tuned for
+// the common 4-mark card and total ¥10,000; they re-divide cleanly at other counts. Editable
+// per-day/race in the composer. `main` flags the chase line (shown emphasized).
+const BET_PRESETS = {
+    balanced:      { label: 'Balanced (Win + Q + T)',        main: 0, lines: [{ type: 'win', yen: 5000 }, { type: 'quinella_box', yen: 3000 }, { type: 'trio_box', yen: 2000 }] },
+    trio_chase:    { label: 'Trio chase + Wide net',         main: 0, lines: [{ type: 'trio_box', yen: 4000 }, { type: 'wide_box', yen: 6000 }] },
+    quinella_wide: { label: 'Quinella + Wide net',           main: 0, lines: [{ type: 'quinella_box', yen: 5000 }, { type: 'wide_box', yen: 5000 }] },
+    wide_safe:     { label: 'Wide safe + Win upside',        main: 0, lines: [{ type: 'wide_box', yen: 7000 }, { type: 'win', yen: 3000 }] },
+    nagashi_chase: { label: 'Nagashi chase + Wide net',      main: 0, lines: [{ type: 'trio_nagashi', yen: 5000 }, { type: 'wide_box', yen: 5000 }] },
+    win_place:     { label: 'Win + Place safety',            main: 0, lines: [{ type: 'win', yen: 6000 }, { type: 'place', yen: 4000 }] },
+};
+const DEFAULT_PRESET = 'balanced';
+
+// A composition = { presetId, lines:[{type,yen}] }. presetId is for the label only ('custom'
+// once the lines are edited away from the named preset). Deep-clones the preset's lines.
+function compositionFromPreset(presetId) {
+    const p = BET_PRESETS[presetId] || BET_PRESETS[DEFAULT_PRESET];
+    return { presetId: BET_PRESETS[presetId] ? presetId : DEFAULT_PRESET, lines: p.lines.map(l => ({ type: l.type, yen: l.yen })) };
+}
+// Validate/normalize an arbitrary object into a composition (≤3 valid lines, positive ¥).
+function normalizeComposition(c) {
+    if (!c || typeof c !== 'object') return null;
+    const lines = (Array.isArray(c.lines) ? c.lines : [])
+        .filter(l => l && isValidLineType(l.type))
+        .map(l => ({ type: l.type, yen: Math.max(0, parseInt(l.yen, 10) || 0) }))
+        .slice(0, MAX_BET_LINES);
+    if (!lines.length) return null;
+    const presetId = typeof c.presetId === 'string' ? c.presetId : 'custom';
+    return { presetId, lines };
+}
+// Does a composition's lines match a named preset exactly? → returns presetId or 'custom'.
+function compositionPresetId(comp) {
+    if (!comp || !Array.isArray(comp.lines)) return 'custom';
+    for (const [id, p] of Object.entries(BET_PRESETS)) {
+        if (p.lines.length !== comp.lines.length) continue;
+        if (p.lines.every((l, i) => l.type === comp.lines[i].type && l.yen === comp.lines[i].yen)) return id;
+    }
+    return 'custom';
+}
+function compositionLabel(comp) {
+    const id = compositionPresetId(comp);
+    return id === 'custom' ? 'Custom' : (BET_PRESETS[id]?.label || 'Custom');
+}
+
+// Day-level composition cache: { 'YYYY-MM-DD': {presetId,lines} }. Synced with the server via
+// /api/marks/day-bet/{date}. Temporary per race day (server ignores it once the day passes).
+let globalDayBetCompositions = {};
+
+async function loadDayBetComposition(cleanDate) {
+    if (!cleanDate) return compositionFromPreset(DEFAULT_PRESET);
+    try {
+        const res = await fetch(`/api/marks/day-bet/${encodeURIComponent(cleanDate)}`, { cache: 'no-store' });
+        if (res.ok) {
+            const d = await res.json();
+            const comp = normalizeComposition(d?.composition) || compositionFromPreset(DEFAULT_PRESET);
+            globalDayBetCompositions[cleanDate] = comp;
+            return comp;
+        }
+    } catch (_) {}
+    return globalDayBetCompositions[cleanDate] || compositionFromPreset(DEFAULT_PRESET);
+}
+async function saveDayBetComposition(cleanDate, comp) {
+    const norm = normalizeComposition(comp);
+    if (!cleanDate || !norm) return;
+    globalDayBetCompositions[cleanDate] = norm;
+    try {
+        await fetch(`/api/marks/day-bet/${encodeURIComponent(cleanDate)}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ composition: norm }),
+        });
+    } catch (_) {}
+}
+function getDayBetComposition(cleanDate) {
+    return globalDayBetCompositions[cleanDate] || compositionFromPreset(DEFAULT_PRESET);
+}
+
+// Per-race override (Voting tab). Stored on raceMeta.betComposition. Absent → use day setting.
+function getRaceBetCompositionOverride(rid) {
+    return normalizeComposition(globalRaceMeta[rid]?.betComposition);
+}
+// The composition that ACTUALLY applies to a race for live pricing/display:
+//   per-race override → that race's day setting → default preset.
+function resolveBetComposition(rid) {
+    return getRaceBetCompositionOverride(rid) || getDayBetComposition(globalRaceInfo[rid]?.clean_date || '');
+}
+
+// ── Day bet composer (main toolbar) ──────────────────────────────────────────
+// The toolbar shows a preset dropdown ("Balanced ▾ … Custom") + an "Edit lines…" toggle that
+// reveals the line composer for the whole day. Per-race overrides reuse the same renderer.
+function repriceDayRaces(date) {
+    if (!date) return;
+    Object.keys(globalRaceInfo).forEach(rid => {
+        if ((globalRaceInfo[rid]?.clean_date || '') !== date) return;
+        const tbody = document.getElementById(`tbody-${rid}`);
+        if (tbody) tbody.innerHTML = buildTableBody(rid, globalRaceEntries[rid]);
+        try { updateRaceActionButtons(rid); } catch (_) {}
+    });
+    try { updateQuickStats(); } catch (_) {}
+    try { refreshSunkCostStat(); } catch (_) {}
+    if (currentMainView === 'voting') { try { renderLiveViewPanel(); } catch (_) {} }
+}
+
+// Populate the day preset <select> once (presets + a Custom sentinel).
+function initDayBetStructureSelector() {
+    const sel = document.getElementById('day-bet-structure');
+    if (!sel || sel.dataset.populated === '1') return;
+    sel.innerHTML = Object.entries(BET_PRESETS)
+        .map(([k, v]) => `<option value="${k}">${escapeHtml(v.label)}</option>`).join('')
+        + `<option value="custom">Custom…</option>`;
+    sel.dataset.populated = '1';
+}
+
+// Render the composer (used both for the day panel and per-race override). `comp` is the
+// current composition; `onChangeFn` is the JS expression prefix used in inline handlers; the
+// composer mutates a working copy via that handler. `markCount` previews 点数 / per-combo.
+function renderBetComposer(comp, ctx) {
+    // ctx = { scope:'day'|'race', rid?:string }. Handlers route to onDayComposer*/onRaceComposer*.
+    const fn = ctx.scope === 'day' ? 'DayComposer' : 'RaceComposer';
+    const arg = ctx.scope === 'race' ? `'${escapeHtml(ctx.rid)}', ` : '';
+    const markCount = ctx.scope === 'race' ? collectRaceMarkedRunners(ctx.rid).length : 4; // day preview assumes 4
+    const built = buildLinesFromComposition(comp, ctx.scope === 'race'
+        ? collectRaceMarkedRunners(ctx.rid)
+        : sampleRunnersForCount(4));
+    const total = built.staked;
+    const usedTypes = new Set(comp.lines.map(l => l.type));
+    const isMain = (i) => Number(BET_PRESETS[comp.presetId]?.main) === i;
+    let rows = comp.lines.map((line, i) => {
+        const t = BET_LINE_TYPES[line.type];
+        const opts = Object.entries(BET_LINE_TYPES)
+            .map(([k, v]) => `<option value="${k}"${k === line.type ? ' selected' : ''}>${escapeHtml(v.label)}</option>`).join('');
+        const b = built.lines.find(bl => bl._specIndex === i);
+        const detail = b
+            ? `${b.comboCount} combo${b.comboCount === 1 ? '' : 's'} × ¥${(b.stakePerCombo || 0).toLocaleString()} = ¥${(b.stakePerCombo * b.comboCount).toLocaleString()}`
+            : `<span class="composer-line-na" title="Needs ≥${t?.minMarks} marks">needs ≥${t?.minMarks} marks (n/a at ${markCount})</span>`;
+        const roleTag = isMain(i) ? `<span class="composer-line-role" title="The chase line">main</span>` : '';
+        const winCond = t ? escapeHtml(t.describe()) : '';
+        return `<div class="composer-line">
+            <select class="composer-line-type" onchange="on${fn}LineType(${arg}${i}, this.value)">${opts}</select>
+            ${roleTag}
+            <span class="composer-line-yen">¥<input type="number" min="0" step="100" value="${line.yen}" class="composer-yen-input" onchange="on${fn}LineYen(${arg}${i}, this.value)"></span>
+            <span class="composer-line-detail">${detail}</span>
+            <a class="composer-line-del" title="Remove line" onclick="on${fn}RemoveLine(${arg}${i})">✕</a>
+        </div>
+        <div class="composer-line-desc">${winCond}</div>`;
+    }).join('');
+    const canAdd = comp.lines.length < MAX_BET_LINES;
+    const addBtn = canAdd
+        ? `<a class="composer-add" onclick="on${fn}AddLine(${arg.replace(/, $/, '')})">+ add line</a>`
+        : `<span class="composer-add is-disabled">max ${MAX_BET_LINES} lines</span>`;
+    const totalClass = total === getOreProDefaultStake() ? 'is-ok' : (total > getOreProDefaultStake() ? 'is-over' : 'is-under');
+    return `<div class="bet-composer">
+        ${rows}
+        <div class="composer-foot">
+            ${addBtn}
+            <span class="composer-total ${totalClass}">Total ¥${total.toLocaleString()} <span class="composer-total-target">/ ¥${getOreProDefaultStake().toLocaleString()}</span></span>
+        </div>
+    </div>`;
+}
+
+// A throwaway runner list of N generic marks (◎〇▲△…) for previewing day-level 点数/¥ before a
+// specific race is in scope. Post positions 1..N so combos compute.
+function sampleRunnersForCount(n) {
+    const seq = markSequenceForCount(n);
+    return seq.map((symbol, i) => ({ symbol, horseId: `_sample${i}`, pp: i + 1 }));
+}
+
+// ── Day composer state + handlers ────────────────────────────────────────────
+let dayComposerOpen = false;
+function getActiveDayComposition() { return getDayBetComposition(currentActiveDate || ''); }
+
+function syncDayBetStructureSelector() {
+    initDayBetStructureSelector();
+    const sel = document.getElementById('day-bet-structure');
+    if (!sel) return;
+    const comp = getActiveDayComposition();
+    sel.value = compositionPresetId(comp);
+    renderDayComposerPanel();
+}
+
+// Render the day composer panel (below the toolbar). Shown when dayComposerOpen, or always
+// renders the preset summary line.
+function renderDayComposerPanel() {
+    const el = document.getElementById('day-bet-structure-desc');
+    if (!el) return;
+    const comp = getActiveDayComposition();
+    const summary = comp.lines.map(l => `${BET_LINE_TYPES[l.type]?.short || l.type} ¥${l.yen.toLocaleString()}`).join('  +  ');
+    const toggle = `<a class="composer-toggle" onclick="toggleDayComposer()">${dayComposerOpen ? '▾ hide lines' : '▸ edit lines'}</a>`;
+    let html = `<div class="day-bet-summary">${escapeHtml(summary)} ${toggle}</div>`;
+    if (dayComposerOpen) html += renderBetComposer(comp, { scope: 'day' });
+    el.innerHTML = html;
+    el.style.display = '';
+}
+function toggleDayComposer() { dayComposerOpen = !dayComposerOpen; renderDayComposerPanel(); }
+
+// Preset dropdown changed: 'custom' keeps current lines but flags custom; a named preset
+// replaces the day's lines with that bundle. Persist + re-price.
+async function onDayBetStructureChange(presetId) {
+    const date = currentActiveDate;
+    if (!date) return;
+    let comp = presetId === 'custom' ? { ...getActiveDayComposition(), presetId: 'custom' } : compositionFromPreset(presetId);
+    await saveDayBetComposition(date, comp);
+    renderDayComposerPanel();
+    repriceDayRaces(date);
+}
+
+// Day composer line edits — mutate the day composition, persist, re-price.
+async function mutateDayComposition(mutator) {
+    const date = currentActiveDate; if (!date) return;
+    const comp = JSON.parse(JSON.stringify(getActiveDayComposition()));
+    mutator(comp);
+    comp.presetId = compositionPresetId(comp);
+    await saveDayBetComposition(date, comp);
+    syncDayBetStructureSelector();
+    repriceDayRaces(date);
+}
+function onDayComposerLineType(i, type) { if (isValidLineType(type)) mutateDayComposition(c => { c.lines[i].type = type; }); }
+function onDayComposerLineYen(i, yen)   { mutateDayComposition(c => { c.lines[i].yen = Math.max(0, parseInt(yen, 10) || 0); }); }
+function onDayComposerRemoveLine(i)     { mutateDayComposition(c => { c.lines.splice(i, 1); if (!c.lines.length) c.lines.push({ type: 'wide_box', yen: getOreProDefaultStake() }); }); }
+function onDayComposerAddLine()         { mutateDayComposition(c => { if (c.lines.length < MAX_BET_LINES) c.lines.push({ type: nextUnusedLineType(c), yen: 0 }); }); }
+
+// Pick a sensible default type for a newly-added line (first one not already used).
+function nextUnusedLineType(comp) {
+    const used = new Set((comp.lines || []).map(l => l.type));
+    return Object.keys(BET_LINE_TYPES).find(t => !used.has(t)) || 'wide_box';
+}
+
+// Load the active day's saved composition, reflect it, and re-price if it differs from the
+// default the first paint assumed. Called on every day switch.
+function refreshDayBetStructure() {
+    syncDayBetStructureSelector();
+    const date = currentActiveDate;
+    if (!date) return;
+    loadDayBetComposition(date).then(loaded => {
+        syncDayBetStructureSelector();
+        if (compositionPresetId(loaded) !== DEFAULT_PRESET || loaded.presetId === 'custom') repriceDayRaces(date);
+    });
+}
+
+// ── Per-race override composer (Voting tab) ──────────────────────────────────
+// Collapsed by default ("only show when overridden"): follows the day setting → a "+ bet
+// override" link. Once overriding (or revealed), shows the composer + a "use day default".
+let raceBetOverrideUiOpen = new Set();
+
+function buildRaceBetOverrideHtml(rid, timeline) {
+    if (timeline === 'past') return ''; // settled races are bet/frozen — overriding is moot
+    const override = getRaceBetCompositionOverride(rid);
+    const safeRid = escapeHtml(rid);
+    if (!override && !raceBetOverrideUiOpen.has(rid)) {
+        const dayLabel = compositionLabel(getDayBetComposition(globalRaceInfo[rid]?.clean_date || ''));
+        return `<div class="race-bet-override is-collapsed">`
+             + `<a class="race-bet-override-link" onclick="openRaceBetOverride('${safeRid}')" title="Override the day's bet for this race only (currently: ${escapeHtml(dayLabel)})">+ bet override</a>`
+             + `</div>`;
+    }
+    const comp = override || getDayBetComposition(globalRaceInfo[rid]?.clean_date || '');
+    const badge = override ? `<span class="race-bet-override-badge">override</span>` : '';
+    const reset = override
+        ? `<a class="race-bet-override-clear" onclick="clearRaceBetOverride('${safeRid}')" title="Drop the override; follow the day default">✕ use day default</a>`
+        : `<a class="race-bet-override-clear" onclick="cancelRaceBetOverride('${safeRid}')" title="Cancel">✕</a>`;
+    return `<div class="race-bet-override">`
+         + `<div class="race-bet-override-head"><span class="race-bet-override-label">💴 Bet for this race</span>${badge}${reset}</div>`
+         + renderBetComposer(comp, { scope: 'race', rid })
+         + `</div>`;
+}
+
+function openRaceBetOverride(rid) {
+    // Reveal seeded from the day composition so edits start from what would otherwise apply.
+    if (!getRaceBetCompositionOverride(rid)) {
+        const seed = JSON.parse(JSON.stringify(getDayBetComposition(globalRaceInfo[rid]?.clean_date || '')));
+        globalRaceMeta[rid] = { ...(globalRaceMeta[rid] || {}), betComposition: seed };
+    }
+    raceBetOverrideUiOpen.add(rid);
+    if (currentMainView === 'voting') renderLiveViewPanel();
+}
+function cancelRaceBetOverride(rid) {
+    // Only reachable before any real edit committed an override beyond the seed → drop the seed.
+    raceBetOverrideUiOpen.delete(rid);
+    if (globalRaceMeta[rid]) delete globalRaceMeta[rid].betComposition;
+    if (currentMainView === 'voting') renderLiveViewPanel();
+}
+
+async function mutateRaceComposition(rid, mutator) {
+    const base = getRaceBetCompositionOverride(rid)
+        || JSON.parse(JSON.stringify(getDayBetComposition(globalRaceInfo[rid]?.clean_date || '')));
+    mutator(base);
+    base.presetId = compositionPresetId(base);
+    globalRaceMeta[rid] = { ...(globalRaceMeta[rid] || {}), betComposition: base };
+    touchRaceMeta(rid); // spreads existing → preserves betComposition + re-snapshots lock state
+    try { await saveMarksToServer(); } catch (_) {}
+    const tbody = document.getElementById(`tbody-${rid}`);
+    if (tbody) tbody.innerHTML = buildTableBody(rid, globalRaceEntries[rid]);
+    try { updateQuickStats(); } catch (_) {}
+    try { refreshSunkCostStat(); } catch (_) {}
+    if (currentMainView === 'voting') renderLiveViewPanel();
+}
+function onRaceComposerLineType(rid, i, type) { if (isValidLineType(type)) mutateRaceComposition(rid, c => { c.lines[i].type = type; }); }
+function onRaceComposerLineYen(rid, i, yen)   { mutateRaceComposition(rid, c => { c.lines[i].yen = Math.max(0, parseInt(yen, 10) || 0); }); }
+function onRaceComposerRemoveLine(rid, i)     { mutateRaceComposition(rid, c => { c.lines.splice(i, 1); if (!c.lines.length) c.lines.push({ type: 'wide_box', yen: getOreProDefaultStake() }); }); }
+function onRaceComposerAddLine(rid)           { mutateRaceComposition(rid, c => { if (c.lines.length < MAX_BET_LINES) c.lines.push({ type: nextUnusedLineType(c), yen: 0 }); }); }
+
+async function clearRaceBetOverride(rid) {
+    raceBetOverrideUiOpen.delete(rid);
+    if (globalRaceMeta[rid]) delete globalRaceMeta[rid].betComposition;
+    touchRaceMeta(rid);
+    try { await saveMarksToServer(); } catch (_) { /* state still live in-session */ }
+    const tbody = document.getElementById(`tbody-${rid}`);
+    if (tbody) tbody.innerHTML = buildTableBody(rid, globalRaceEntries[rid]);
+    try { updateQuickStats(); } catch (_) {}
+    try { refreshSunkCostStat(); } catch (_) {}
+    if (currentMainView === 'voting') renderLiveViewPanel();
+}
+
+// Per-race bet record — what was ACTUALLY bet on a race, frozen at APPLY so later day/stake
+// changes don't rewrite history. Stored in the marks blob's raceMeta.betProfile =
+// { compositionLabel?, stake, betLines }. Null = price by the resolved composition live.
+// The frozen betLines ARE the truth (C# scores them verbatim); compositionLabel is display-only.
 function normalizeBetProfile(bp) {
     if (!bp || typeof bp !== 'object' || Array.isArray(bp)) return null;
-    const mode = String(bp.mode || '').toLowerCase() === 'orepro_default' ? 'orepro_default'
-               : String(bp.mode || '').toLowerCase() === 'custom' ? 'custom' : null;
     const stake  = parseInt(bp.stake, 10);
     const aStake = parseInt(bp.actualStaked, 10);  // imported: real ¥ staked (OrePro truth)
     const aWon   = parseInt(bp.actualWon, 10);      // imported: real ¥ returned
     const out = {};
-    if (mode) out.mode = mode;
+    if (typeof bp.compositionLabel === 'string' && bp.compositionLabel) out.compositionLabel = bp.compositionLabel;
     if (Number.isFinite(stake)  && stake  > 0) out.stake = stake;
     if (Number.isFinite(aStake) && aStake >= 0) out.actualStaked = aStake;
     if (Number.isFinite(aWon)   && aWon   >= 0) out.actualWon = aWon;
@@ -636,6 +966,7 @@ function updateQuickStats() {
         qsPL.classList.toggle('quick-stat-pos', net >= 0);
         qsPL.classList.toggle('quick-stat-neg', net < 0);
     }
+    updatePreOddsNotice();
 }
 
 // All-time sunk-cost tally — lives in the Voting tab (server-derived from locked = placed
@@ -1721,19 +2052,21 @@ function collapseVotedRaces() {
             }
         }
         
-        // If all 4 are cast, forcefully collapse the UI for this race!
-        if (usedCount >= 4) {
+        // A race counts as "voted" if it carries AT LEAST ONE main mark — the engine now
+        // produces partial (2-3 mark) plans, and those are real placed bets, so they should
+        // collapse too. Only fully-abstained races (0 marks) stay open as "unvoted".
+        if (usedCount >= 1) {
             const content = document.getElementById(`content-${r_id}`);
             const header = document.getElementById(`header-${r_id}`);
             const arrow = document.getElementById(`arrow-${r_id}`);
-            
+
             if (content && !content.classList.contains('collapsed')) {
                 content.classList.add('collapsed');
                 if (header) header.classList.add('collapsed');
                 if (arrow) arrow.innerText = '▶';
             }
-        } else if (!firstUnvotedRaceId && usedCount < 4) {
-            // Track the first unvoted race
+        } else if (!firstUnvotedRaceId) {
+            // Track the first unvoted (0-mark) race
             firstUnvotedRaceId = r_id;
         }
     });
@@ -2238,6 +2571,27 @@ function updateRiskLabel(val) {
     label.style.color = color;
     if (slider) slider.style.color = color;
     syncAutoBetPreviewColor(val);
+    updatePreOddsNotice();
+}
+
+function updatePreOddsNotice() {
+    const el = document.getElementById('pre-odds-notice');
+    if (!el) return;
+    const hasAnyOdds = Object.keys(globalRaceEntries).some(r_id => {
+        const info = globalRaceInfo[r_id];
+        if (!info || info._timeline !== 'upcoming') return false;
+        return (globalRaceEntries[r_id] || []).some(row => {
+            const o = parseFloat(row.Odds);
+            return Number.isFinite(o) && o > 0;
+        });
+    });
+    if (hasAnyOdds) { el.style.display = 'none'; return; }
+    const risk = getCurrentAutoPickRisk();
+    const zone = risk <= ENGINE_TUNING.SAFE_MAX ? 'SAFE' : risk >= ENGINE_TUNING.CHAOS_MIN ? 'CHAOS' : 'BLEND';
+    el.style.display = 'block';
+    el.textContent = zone === 'CHAOS'
+        ? '⚡ Pre-odds · Showing form picks (CHAOS only)'
+        : '⚡ Pre-odds · SAFE/BLEND picks need market prices';
 }
 
 function getRiskColor(val) {
@@ -2307,7 +2661,9 @@ function normalizeMarksPayload(payload) {
                 activeSymbols: Array.isArray(meta.activeSymbols)
                     ? meta.activeSymbols.map(symbol => String(symbol || '').trim()).filter(Boolean)
                     : [],
-                betProfile: normalizeBetProfile(meta.betProfile)
+                betProfile: normalizeBetProfile(meta.betProfile),
+                // Per-race bet COMPOSITION override (Voting tab). Preserve only valid shapes.
+                ...(normalizeComposition(meta.betComposition) ? { betComposition: normalizeComposition(meta.betComposition) } : {})
             };
         });
     }
@@ -2430,6 +2786,21 @@ function calculatePowerScore(row, riskVal, raceClass) {
         baseOddsScore = fw.oddsCap / Math.max(1.0, odds); // Caps max at oddsCap to prevent infinity
     }
 
+    // Synthetic odds: when real odds aren't published yet, estimate from career record
+    // (Laplace-smoothed so a 2/4 horse → ~2.0, 0/8 → ~10.0, 1/8 → ~5.0). Feeds the
+    // VALUE term so the CHAOS slider differentiates longshot-profile horses from form
+    // horses even before draw. Real odds replace this the moment JRA publishes them.
+    // Skipped for maiden/debut races where career records are near-zero for everyone.
+    let syntheticOdds = null;
+    if ((isNaN(odds) || odds <= 0) && !isMaidenLike && row.Record) {
+        const synNums = String(row.Record).match(/\d+/g);
+        if (synNums && synNums.length > 1) {
+            const sw = parseInt(synNums[0]) || 0;
+            const ss = parseInt(synNums[1]) || 0;
+            if (ss > 0) syntheticOdds = (ss + 2) / (sw + 1);
+        }
+    }
+
     // 2. Base Form Score
     let baseFormScore = 0;
     if (row.Record && !isMaidenLike) {
@@ -2505,7 +2876,7 @@ function calculatePowerScore(row, riskVal, raceClass) {
         // no-hoper with zero signal. meritGate nudges horses with any form/ped above
         // pure price. Unposted odds sink to the bottom.
         const meritGate = (baseFormScore + basePedScore) > 0 ? 1 : 0;
-        const yoloOdds = (!isNaN(odds) && odds > 0) ? odds : 0;
+        const yoloOdds = (!isNaN(odds) && odds > 0) ? odds : (syntheticOdds || 0);
         return yoloOdds * 1000 + meritGate - (favRank * 0.0001);
     }
 
@@ -2526,9 +2897,10 @@ function calculatePowerScore(row, riskVal, raceClass) {
     const SV_CEIL_BASE = 10, SV_CEIL_SPAN = 115; // odds ceiling 10 → 125 as risk 0 → 1
     const SV_COEF = 2.2;
     let baseValueScore = 0;
-    if (!isNaN(odds) && odds > 1) {
+    const valueOdds = (!isNaN(odds) && odds > 1) ? odds : (syntheticOdds != null && syntheticOdds > 1 ? syntheticOdds : null);
+    if (valueOdds !== null) {
         const ceil = SV_CEIL_BASE + SV_CEIL_SPAN * risk * risk; // quadratic: stays low early
-        baseValueScore = Math.min(odds, ceil) * SV_COEF;
+        baseValueScore = Math.min(valueOdds, ceil) * SV_COEF;
     }
 
     // Maiden/debut career-exposure penalty (soft). A winless horse with MANY starts is
@@ -2556,6 +2928,19 @@ function calculatePowerScore(row, riskVal, raceClass) {
     let totalScore = (baseOddsScore * oddsWeight)
                    + ((baseFormScore + basePedScore) * meritWeight)
                    + (baseValueScore * valueWeight);
+
+    // Pre-odds CHAOS bonus: a separate additive term (not multiplied by any weight) that
+    // gives the slider visible differentiation within CHAOS (risk 65→99) before JRA publishes
+    // odds. The value term above can't bridge the merit gap (formMultiplier=100 → merit scores
+    // in the 50–90 range; synthetic odds max ~11 × SV_COEF × valueWeight ≈ 23). This bonus
+    // bypasses the weight dance and grows linearly from 0 at the CHAOS floor (65) to its max
+    // at 99. Scale factor (3.0) tunable from SLIDER_TUNING.md.
+    // ▲/△ start shifting around risk=88–90; ◎ may flip by risk=95+.
+    if (syntheticOdds !== null && risk > ENGINE_TUNING.CHAOS_MIN / 100) {
+        const chaosFloor = ENGINE_TUNING.CHAOS_MIN / 100;
+        const chaosDepth = Math.min(1, (risk - chaosFloor) / (0.99 - chaosFloor));
+        totalScore += Math.max(0, (syntheticOdds - 1.5) * chaosDepth * 3.0);
+    }
 
     // 5. Ultimate Tie-Breaker — true Fav wins ties by a fraction (esp. at Risk 0 pre-odds).
     totalScore -= (favRank * 0.0001);
@@ -2786,7 +3171,7 @@ function renderScoreExplain(row, anchor) {
     const ENGINE_SHAPE_LABELS = {
         'lone-favorite': 'lone favorite', 'two-clear': 'two clear', 'tight-top3': 'tight top-3',
         'tight-pack': 'tight pack', 'standout+pack': 'standout + open pack', 'wide-open': 'wide open',
-        'small-field': 'field too small', 'no-safe-anchor': 'no safe anchor',
+        'small-field': 'field too small', 'no-safe-anchor': 'no safe anchor', 'no-odds': 'pre-odds (no market prices)',
         'chalk-no-overlay': 'chalk, no value', 'underpriced-fav': 'underpriced favorite',
         'shape-risk-mismatch': 'shape/risk mismatch', 'empty': 'no field',
     };
@@ -3380,73 +3765,38 @@ function getEngineMarkPlanForRace(r_id, opts = {}) {
     else if (naturalCount === 3)                              shape = 'tight-top3';
     else                                                      shape = 'tight-pack';
 
-    // ── Count from (shape × risk) — WIDE-NET BACKBONE ────────────────────────
-    // The 3-mark trio+wide box (count 3) is the workhorse: it cashes whenever ANY 2 of
-    // 3 picks finish top-3, which backtests (May 2 / May 23) show is what actually wins
-    // on JRA cards — the ワイド line carried the old default's profits. count 4 (trio box
-    // ONLY, no wide line) is intentionally NEVER used: it drops the wide safety net and
-    // was the all-or-nothing template that went 0-for last night. SAFE shrinks to cheaper
-    // nets (複勝 / 2-horse wide); CHAOS escalates a genuine ◎ standout into a nagashi but
-    // otherwise keeps the 3-horse wide net on value-tilted picks.
+    // ── Count = COVERAGE (aim 4, trim untrusted longshots; never abstain) ─────
+    // The engine's ONLY job is how many marks. It backs your top ~4, but TRIMS the marginal
+    // mark (the 4th, then the 3rd) when its win odds exceed a risk-scaled "trust ceiling":
+    // low risk trims hard (toward 2 — fewer, safer), CHAOS keeps the longshots (toward 4).
+    // Floor of 2 so a pair always forms; never returns 0 (you bet every race). The chosen
+    // STRUCTURE (default / nagashi / box / win — see BET_STRUCTURES + buildRaceBetLines) then
+    // decides what bet these N marks actually form. This matches your real style: single +
+    // boxes whose width follows the count. Shape/standout are kept for the popover readout.
     const zone = risk <= T.SAFE_MAX ? 'SAFE' : risk >= T.CHAOS_MIN ? 'CHAOS' : 'BLEND';
 
-    // Bet-mode override: in "Default OrePro" safety-net mode (Win + 馬連 box + 3連複 box on
-    // all marks at a fixed stake) the boxes reward COVERAGE, so cast a wider, count-blind net
-    // — extra marks widen the boxes and partial results still pay. The precise ladder count
-    // is irrelevant, so skip the custom shape→count + abstention logic and just mark the
-    // top contenders (more of them, knowing the safety net is there).
-    if (getBetMode() === 'orepro_default') {
-        // AIM for 4 marks (Win + 馬連 box + 3連複 box of 4). But TRIM a trailing mark when it's
-        // a true longshot — keep the 4th/3rd only if its win odds are within a risk-scaled
-        // ceiling. Low risk trims hard (toward 2); CHAOS keeps the longshots. Floor 2 so a
-        // 馬連 box always forms. (You build matching 2- and 3-horse OrePro templates.)
-        const trimCeil = zone === 'CHAOS' ? Infinity : (T.OREPRO_TRIM_BASE + r * T.OREPRO_TRIM_SPAN);
-        let target = Math.min(4, fieldSize);
-        while (target > 2) {
-            const m = scored[target - 1];           // the marginal (lowest-ranked) candidate mark
-            if (m.odds === null || m.odds > trimCeil) target--; else break; // drop trailing longshot
-        }
-        const seqW = markSequenceForCount(target);
-        const aW = [];
-        for (let i = 0; i < seqW.length && i < scored.length; i++) aW.push({ h_id: scored[i].h_id, symbol: seqW[i] });
-        return { count: target, assignments: aW, reason: shape, shape,
-                 detail: { mode: 'orepro_default', trimCeil: trimCeil === Infinity ? null : Math.round(trimCeil), standout: +standout.toFixed(2), naturalCount, target } };
+    // Pre-odds: SAFE/BLEND both rely on market prices to know who is chalk vs value.
+    // CHAOS only needs form signals, so it still runs. Return abstain so the highlight
+    // overlay stays blank and the user isn't shown picks that have no odds basis.
+    const hasOdds = scored.some(e => e.odds !== null);
+    if (!hasOdds && zone !== 'CHAOS') return empty('no-odds');
+
+    const trimCeil = zone === 'CHAOS' ? Infinity : (T.OREPRO_TRIM_BASE + r * T.OREPRO_TRIM_SPAN);
+    let target = Math.min(4, fieldSize);
+    while (target > 2) {
+        const m = scored[target - 1];           // the marginal (lowest-ranked) candidate mark
+        if (m.odds !== null && m.odds > trimCeil) { target--; } else { break; } // null = unknown odds, not a longshot → keep
     }
 
-    let count;
-    switch (shape) {
-        case 'lone-favorite': count = zone === 'SAFE' ? 1 : 3; break;
-        case 'two-clear':     count = zone === 'SAFE' ? 2 : 3; break;
-        case 'tight-top3':    count = 3; break;
-        case 'tight-pack':    count = zone === 'SAFE' ? 2 : 3; break;
-        // Nagashi (count 5) is a rare, high-variance swing — reserve it for a genuine ◎
-        // standout only at the very top of the slider. Backtests show escalating to nagashi
-        // otherwise just burns the wide net's edge (0-hit cards). Chaos still hunts value,
-        // but via the 3-horse wide net on the value-tilted power ranking, not wide-less bets.
-        case 'standout+pack': count = (zone === 'CHAOS' && hasAxis && r >= 0.85) ? 5 : 3; break;
-        default:              count = zone === 'SAFE' ? 0 : 3; break; // wide-open: no safe anchor → abstain
-    }
-
-    // Nagashi-needs-standout: counts 5-6 require a genuine ◎ axis; else fall back to the
-    // 3-horse wide net (NOT the wide-less trio box).
-    if (count >= 5 && !hasAxis) count = 3;
-
-    // ── Abstention (return 0) — the core "bet fewer, better races" lever ──────
-    if (risk >= T.CHAOS_MIN && !hasOverlay && underpricedFav) return empty('chalk-no-overlay');
-    if (risk <= T.SAFE_MAX && (wideOpen || naturalCount === 0) && !underpricedFav) return empty('no-safe-anchor');
-    if (underpricedFav && !hasOverlay && risk < T.CHAOS_MIN) return empty('underpriced-fav');
-    if (count <= 0) return empty('shape-risk-mismatch');
-
-    count = Math.max(1, Math.min(6, count));
-
-    const seq = markSequenceForCount(count);
+    const seq = markSequenceForCount(target);
     const assignments = [];
     for (let i = 0; i < seq.length && i < scored.length; i++) {
         assignments.push({ h_id: scored[i].h_id, symbol: seq[i] });
     }
     return {
-        count, assignments, reason: shape, shape,
-        detail: { standout: +standout.toFixed(2), naturalCount, hasAxis, hasOverlay, underpricedFav, wideOpen },
+        count: target, assignments, reason: shape, shape,
+        detail: { standout: +standout.toFixed(2), naturalCount, hasAxis, hasOverlay, underpricedFav, wideOpen,
+                  trimCeil: trimCeil === Infinity ? null : Math.round(trimCeil), target },
     };
 }
 
@@ -3998,6 +4348,11 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         const tuneBtnHtml = (dateTimeline !== 'past' && isDevModeEnabled())
             ? `<button class="btn-ai-export dev-only" onclick="event.stopPropagation(); exportRaceForTuning('${r_id}')" title="Copy a prose-free slider sweep (engine marks at 0/25/50/75/99/100) for tuning">🎚️ Tuning Export</button>`
             : "";
+        // Dev-only: build this race's COMPOSED custom ticket and drop it in the OrePro cart (NO submit).
+        // For validating the custom-bet pipeline before it's wired into the live Apply flow.
+        const devBetBtnHtml = (dateTimeline !== 'past' && isDevModeEnabled())
+            ? `<button id="btn-devbet-${r_id}" class="btn-ai-export dev-only" onclick="event.stopPropagation(); placeCustomBetNoSubmit(event, '${r_id}')" title="DEV: place this race's composed custom ticket into the OrePro cart (no submit) for review">🧪 Place Custom (no submit)</button>`
+            : "";
 
         html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
             <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
@@ -4007,6 +4362,7 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
                 ${trendsBtnHtml}
                 ${exportBtnHtml}
                 ${tuneBtnHtml}
+                ${devBetBtnHtml}
 
                 <button class="btn-autopick-safe auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20" ${isLocked ? 'disabled' : ''}>🛡️ Safe Bet</button>
                 <button class="btn-autopick auto-group-${r_id}" style="${autoStyle}; margin-left: 8px;" onclick="autoPick(event, '${r_id}', null)" title="Use Sidebar Slider" ${isLocked ? 'disabled' : ''}>🎲 Auto</button>
@@ -4065,6 +4421,7 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
     currentTimelineTab = globalDateTimelineByDate[activeDate] || currentTimelineTab;
     currentCalendarMonth = getMonthKey(activeDate) || currentCalendarMonth;
     renderRaceCalendar();
+    refreshDayBetStructure(); // load + reflect this day's bet structure
 
     // Cheap init for ALL dates: locks, index tags, sort state, race class.
     // Runs fast (no HTML building) so global state is ready before any tab renders.
@@ -4326,6 +4683,7 @@ function switchMainTab(date) {
     currentTimelineTab = globalDateTimelineByDate[nextDate] || currentTimelineTab;
     currentCalendarMonth = getMonthKey(nextDate) || currentCalendarMonth;
     updateOreProSyncDateDisplay();
+    refreshDayBetStructure(); // load + reflect this day's bet structure
 
     // Lazy-render the target date if it hasn't been built yet.
     renderDateTab(nextDate);
@@ -4502,11 +4860,14 @@ function toggleRaceLock(event, r_id) {
 // Lock a SINGLE race after it's been applied/submitted (edit-protection for just that
 // race). Used by the per-race Apply path so applying one race doesn't lock the marks on
 // other races you're still working on for the day.
-// Freeze the placed bet's per-line breakdown onto the race meta at lock time, so the bet's
-// exact shape + per-line stake is recorded as-placed: future-proof for custom-ticket
-// analysis, and immune to later Bet-Mode / template changes. First-freeze-wins (idempotent);
-// never touches imported races (they carry real OrePro ¥ already).
-function freezeBetProfileAtLock(rid) {
+// Freeze the placed bet's per-line breakdown onto the race meta at APPLY time, so the bet's
+// exact shape + per-line stake is recorded as-placed: future-proof for custom-ticket analysis,
+// and immune to later day/per-race structure or stake changes. Captures the RESOLVED structure
+// (per-race override → day setting → default) at the moment of apply. First-freeze-wins
+// (idempotent); never touches imported races (they carry real OrePro ¥ already).
+// NOTE: this runs only from the OrePro apply path — manual lock is a marks-guard and does NOT
+// freeze, so pricing for a locked-but-unapplied race still follows the live resolved structure.
+function freezeBetProfileAtApply(rid) {
     const meta = globalRaceMeta[rid];
     if (meta?.betProfile && meta.betProfile.actualStaked != null) return; // imported: real ¥, leave it
     if (meta?.betProfile?.betLines?.length) return;                        // already frozen
@@ -4518,8 +4879,11 @@ function freezeBetProfileAtLock(rid) {
         comboCount: l.comboCount, stakePerCombo: l.stakePerCombo,
         ...(l.axisPp ? { axisPp: l.axisPp } : {})
     }));
-    const bp = { mode: getRaceBetProfile(rid)?.mode || getBetMode(), stake: plan.staked, betLines: lines };
-    if (plan.runners.length >= 5) bp.extrapolated = true; // 5-6 mark templates are extrapolated
+    // The frozen betLines ARE the record of what was placed (C# scores them verbatim). We also
+    // stash the composition label so applied races can show "Trio chase + Wide net" etc.
+    const comp = resolveBetComposition(rid);
+    const bp = { compositionLabel: compositionLabel(comp), stake: plan.staked, betLines: lines };
+    if (plan.runners.length >= 5) bp.extrapolated = true; // 5-6 mark plans are approximate at scale
     globalRaceMeta[rid] = { ...(meta || {}), betProfile: bp };
 }
 
@@ -4527,7 +4891,7 @@ function lockSingleRaceAfterSubmit(raceId) {
     const rid = String(raceId || '').trim();
     if (!rid || raceLocks[rid]) return 0;
     raceLocks[rid] = true;
-    freezeBetProfileAtLock(rid); // record the bet's line breakdown as placed
+    freezeBetProfileAtApply(rid); // record the bet's line breakdown as placed (apply path)
     touchRaceMeta(rid); // persist lockStateAtSave; the apply flow saves the blob once after.
     const tbody = document.getElementById(`tbody-${rid}`);
     if (tbody) tbody.innerHTML = buildTableBody(rid, globalRaceEntries[rid]);
@@ -4546,8 +4910,7 @@ function lockAllRacesForRaceDay(raceId) {
         if ((globalRaceInfo[rid]?.clean_date || '') !== date) return;
         if (!raceLocks[rid]) {
             raceLocks[rid] = true;
-            freezeBetProfileAtLock(rid); // record the bet's line breakdown as placed
-            touchRaceMeta(rid); // persist lockStateAtSave; caller saves the blob once after.
+            touchRaceMeta(rid); // lock = marks-guard only; bet freezes at apply, not here.
             locked++;
         }
         const tbody = document.getElementById(`tbody-${rid}`);
@@ -4589,7 +4952,7 @@ async function toggleLockAllBetsForActiveDay() {
         const want = !unlocking; // locking → true, unlocking → false
         if (!!raceLocks[r_id] === want) return;
         raceLocks[r_id] = want;
-        if (want) freezeBetProfileAtLock(r_id); // record the bet's line breakdown as placed
+        // lock = marks-guard only; the bet record freezes at apply, not on manual lock.
         touchRaceMeta(r_id);
         changed++;
         const tbody = document.getElementById(`tbody-${r_id}`);
@@ -4718,7 +5081,9 @@ async function saveMarksToServer() {
             manualAdjustments: Number.isFinite(Number(meta.manualAdjustments)) ? Number(meta.manualAdjustments) : 0,
             lockStateAtSave: typeof meta.lockStateAtSave === 'boolean' ? meta.lockStateAtSave : null,
             activeSymbols: Array.isArray(meta.activeSymbols) ? meta.activeSymbols.map(symbol => String(symbol || '').trim()).filter(Boolean) : [],
-            betProfile: normalizeBetProfile(meta.betProfile)
+            betProfile: normalizeBetProfile(meta.betProfile),
+            // Per-race bet COMPOSITION override (Voting tab). Preserve only valid shapes.
+            ...(normalizeComposition(meta.betComposition) ? { betComposition: normalizeComposition(meta.betComposition) } : {})
         }])
     );
 
@@ -5677,33 +6042,55 @@ function nCk(n, k) { // combinations
     return Math.round(r);
 }
 
-// OrePro "default" template allocation. Target split of the per-race stake is
-// 単勝 50% / 馬連 box 30% / 3連複 box 20%; each box's per-combo amount is rounded to
-// the nearest ¥100 (floored at ¥100), and 単勝 takes whatever remains. This reproduces
-// the user's factory-default templates EXACTLY at 1/2/3/4 & 7 marks (verified against
-// OrePro screenshots); 5–6 are extrapolated and happen to land on clean ¥100 multiples.
-// n=2 has no trio (need ≥3 horses) → 単勝 50% / 馬連 box 50%.
-function oreproDefaultLineStakes(n, oStake) {
-    const round100 = x => Math.max(100, Math.round(x / 100) * 100);
-    if (n <= 1) return { winStake: oStake, q: null, t: null };
-    const qCombos = nCk(n, 2);
-    if (n === 2) return { winStake: oStake * 0.5, q: { combos: qCombos, per: round100(oStake * 0.5 / qCombos) }, t: null };
-    const tCombos = nCk(n, 3);
-    const qPer = round100(oStake * 0.3 / qCombos);
-    const tPer = round100(oStake * 0.2 / tCombos);
-    return { winStake: oStake - qPer * qCombos - tPer * tCombos, q: { combos: qCombos, per: qPer }, t: { combos: tCombos, per: tPer } };
+// Build concrete bet LINES from a composition (the user's chosen line list) for a given set
+// of marked runners. Each composition line carries a TOTAL ¥; per-combo = floor100(total ÷ 点数)
+// so amounts are real ¥100 OrePro units. A line is dropped if the mark count can't form it
+// (e.g. trio with 2 marks) or it's underfunded (< ¥100/combo). Each built line keeps a
+// `_specIndex` back-pointer so the composer can show its 点数/¥ readout. Returns { lines, staked }.
+function buildLinesFromComposition(comp, runners) {
+    const floor100 = x => Math.floor((Number(x) || 0) / 100) * 100;
+    const n = (runners || []).length;
+    const honmei = runners.find(r => r.symbol === '◎') || runners[0] || null;
+    const out = [];
+    (comp?.lines || []).forEach((spec, idx) => {
+        const t = BET_LINE_TYPES[spec.type];
+        if (!t || n < t.minMarks) return;
+        const yen = Math.max(0, parseInt(spec.yen, 10) || 0);
+        if (yen <= 0) return;
+        const combos = t.combos(n);
+        if (combos <= 0) return;
+
+        let horses, axisPp;
+        if (t.pick === 'honmei') {
+            if (!honmei || !honmei.pp) return;
+            horses = [honmei];
+        } else if (t.pick === 'opp') {
+            if (!honmei || !honmei.pp) return;
+            horses = runners.filter(r => r !== honmei);
+            axisPp = honmei.pp;
+        } else { // 'all'
+            horses = runners.slice();
+        }
+
+        const perCombo = combos === 1 ? floor100(yen) : floor100(yen / combos);
+        if (perCombo < 100) return; // underfunded for this 点数 — can't place a real ¥100 ticket
+        out.push({
+            ticket: t.ticket, method: t.method, label: t.jpLabel, // JP ticket name → TICKET_LABEL_EN maps it to English in breakdowns
+            horses, ...(axisPp ? { axisPp } : {}),
+            comboCount: combos, stakePerCombo: perCombo, _specIndex: idx,
+        });
+    });
+    const staked = out.reduce((s, l) => s + l.stakePerCombo * l.comboCount, 0);
+    return { lines: out, staked };
 }
 
-// ── The bet-plan seam (FUTURE-PROOF for dynamic bets) ───────────────────────
-// A race's placed bets = a list of bet LINES. Today buildRaceBetLines() derives
-// them from the mark-count ladder, but this is the ONE place the bet shape is
-// decided: a future "dynamic bet" source (OrePro easy-mode-off custom bets read
-// back via api_post_bet_customize get, or an explicit per-race bet record) can
-// return the same line shape and every downstream consumer — staked, won, labels —
-// works unchanged. Each line is self-describing:
+// ── The bet-plan seam ────────────────────────────────────────────────────────
+// A race's placed bets = a list of bet LINES. buildRaceBetLines() derives them from the
+// resolved COMPOSITION (per-race override → day setting → default preset), OR returns the
+// FROZEN lines verbatim once the race is applied. Each line is self-describing:
 //   { ticket, method, label, horses:[{pp}], axisPp?, comboCount, stakePerCombo }
-// so staked = Σ comboCount·stakePerCombo and won is priced per line, with NO
-// dependency on "mark count" beyond how the ladder happens to build them today.
+// so staked = Σ comboCount·stakePerCombo and won is priced per line. When applied, the built
+// list is frozen and the C# side scores that exact list — the two never drift for placed bets.
 function buildRaceBetLines(race) {
     const info = race?.info || {};
     const raceId = String(info.race_id || '').trim();
@@ -5726,17 +6113,10 @@ function buildRaceBetLines(race) {
     const n = runners.length;
     if (n === 0) return { runners, lines: [], staked: 0 };
 
-    const honmei = runners.find(r => r.symbol === "◎") || runners[0];
-
-    // Price by this race's FROZEN bet record if it has one (set at placement / backfill),
-    // else by the current global Bet Mode. This is what keeps history stable when the
-    // global setting changes later.
+    // If this race froze its bet lines at APPLY (or carries explicit custom-ticket lines),
+    // use them verbatim — the bet is recorded as actually placed, immune to later day/per-race
+    // composition or stake changes. C# scores this exact frozen list, so they never drift.
     const _profile = getRaceBetProfile(raceId);
-    const _mode = _profile?.mode || getBetMode();
-
-    // If this race froze its bet lines at placement (or carries explicit custom-ticket
-    // lines), use them verbatim — the bet is recorded as actually placed, immune to later
-    // global Bet-Mode / template changes. This is the future-proof path for custom tickets.
     const _frozen = _profile?.betLines;
     if (Array.isArray(_frozen) && _frozen.length) {
         const lines = _frozen.map(l => ({ ...l, horses: (l.horses || []).map(h => ({ ...h })) }));
@@ -5744,43 +6124,10 @@ function buildRaceBetLines(race) {
         return { runners, lines, staked: Math.round(staked) };
     }
 
-    // "Default OrePro" safety-net mode: Win(単勝) on ◎ + 馬連 box + 3連複 box on ALL marks.
-    // Stake allocation mirrors the user's actual OrePro template (NOT an even split) —
-    // a Win-heavy anchor + box coverage:
-    //   n≥3: 単勝 50% / 馬連 box 30% / 3連複 box 20%   (e.g. ¥5,000 / ¥3,000 / ¥2,000)
-    //   n=2: 単勝 50% / 馬連 box 50%                    (no trio with 2 horses)
-    // Per-combo stake = line allocation ÷ that line's 点数. Keep in sync with the OrePro
-    // templates the user builds (OREPRO_CAPABILITIES.md).
-    if (_mode === 'orepro_default') {
-        const oStake = _profile?.stake || getOreProDefaultStake();
-        const a = oreproDefaultLineStakes(n, oStake); // OrePro's real ¥100-floor allocation
-        const oLines = [];
-        if (honmei.pp && a.winStake > 0)
-            oLines.push({ ticket: 'win',      method: 'normal', label: '単勝',  horses: [honmei],        comboCount: 1,          stakePerCombo: a.winStake });
-        if (a.q)
-            oLines.push({ ticket: 'quinella', method: 'box',    label: '馬連',  horses: runners.slice(), comboCount: a.q.combos, stakePerCombo: a.q.per });
-        if (a.t)
-            oLines.push({ ticket: 'trio',     method: 'box',    label: '3連複', horses: runners.slice(), comboCount: a.t.combos, stakePerCombo: a.t.per });
-        const staked = oLines.reduce((s, l) => s + l.stakePerCombo * l.comboCount, 0);
-        return { runners, lines: oLines, staked: Math.round(staked) };
-    }
-
-    // Ladder line shapes (combo counts mirror OREPRO_CAPABILITIES.md).
-    let lines;
-    if (n === 1)      lines = [{ ticket: 'place', method: 'normal', label: '複勝',       horses: [honmei],         comboCount: 1 }];
-    else if (n === 2) lines = [{ ticket: 'wide',  method: 'box',    label: 'ワイド',     horses: runners.slice(),  comboCount: nCk(n, 2) }];
-    else if (n === 3) lines = [{ ticket: 'trio',  method: 'box',    label: '3連複',      horses: runners.slice(),  comboCount: nCk(n, 3) },
-                               { ticket: 'wide',  method: 'box',    label: 'ワイド',     horses: runners.slice(),  comboCount: nCk(n, 2) }];
-    else if (n === 4) lines = [{ ticket: 'trio',  method: 'box',    label: '3連複',      horses: runners.slice(),  comboCount: nCk(n, 3) }];
-    else              lines = [{ ticket: 'trio',  method: 'nagashi1', label: '3連複ながし', horses: runners.filter(r => r !== honmei), axisPp: honmei.pp, comboCount: nCk(n - 1, 2) }];
-
-    // Spread the (editable) ladder total across all combos → per-combo stake. A dynamic
-    // source would instead set stakePerCombo on each line directly.
-    const totalCombos = lines.reduce((s, l) => s + (l.comboCount || 0), 0) || 1;
-    const totalStake = stakeForMarkCount(n);
-    const perCombo = totalStake / totalCombos;
-    lines.forEach(l => { l.stakePerCombo = perCombo; });
-    return { runners, lines, staked: totalStake };
+    // Not frozen → price LIVE from the resolved composition (per-race override → day → default).
+    const comp = resolveBetComposition(raceId);
+    const built = buildLinesFromComposition(comp, runners);
+    return { runners, lines: built.lines, staked: built.staked };
 }
 
 // Score one bet line against the finishing result. Returns ¥ won for that line.
@@ -6708,6 +7055,9 @@ function buildRacecourseCheatHtml(targetDate) {
             html += `<div class="export-race-title voting-race-title" onclick="toggleVotingSidebarRace('${escapeHtml(raceCard.r_id)}')" title="Click to collapse/expand this race"><span class="voting-race-arrow">${arrow}</span><span class="voting-race-title-text">🕒 ${escapeHtml(raceCard.time)} | <span class="voting-race-track">${escapeHtml(raceCard.track)}</span> R${raceCard.raceNum}: ${escapeHtml(raceCard.raceName || '')} ${raceCard.winBadgesHtml}${getOreProApplyBadge(raceCard.r_id)}</span><button class="toolbar-btn toolbar-btn-muted voting-race-apply-btn" onclick="applySingleRaceVotesToOrePro(event, '${escapeHtml(raceCard.r_id)}')" title="Apply only this race to OrePro">Apply</button></div>`;
             html += `<div class="voting-race-body">`;
 
+            // Per-race bet-structure override (collapsed unless this race already overrides).
+            html += buildRaceBetOverrideHtml(raceCard.r_id, timeline);
+
             if (raceCard.orepro) {
                 html += `
                 <div class="orepro-race-inline">
@@ -6818,33 +7168,9 @@ let globalOreProApplyState = {};
 // loadOreProSettingsLite at page init.
 let globalOreProSettings = {};
 
-// --- Mark-count template-cost ladder (sunk-cost basis) ---
-// OrePro auto-fires ONE template keyed by how many marks a race carries; each costs a
-// fixed total. The ladder is editable in Settings (bet_template_costs); this mirrors the
-// backend default + StakeForMarkCount so Day P/L, the sunk-cost stat, and Discord agree.
-const DEFAULT_BET_TEMPLATE_COSTS = [100, 100, 400, 400, 600, 1000];
-
-function getBetTemplateCosts() {
-    const raw = globalOreProSettings?.bet_template_costs;
-    if (typeof raw === 'string' && raw.trim()) {
-        try {
-            const arr = JSON.parse(raw);
-            if (Array.isArray(arr) && arr.length && arr.every(c => Number.isFinite(Number(c)) && Number(c) >= 0)) {
-                return arr.map(Number);
-            }
-        } catch (_) { /* fall through to default */ }
-    }
-    return DEFAULT_BET_TEMPLATE_COSTS;
-}
-
-// Total ¥ a race carrying `markCount` marks cost to bet. 0 marks → ¥0; counts beyond the
-// ladder clamp to the last entry. Mirrors SettingsService.StakeForMarkCount.
-function stakeForMarkCount(markCount) {
-    const ladder = getBetTemplateCosts();
-    const n = Number(markCount) || 0;
-    if (n <= 0 || ladder.length === 0) return 0;
-    return ladder[Math.min(n, ladder.length) - 1];
-}
+// (Retired 2026-06-02: the mark-count template-cost ladder. Stake is now a flat per-race
+//  total — getOreProDefaultStake() — that the chosen bet STRUCTURE spreads across its combos.
+//  See BET_STRUCTURES + buildRaceBetLines. The old ¥100/¥400 ladder was the dead test setup.)
 
 // When true, render race times in the user's local timezone with AM/PM. When false,
 // keep JST 24h (the historical default — operator mentally maps it).
@@ -7183,6 +7509,21 @@ async function clearActiveDayBets() {
     }
 }
 
+// True when the user has hand-placed marks on this race (vs. pure engine auto-pick). Used by
+// Auto Bet Day to PROTECT manually-marked races — the operator's workflow is "seed the races I
+// know, let the engine fill the rest", so the bulk sweep must skip races I touched myself.
+// Signals: markSource carries manual involvement ('manual' or 'mixed'), or a manual-adjust count.
+// NOTE: this guards the BULK sweep only; the per-race auto-pick button is an explicit override
+// and still overwrites (applyAutoPickSelectionsToRace is intentionally unguarded).
+function raceHasUserMarks(r_id) {
+    const meta = globalRaceMeta[r_id];
+    if (!meta || typeof meta !== 'object') return false;
+    const src = String(meta.markSource || '').trim();
+    if (src === 'manual' || src === 'mixed') return true;
+    if (Number(meta.manualAdjustments) > 0) return true;
+    return false;
+}
+
 async function autoBetActiveDay() {
     const date = String(currentActiveDate || '').trim();
     if (!date) {
@@ -7215,7 +7556,7 @@ async function autoBetActiveDay() {
 
     const riskVal = getCurrentAutoPickRisk();
     const confirmed = window.confirm(
-        `Auto-pick all remaining unlocked races for ${date} using Risk ${riskVal}?\n\nThis only updates marks within UMAnager. Nothing is sent to OrePro until you click Apply Votes.`
+        `Auto-pick the remaining races for ${date} using Risk ${riskVal}?\n\nRaces you've hand-marked or locked are left untouched — the engine only fills the rest.\n\nThis only updates marks within UMAnager. Nothing is sent to OrePro until you click Apply Votes.`
     );
     if (!confirmed) return;
 
@@ -7230,11 +7571,18 @@ async function autoBetActiveDay() {
 
         let changedRaceIds = [];
         let skippedLocked = 0;
+        let skippedManual = 0;
         let abstained = 0;
 
         eligibleRaceIds.forEach(r_id => {
             if (isRaceLocked(r_id)) {
                 skippedLocked += 1;
+                return;
+            }
+            // Protect the operator's own picks: the bulk sweep only fills races I haven't
+            // hand-marked. (Lock a race, or use the per-race auto-pick button, to override.)
+            if (raceHasUserMarks(r_id)) {
+                skippedManual += 1;
                 return;
             }
 
@@ -7269,13 +7617,14 @@ async function autoBetActiveDay() {
         // Auto-bet stays local to UMAnager — we don't push to OrePro here. Use Apply Votes
         // afterwards (optionally tweak marks first) to send everything across.
         const lockNote = skippedLocked ? ` Skipped ${skippedLocked} locked race(s).` : '';
+        const manualNote = skippedManual ? ` Left ${skippedManual} hand-marked race(s) untouched.` : '';
         const abstainNote = abstained ? ` Engine abstained on ${abstained} race(s) (no good bet at Risk ${riskVal}).` : '';
         if (!changedRaceIds.length) {
-            setOreProSessionStatus(`Auto-pick finished but produced no new marks for ${date}.${abstainNote}${lockNote}`, 'warn');
+            setOreProSessionStatus(`Auto-pick finished but produced no new marks for ${date}.${abstainNote}${manualNote}${lockNote}`, 'warn');
             return;
         }
         setOreProSessionStatus(
-            `Auto-picked ${changedRaceIds.length} race(s) for ${date} at Risk ${riskVal}. Click Apply Votes to send them to OrePro.${abstainNote}${lockNote}`,
+            `Auto-picked ${changedRaceIds.length} race(s) for ${date} at Risk ${riskVal}. Click Apply Votes to send them to OrePro.${abstainNote}${manualNote}${lockNote}`,
             'info'
         );
     } finally {
@@ -7401,10 +7750,133 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
     }
 }
 
+// ── Dev-mode: place a race's COMPOSED custom bet straight into the OrePro cart (NO submit) ──
+// Builds the exact multi-line ticket from the race's resolved composition (the same
+// buildRaceBetLines() the UI/sunk-cost use) and pushes it via /api/orepro/custom-bet/test,
+// which sets simple_bet=n, adds to the orebet_ cart, and confirms via read-back. Deliberately
+// does NOT submit — the ticket waits in the cart for manual review. This is the safe sandbox
+// for validating the custom-bet pipeline before it's trusted in the main Apply flow.
+// Maps the JS line vocab → OrePro codes:
+//   ticket  win→1単  place→2複  quinella→4馬連  wide→5ワイド  trio→7三連複
+//   method  normal→0通常  box→2BOX  nagashi1→3ながし
+function findRaceObjById(rid) {
+    rid = String(rid || '').trim();
+    for (const date of Object.keys(globalRacesByDate)) {
+        const arr = globalRacesByDate[date];
+        if (!Array.isArray(arr)) continue;
+        const hit = arr.find(r => String(r?.info?.race_id || '').trim() === rid);
+        if (hit) return hit;
+    }
+    return null;
+}
+
+function buildOreProCustomLinesForRace(race) {
+    const TYPE   = { win: 1, place: 2, quinella: 4, wide: 5, trio: 7 };
+    const METHOD = { normal: 0, box: 2, nagashi1: 3 };
+    const plan = buildRaceBetLines(race);
+    const lines = [];
+    for (const l of (plan.lines || [])) {
+        const type = TYPE[l.ticket];
+        const method = METHOD[l.method];
+        const money = parseInt(l.stakePerCombo, 10) || 0;
+        if (type == null || method == null || money <= 0) continue;
+        const pps = (l.horses || []).map(h => parseInt(h.pp, 10)).filter(Number.isFinite);
+        let umaban;
+        if (l.method === 'nagashi1') {
+            const axis = parseInt(l.axisPp, 10);
+            const partners = pps.filter(p => p !== axis).sort((a, b) => a - b);
+            if (!Number.isFinite(axis) || partners.length === 0) continue;
+            umaban = `${axis}_${partners.join('-')}`;
+        } else if (l.method === 'box') {
+            if (pps.length < 2) continue;
+            umaban = [...pps].sort((a, b) => a - b).join('-');
+        } else { // normal single (win/place)
+            if (pps.length < 1) continue;
+            umaban = String(pps[0]);
+        }
+        lines.push({ type, method, umaban, money, _label: l.label, _combos: l.comboCount });
+    }
+    return { lines, staked: plan.staked };
+}
+
+async function placeCustomBetNoSubmit(event, raceId) {
+    if (event) event.stopPropagation();
+    const rid = String(raceId || '').trim();
+    const race = findRaceObjById(rid);
+    if (!race) { window.alert('Race not found in loaded data.'); return; }
+
+    const built = buildOreProCustomLinesForRace(race);
+    if (!built.lines.length) {
+        window.alert('No custom bet lines for this race.\n\nMark some horses (and/or set a bet composition) first — the composer needs marks to build the lines.');
+        return;
+    }
+
+    const label = `${trackName(race.info.place)} R${race.info.race_number}`;
+    const summary = built.lines.map(l =>
+        `• ${l._label || ('type ' + l.type)}  [${l.umaban}]  ¥${l.money.toLocaleString()}/combo × ${l._combos} = ¥${(l.money * l._combos).toLocaleString()}`
+    ).join('\n');
+    const ok = window.confirm(
+        `🧪 DEV — place custom bet to OrePro CART (no submit)\n\n${label}\n\n${summary}\n\n` +
+        `Total: ¥${built.staked.toLocaleString()}\n\n` +
+        `This flips your account to easy-mode-OFF (simple_bet=n) and drops these lines in the cart. It does NOT submit. Proceed?`
+    );
+    if (!ok) return;
+
+    const btn = document.getElementById(`btn-devbet-${rid}`);
+    const prev = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Placing...'; }
+
+    try {
+        const res = await fetch('/api/orepro/custom-bet/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                race_id: rid,
+                dry_run: false,
+                lines: built.lines.map(({ type, method, umaban, money }) => ({ type, method, umaban, money })),
+            })
+        });
+        const data = await res.json();
+        const stat = String(data?.status || 'unknown');
+        if (stat === 'ok') {
+            window.alert(`✅ Placed to cart (no submit)\n\n${(data.betIds || []).join('\n')}\n\nReload OrePro ${label} to review, then submit there if you want it.`);
+        } else {
+            window.alert(`⚠️ ${stat}: ${data?.message || 'see diagnostics panel'}`);
+        }
+        const out = document.getElementById('orepro-sync-results');
+        if (out) {
+            out.innerHTML = `
+                <div class="orepro-sync-title">🧪 Dev: Place Custom Bet (no submit) — ${escapeHtml(label)}</div>
+                <div class="orepro-sync-list">[${escapeHtml(stat)}] ${escapeHtml(String(data?.message || ''))}</div>
+                <details style="margin-top:6px; font-size:11px; font-family:monospace;">
+                    <summary>diagnostics</summary>
+                    <div style="margin:4px 0;"><b>sent betIds:</b> ${escapeHtml(JSON.stringify(data?.betIds || []))}</div>
+                    <div style="margin:4px 0;"><b>cart read-back:</b> ${escapeHtml(JSON.stringify(data?.cartBetIds || []))}</div>
+                    <div style="margin:4px 0;"><b>easyModeOff:</b> ${escapeHtml(String(data?.easyModeOff))} · <b>confirmed:</b> ${escapeHtml(String(data?.confirmed))}</div>
+                </details>`;
+        }
+    } catch (err) {
+        window.alert(`❌ Failed: ${err?.message || err}`);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = prev || '🧪 Place Custom (no submit)'; }
+    }
+}
+
 /// Apply Day Votes (bulk) — iterates every unsubmitted voted race for the active day,
 /// pushing each through the proven single-race endpoint with submit_after_apply. Two
 /// confirmations: first only if the day has any unbet races (incomplete coverage),
 /// second always (final "you sure?" gate before anything hits OrePro).
+// Recognize the "OrePro session/cookie expired" failure shape. When the saved cookie is dead,
+// OrePro serves a login page instead of the shutuba, which the backend diagnostic flags as
+// hasLoginForm=True (and 'no HorseList rows'). Detecting it lets the bulk apply STOP and tell the
+// operator plainly — instead of grinding through N cryptic failures that hide the real cause.
+function looksLikeExpiredOreProSession(result, data) {
+    const status = String(result?.status || data?.status || '').trim().toLowerCase();
+    if (status === 'expired') return true; // explicit server signal (when backend hardening ships)
+    const msg = String(result?.message || data?.message || '').toLowerCase();
+    return msg.includes('hasloginform=true') || msg.includes('session expired') || msg.includes('cookie has expired');
+}
+
 async function applyAllDayVotesToOrePro() {
     const date = String(currentActiveDate || '').trim();
     if (!date) {
@@ -7479,6 +7951,7 @@ async function applyAllDayVotesToOrePro() {
 
         let okCount = 0;
         let failCount = 0;
+        let sessionExpired = false;
         const failureLines = [];
 
         for (let i = 0; i < eligible.length; i++) {
@@ -7510,11 +7983,33 @@ async function applyAllDayVotesToOrePro() {
                 } else {
                     failCount++;
                     failureLines.push(`[${rowStatus || topStatus || 'error'}] ${r_id}: ${result?.message || data?.message || 'unknown'}`);
+                    // Dead cookie fails every race identically — stop now and report the real cause.
+                    if (looksLikeExpiredOreProSession(result, data)) { sessionExpired = true; break; }
                 }
             } catch (err) {
                 failCount++;
                 failureLines.push(`[exception] ${r_id}: ${err?.message || err}`);
             }
+        }
+
+        // Cookie died mid-run → don't grind the rest or report cryptic per-race failures.
+        // Tell the operator exactly what happened and how to fix it. (finally{} resets the button.)
+        if (sessionExpired) {
+            await loadOreProApplyState().catch(() => {});
+            setOreProSessionStatus(
+                'OrePro session expired — your saved cookie is no longer logged in. Update it in Settings → OrePro, then re-run Apply Day Votes. No bets were placed.',
+                'error'
+            );
+            window.alert(
+                '❌ OrePro session expired\n\n' +
+                'Your saved cookie is no longer logged in, so nothing was placed.\n\n' +
+                'Fix:\n' +
+                ' 1. Log in at orepro.netkeiba.com\n' +
+                ' 2. DevTools → Network → copy the full Cookie header value\n' +
+                ' 3. UMAnager → Settings → OrePro → paste → Save\n' +
+                ' 4. Re-run Apply Day Votes'
+            );
+            return;
         }
 
         // Lock only the races we actually submitted (not empty/no-mark races for the day).
@@ -9154,7 +9649,12 @@ function exportRaceForTuning(r_id) {
     // Slider sweep: top-4 by power score at each position (mirrors the auto-pick sort).
     const positions = [0, 25, 50, 75, 90, 99, 100];
     const symbols = ['◎', '〇', '▲', '△'];
+    const exportHasOdds = entries.some(row => { const o = parseFloat(row.Odds); return Number.isFinite(o) && o > 0; });
     const sweep = positions.map(risk => {
+        const sweepZone = risk <= ENGINE_TUNING.SAFE_MAX ? 'SAFE' : risk >= ENGINE_TUNING.CHAOS_MIN ? 'CHAOS' : 'BLEND';
+        if (!exportHasOdds && sweepZone !== 'CHAOS') {
+            return `risk ${String(risk).padStart(3)}: (pre-odds · SAFE/BLEND hidden — needs market prices)`;
+        }
         const top4 = entries
             .map(row => ({ row, power: calculatePowerScore(row, risk) }))
             .sort((a, b) => b.power - a.power)
@@ -9542,7 +10042,6 @@ async function showSettingsModal() {
     document.getElementById('setting-umamusumeMode').checked = localStorage.getItem(UMM_STORAGE_KEY) === '1';
     document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
     document.getElementById('setting-votingMarkMode').value = getVotingMarkMode();
-    { const bm = document.getElementById('setting-betMode'); if (bm) bm.value = getBetMode(); }
     { const os = document.getElementById('setting-oreproDefaultStake'); if (os) os.value = getOreProDefaultStake(); }
     document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     document.getElementById('setting-tvModeSplitPercent').value = Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent))
@@ -9729,7 +10228,6 @@ async function updateSidebarSettings() {
         showConsole: document.getElementById('setting-showConsole').checked,
         highlightAutoBets: document.getElementById('setting-highlightAutoBets').checked,
         votingMarkMode: (document.getElementById('setting-votingMarkMode').value === 'TRADITIONAL_ROLES') ? 'TRADITIONAL_ROLES' : 'BOX_OPTIMIZATION',
-        betMode: (document.getElementById('setting-betMode')?.value === 'orepro_default') ? 'orepro_default' : 'custom',
         oreproDefaultStake: (() => { const v = parseInt(document.getElementById('setting-oreproDefaultStake')?.value, 10); return Number.isFinite(v) && v > 0 ? v : 10000; })(),
         tvModeSplitPercent: parseClampedPercent('setting-tvModeSplitPercent', Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent)) ? Number(appConfig.ui?.tvModeSplitPercent) : 50),
         tvModePanelsFlipped: document.getElementById('setting-tvModePanelsFlipped').checked,
@@ -10223,10 +10721,6 @@ async function loadOrchestratorSettings() {
         set('setting-betStakeWin',      s.bet_stake_win_yen      ?? legacyStake);
         set('setting-betStakeQuinella', s.bet_stake_quinella_yen ?? legacyStake);
         set('setting-betStakeTrio',     s.bet_stake_trio_yen     ?? legacyStake);
-        // Template-cost ladder: stored as a JSON int[], shown as comma-separated.
-        let ladderCsv = DEFAULT_BET_TEMPLATE_COSTS.join(',');
-        try { const a = JSON.parse(s.bet_template_costs || ''); if (Array.isArray(a) && a.length) ladderCsv = a.join(','); } catch (_) {}
-        set('setting-betTemplateCosts', ladderCsv);
 
         // Checkbox for "navigate to bet_complete.html after submit"
         const navCb = document.getElementById('setting-orepro-nav-to-complete');
@@ -10285,29 +10779,6 @@ async function saveBetStake(leg, value) {
     try { await reEstimateActiveDay(); } catch (_) { /* fine */ }
     // Re-render past-race hit chips (they read stake at render time).
     if (typeof rerenderAllRaceTables === 'function') rerenderAllRaceTables();
-}
-
-// Save the mark-count template-cost ladder. Input is comma-separated ¥ amounts (1 mark,
-// 2, 3, …); stored as a JSON int[] in app_settings (bet_template_costs).
-async function saveBetTemplateCosts(value) {
-    const parts = String(value || '')
-        .split(',')
-        .map(x => parseInt(x.trim(), 10))
-        .filter(n => Number.isFinite(n) && n >= 0);
-    if (parts.length === 0) {
-        // Reject empties — restore the displayed value from the current setting.
-        const el = document.getElementById('setting-betTemplateCosts');
-        if (el) el.value = getBetTemplateCosts().join(',');
-        return;
-    }
-    const json = JSON.stringify(parts);
-    await saveOrchestratorSetting('bet_template_costs', json);
-    globalOreProSettings = { ...(globalOreProSettings || {}), bet_template_costs: json };
-    // Normalize the field to the parsed list and refresh anything that prices stakes.
-    const el = document.getElementById('setting-betTemplateCosts');
-    if (el) el.value = parts.join(',');
-    try { updateQuickStats(); } catch (_) {}
-    try { refreshSunkCostStat(); } catch (_) {}
 }
 
 async function saveOrchestratorSetting(key, value) {

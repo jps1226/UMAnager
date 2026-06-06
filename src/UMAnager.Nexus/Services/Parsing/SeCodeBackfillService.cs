@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: SeCodeBackfillService.cs
+// LAYER: Parsing (one-shot backfill, idempotent)
+// PURPOSE: Re-parses staged SE records to fill the JockeyCode / TrainerCode columns on existing
+//          race_entries (Phase 8). Writes only when both codes resolve and differ from current.
+// KEY DEPENDENCIES: AppDbContext, SeRecordParser.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Npgsql;

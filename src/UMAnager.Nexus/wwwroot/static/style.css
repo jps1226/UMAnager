@@ -149,6 +149,7 @@
         .top-bar-risk-label { font-size: 11px; color: #888; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px; text-align: center; margin-bottom: 4px; }
         .top-bar-risk input[type=range] { width: 100%; cursor: pointer; accent-color: #ff9f43; }
         .top-bar-risk-scale { display: flex; justify-content: space-between; font-size: 9px; color: #555; font-weight: bold; letter-spacing: 0.3px; margin-top: 1px; }
+        .pre-odds-notice { font-size: 9px; color: #c8860a; text-align: center; margin-top: 3px; letter-spacing: 0.02em; opacity: 0.85; }
 
         /* Compact date control — date display is now the calendar trigger */
         .active-date-nav-topbar { background: rgba(255, 255, 255, 0.05); border: 1px solid #333; border-radius: 10px; padding: 4px 8px; }
@@ -240,6 +241,49 @@
         .toolbar-btn-primary { background: #1dd1a1; color: #000; font-weight: bold; border-color: #1dd1a1; }
         .toolbar-btn-muted { background: #333; border-color: #555; }
         #btn-winning-votes-focus.is-active { background: #1f5f4e; border-color: #1dd1a1; color: #d9fff5; }
+
+        /* Day-level bet preset selector (main toolbar) + the composer panel below it. */
+        .toolbar-betsel { display: inline-flex; align-items: center; gap: 6px; }
+        .toolbar-betsel-label { font-size: 13px; color: #aaa; white-space: nowrap; }
+        #day-bet-structure { background: #2a2f3a; color: #e6e6e6; border: 1px solid #555; border-radius: 6px; padding: 6px 8px; font-size: 13px; cursor: pointer; }
+        #day-bet-structure:hover { border-color: #1dd1a1; }
+        .day-bet-desc { margin-top: 6px; font-size: 12px; color: #9fb8c8; line-height: 1.4; max-width: 980px; }
+        .day-bet-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .composer-toggle { font-size: 11px; color: #7a8a99; cursor: pointer; border-bottom: 1px dotted #556; }
+        .composer-toggle:hover { color: #1dd1a1; border-bottom-color: #1dd1a1; }
+
+        /* The line composer (shared by the day panel + per-race override). */
+        .bet-composer { margin-top: 8px; padding: 8px 10px; background: rgba(255,255,255,0.03); border: 1px solid #333; border-radius: 8px; max-width: 560px; }
+        .composer-line { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+        .composer-line-type { background: #2a2f3a; color: #e6e6e6; border: 1px solid #555; border-radius: 6px; padding: 4px 6px; font-size: 12px; cursor: pointer; min-width: 120px; }
+        .composer-line-type:hover { border-color: #1dd1a1; }
+        .composer-line-yen { font-size: 12px; color: #aaa; }
+        .composer-yen-input { width: 78px; background: #1f242e; color: #e6e6e6; border: 1px solid #555; border-radius: 5px; padding: 4px 6px; font-size: 12px; }
+        .composer-line-detail { font-size: 11px; color: #8fa6b6; flex: 1; }
+        .composer-line-na { color: #c87; }
+        .composer-line-role { font-size: 9px; font-weight: bold; color: #000; background: #1dd1a1; border-radius: 3px; padding: 1px 5px; text-transform: uppercase; letter-spacing: 0.04em; }
+        .composer-line-desc { font-size: 11px; color: #8a9ba8; line-height: 1.35; margin: 0 0 6px 2px; padding-left: 2px; border-left: 2px solid #333; padding-left: 8px; }
+        .composer-line-del { font-size: 12px; color: #a66; cursor: pointer; padding: 0 4px; }
+        .composer-line-del:hover { color: #ff6b6b; }
+        .composer-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; padding-top: 6px; border-top: 1px dotted #3a3a3a; }
+        .composer-add { font-size: 12px; color: #1dd1a1; cursor: pointer; }
+        .composer-add.is-disabled { color: #666; cursor: default; }
+        .composer-total { font-size: 13px; font-weight: bold; }
+        .composer-total.is-ok { color: #1dd1a1; }
+        .composer-total.is-over { color: #ff6b6b; }
+        .composer-total.is-under { color: #f0b429; }
+        .composer-total-target { font-weight: normal; color: #777; font-size: 11px; }
+
+        /* Per-race override wrapper (Voting tab card). Collapsed = just the reveal link. */
+        .race-bet-override { margin: 4px 0 8px; }
+        .race-bet-override.is-collapsed { margin: 2px 0 6px; }
+        .race-bet-override-link { font-size: 11px; color: #7a8a99; cursor: pointer; text-decoration: none; border-bottom: 1px dotted #556; }
+        .race-bet-override-link:hover { color: #1dd1a1; border-bottom-color: #1dd1a1; }
+        .race-bet-override-head { display: flex; align-items: center; gap: 8px; }
+        .race-bet-override-label { font-size: 12px; color: #aaa; }
+        .race-bet-override-badge { font-size: 10px; font-weight: bold; color: #000; background: #f0b429; border-radius: 4px; padding: 1px 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+        .race-bet-override-clear { font-size: 11px; color: #c98; cursor: pointer; text-decoration: none; }
+        .race-bet-override-clear:hover { color: #ff6b6b; }
 
         .voting-main-shell {
             flex: 1;

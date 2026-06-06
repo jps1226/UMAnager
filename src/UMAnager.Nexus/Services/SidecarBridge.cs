@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: SidecarBridge.cs
+// LAYER: Service (singleton — shared state between API/orchestrator and the pipe server)
+// PURPOSE: The mailbox between Nexus and Sidecar. CommandQueue (bounded channel, DropOldest)
+//          holds STREAM_* commands; IsConnected/JvLinkVersion/IngestionStatus/StagedRecordCount
+//          surface live connection + ingest state.
+// CALLED BY: NexusPipeServer (drains queue, sets state), JvLinkController, fetch services, LiveOrchestrator.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Threading.Channels;
 
 namespace UMAnager.Nexus.Services;

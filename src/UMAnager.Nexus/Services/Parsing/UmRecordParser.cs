@@ -1,3 +1,10 @@
+// ============================================================
+// FILE: UmRecordParser.cs
+// LAYER: Parsing (static, zero-alloc span parser)
+// PURPOSE: UM (horse master) bytes → Horse: id, NameJa, NameEn (country suffix stripped),
+//          birth year, Sire/Dam/BMS ids (HansyokuNum slots; "0000000000" → null).
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using UMAnager.Nexus.Data.Entities;
 
 namespace UMAnager.Nexus.Services.Parsing;

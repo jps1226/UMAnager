@@ -1,3 +1,13 @@
+// ============================================================
+// FILE: JockeyTrainerStatsService.cs
+// LAYER: Service
+// PURPOSE: Computes rolling Win%/Place%/A-E for jockeys (90d) and trainers (180d) via SQL over
+//          race_entries, with a self-calibrating expected-win baseline by favorite rank. LoadAll*
+//          serve the cached stats into RacesController.
+// KEY DEPENDENCIES: AppDbContext (writes the snake_case jockeys/trainers stat columns).
+// CAUTION: Min-sample floors (30 jockey / 20 trainer starts) gate display + scoring elsewhere.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
 

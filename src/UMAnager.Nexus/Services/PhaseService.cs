@@ -1,3 +1,15 @@
+// ============================================================
+// FILE: PhaseService.cs
+// LAYER: Service — owns the AppPhase state machine
+// PURPOSE: Reads/writes the current phase (app_state.app_phase) and computes the DESIRED phase
+//          purely from data state (DetermineDesiredPhaseAsync): WAITING_FOR_RACES →
+//          AWAITING_POSTS → AWAITING_ODDS → RACES_POPULATED → LIVE_OPERATIONS, scoped to the
+//          nearest upcoming race day. Also owns the live-poll pause flag.
+// KEY DEPENDENCIES: AppDbContext, AppStateService, SettingsService.
+// CAUTION: SortTime is Kind=Utc holding JST wall-clock — all comparisons use JST-now. The
+//          method is a PURE read; LiveOrchestrator decides whether to commit the transition.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
 

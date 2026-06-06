@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: SunkCostController.cs
+// LAYER: API (api/sunk-cost)
+// PURPOSE: Sunk-cost tally surface — GET summary (¥ staked/won/net), reset cutoff, retroactive
+//          profile backfill, and import of REAL marks from a parsed OrePro history export.
+// KEY DEPENDENCIES: SunkCostService.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.AspNetCore.Mvc;
 using UMAnager.Nexus.Services;
 

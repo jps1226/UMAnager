@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: VoteHistoryService.cs
+// LAYER: Service
+// PURPOSE: Upserts a vote_history row per (race, horse) on OrePro apply, and serves the
+//          per-horse counts + recent-50 history the dashboard uses for "Voted N×" badges.
+// KEY DEPENDENCIES: AppDbContext.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
 using UMAnager.Nexus.Data.Entities;

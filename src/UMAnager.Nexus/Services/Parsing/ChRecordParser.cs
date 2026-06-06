@@ -1,3 +1,10 @@
+// ============================================================
+// FILE: ChRecordParser.cs
+// LAYER: Parsing (static)
+// PURPOSE: CH (trainer master) bytes → (code, NameJa, NameEn, active flag, East/West).
+//          Ingested by JockeyTrainerIngestService into the trainers table.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text;
 
 namespace UMAnager.Nexus.Services.Parsing;

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260601-14">
+    <link rel="stylesheet" href="/static/style.css?v=20260604-1">
 </head>
 <body>
 
@@ -197,11 +197,12 @@
                 </div>
                 <div class="top-bar-risk">
                     <div class="top-bar-risk-label">MODE: <span id="risk-label" class="risk-label-value">Balanced (50)</span></div>
-                    <input type="range" id="risk-slider" min="0" max="100" value="50" oninput="updateRiskLabel(this.value)">
+                    <input type="range" id="risk-slider" min="0" max="100" step="5" value="50" oninput="updateRiskLabel(this.value)">
                     <div class="top-bar-risk-scale">
                         <span>SAFE / CHALK</span>
                         <span>CHAOS / VALUE</span>
                     </div>
+                    <div id="pre-odds-notice" class="pre-odds-notice" style="display:none;"></div>
                     <div id="dev-paint-time" class="dev-only" style="font-size:10px; color:#888; text-align:center; margin-top:3px; letter-spacing:0.03em;"></div>
                 </div>
             </div>
@@ -225,10 +226,15 @@
                 <button id="btn-winning-votes-focus" onclick="toggleWinningVotesFocus()" class="toolbar-btn toolbar-btn-muted" style="display:none;">🏁 Hit 0% (0/0)</button>
                 <button onclick="collapseVotedRaces()" class="toolbar-btn toolbar-btn-muted">✅ Collapse Voted</button>
                 <button onclick="toggleAllRaces()" class="toolbar-btn toolbar-btn-muted">↕️ Toggle All Races</button>
+                <span class="toolbar-betsel" title="Bet structure for ALL races on the selected day. Override an individual race on the Voting tab.">
+                    <span class="toolbar-betsel-label">💴 Bet:</span>
+                    <select id="day-bet-structure" onchange="onDayBetStructureChange(this.value)"></select>
+                </span>
             </div>
         </div>
+        <div id="day-bet-structure-desc" class="day-bet-desc" style="display:none;"></div>
     </div>
-    
+
     <div id="schedules-container" class="scrollable-races">
         <!-- First-paint skeleton. Wiped by renderDayTabsAndSchedules() once /api/races resolves. -->
         <div class="first-paint-skeleton" aria-hidden="true">
@@ -424,14 +430,7 @@
                             </select>
                         </label>
                         <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
-                            <span title="Custom = our lean mark-count ladder (複勝/ワイド/3連複…). Default OrePro = the classic safety net: Win + 馬連 box + 3連複 box on all marks at a fixed stake. Changes how the engine marks AND how Day Net / win badges are priced.">💴 Bet Mode</span>
-                            <select id="setting-betMode" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:170px;">
-                                <option value="custom">Custom Templates</option>
-                                <option value="orepro_default">Default OrePro (Win+Q+T)</option>
-                            </select>
-                        </label>
-                        <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
-                            <span title="Total ¥ per race for Default OrePro mode, split across the Win + 馬連 box + 3連複 box combos.">💴 Default-OrePro Stake/Race ¥</span>
+                            <span title="Total ¥ bet per race. The chosen bet structure (set per-day in the toolbar, or per-race on the Voting tab) splits this across its combos. Matches your OrePro template total (¥10,000).">💴 Stake per Race ¥</span>
                             <input type="number" id="setting-oreproDefaultStake" min="100" max="1000000" step="100" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:110px;">
                         </label>
                         <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
@@ -579,12 +578,6 @@
                         </div>
                         <input type="number" id="setting-betStakeTrio" min="100" max="1000000" step="100" onblur="saveBetStake('trio', this.value)" class="settings-number-input">
 
-                        <div class="settings-formula-label-block">
-                            <span class="settings-formula-label-name">Template-Cost Ladder (¥ by mark count)</span>
-                            <span class="settings-formula-label-desc">What OrePro actually fires per race, keyed by how many marks it carries. Comma-separated: 1 mark, 2, 3, … (e.g. 100,100,400,400,600,1000). This is the authoritative stake for the sunk-cost tally. Counts beyond the list reuse the last value.</span>
-                        </div>
-                        <input type="text" id="setting-betTemplateCosts" placeholder="100,100,400,400,600,1000" onblur="saveBetTemplateCosts(this.value)" class="settings-number-input">
-
                     </div>
                     <button onclick="resetFormulaWeights()" class="settings-reset-btn">↺ Reset to Defaults</button>
                 </div>
@@ -658,6 +651,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260602-5"></script>
+<script src="/static/script.js?v=20260606-1"></script>
 </body>
 </html>

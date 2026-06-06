@@ -1,3 +1,14 @@
+// ============================================================
+// FILE: AppStateService.cs
+// LAYER: Service
+// PURPOSE: Typed get/set over the app_state key/value table — system-managed state: JV-Link
+//          cursors (toku_file_cursor), current phase, notified-dates, last-refresh timestamps,
+//          and the marks/config blobs. The nested Keys class holds the canonical key strings.
+// KEY DEPENDENCIES: AppDbContext.
+// CAUTION: Distinct from SettingsService (user-configurable). last_race_plan_download is a
+//          throttle timestamp; toku_file_cursor is the JV-Link resume point — do not conflate.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
 using UMAnager.Nexus.Data.Entities;
@@ -15,7 +26,8 @@ public sealed class AppStateService
         // String — JV-Link lastfiletimestamp cursor (yyyyMMddHHmmss). Required for Option=2 fetches.
         public const string TokuFileCursor = "toku_file_cursor";
 
-        // String — current AppPhase (one of WAITING_FOR_RACES / RACES_POPULATED / LIVE_OPERATIONS).
+        // String — current AppPhase (one of WAITING_FOR_RACES / AWAITING_POSTS / AWAITING_ODDS /
+        // RACES_POPULATED / LIVE_OPERATIONS). See PhaseService.AppPhase for the authoritative enum.
         public const string AppPhase = "app_phase";
 
         // Bool ("true"/"false") — manual pause flag for the live orchestrator loop.
@@ -23,6 +35,13 @@ public sealed class AppStateService
 
         // JSON array of "yyyy-MM-dd" strings — race dates for which "odds are live" has been sent.
         public const string OddsNotifiedDates = "odds_notified_dates";
+
+        // JSON — the day-level bet COMPOSITION for a JST date: { presetId, lines:[{type,yen}] }.
+        // Opaque to the server (the frontend builds + prices it; applied bets freeze explicit lines
+        // the server scores separately). Keyed by JST date:
+        // DayBetCompositionKey("2026-06-06") → "day_bet_structure_2026-06-06". Temporary per race
+        // day (client reads null → falls back to the default preset).
+        public static string DayBetStructureKey(string jstDate) => $"day_bet_structure_{jstDate}";
 
         // DateTime — wall-clock of last successful UM (horse master) ingest.
         public const string LastUmRefresh = "last_um_refresh";

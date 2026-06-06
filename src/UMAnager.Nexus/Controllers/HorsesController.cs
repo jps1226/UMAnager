@@ -1,3 +1,14 @@
+// ============================================================
+// FILE: HorsesController.cs
+// LAYER: API (api/horses)
+// PURPOSE: Horse search (racing/breeding filter) and the Phase 31 deep-dive profile —
+//          hero stats, full race history, 3-gen pedigree, surface×distance grid,
+//          sire-performance rows, progeny, and vote history, in one endpoint.
+// KEY DEPENDENCIES: AppDbContext, SirePerformanceService (DistanceBucket).
+// CAUTION: Bridges the two ID spaces — a passed HansyokuNum is resolved to its KettoNum
+//          runner by NameJa; the dam bridge is cross-verified via the BMS.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;

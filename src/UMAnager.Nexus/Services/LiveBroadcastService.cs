@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: LiveBroadcastService.cs
+// LAYER: Realtime service
+// PURPOSE: Re-reads touched races' entries and pushes them to all SignalR clients as
+//          "OddsUpdated" / "ResultsUpdated" (odds, prevOdds, fav, finish per horse).
+// KEY DEPENDENCIES: AppDbContext, IHubContext<LiveHub>.
+// CALLED BY: NexusPipeServer after odds/results apply.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;

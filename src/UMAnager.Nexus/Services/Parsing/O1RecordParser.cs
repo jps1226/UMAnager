@@ -1,3 +1,10 @@
+// ============================================================
+// FILE: O1RecordParser.cs
+// LAYER: Parsing (static, zero-alloc span parser)
+// PURPOSE: O1 (real-time win/place/bracket odds) bytes → (raceId, [HorseOdds]) — umaban, win
+//          odds (raw÷10), fav rank. Consumed by OddsApplyService.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 namespace UMAnager.Nexus.Services.Parsing;
 
 public static class O1RecordParser

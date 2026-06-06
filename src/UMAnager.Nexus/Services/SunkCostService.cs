@@ -1,3 +1,14 @@
+// ============================================================
+// FILE: SunkCostService.cs
+// LAYER: Service
+// PURPOSE: Sunk-cost ledger — every PLACED (locked + marked) bet is "lost" until a result
+//          credits it back. All figures DERIVED on read from the marks blob + race results
+//          (no event log). Imported OrePro-history races use actual ¥; live races template-price.
+//          Also imports real marks from OrePro exports and backfills frozen bet profiles.
+// KEY DEPENDENCIES: AppDbContext, AppStateService, SettingsService, TemplateBetEvaluator.
+// CAUTION: STAKED is exact (ladder); WON reuses the per-leg payout approximation (pending bet rework).
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
@@ -55,8 +66,10 @@ public sealed class SunkCostService
 
     /// <summary>Compute the current sunk-cost summary across all placed (locked + marked)
     /// races. Imported OrePro-history races carry ACTUAL ¥ (betProfile.actualStaked/Won) and
-    /// use it verbatim; live races template-derive. One unified, deduped tally.</summary>
-    public async Task<SunkCostSummary> GetSummaryAsync(CancellationToken ct = default)
+    /// use it verbatim; live races template-derive. One unified, deduped tally.
+    /// When <paramref name="jstRaceDate"/> is supplied, the tally is scoped to that single JST
+    /// race day (used by the per-race win ping so it shows the DAY's running net, not lifetime).</summary>
+    public async Task<SunkCostSummary> GetSummaryAsync(CancellationToken ct = default, DateTime? jstRaceDate = null)
     {
         var (marks, lockedRaces, profiles) = await LoadMarksAndLocksAsync();
 
@@ -85,6 +98,10 @@ public sealed class SunkCostService
         if (resetAt is DateTime cutoff)
             races = races.Where(r => r.RaceDate >= cutoff).ToList();
 
+        // Optional single-day scope (per-race win ping → "Day net" instead of lifetime).
+        if (jstRaceDate is DateTime day)
+            races = races.Where(r => r.RaceDate == day).ToList();
+
         if (races.Count == 0)
             return SunkCostSummary.Empty(resetAt);
 
@@ -97,8 +114,6 @@ public sealed class SunkCostService
             .Select(e => new { e.RaceId, e.HorseId, e.PostPosition, e.FinishPos })
             .ToListAsync(ct);
         var entriesByRace = entries.GroupBy(e => e.RaceId).ToDictionary(g => g.Key, g => g.ToList());
-
-        var ladder = await _settings.GetBetTemplateCostsAsync();
 
         long totalStaked = 0, totalWon = 0;
         int settled = 0, pending = 0, hits = 0;
@@ -138,10 +153,18 @@ public sealed class SunkCostService
                 continue;
             }
 
-            // Live race: price by the frozen bet record's mode/stake if present, else the ladder.
-            var betMode = prof?.Mode ?? "custom";
-            var oreProStake = prof?.Stake ?? 0;
-            var outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, ladder, betMode, oreProStake);
+            // Applied race: score the FROZEN line list verbatim (matches the UI exactly, for any
+            // custom composition). Unapplied-but-locked race: fall back to the default template.
+            TemplateBetEvaluator.BetOutcome outcome;
+            if (prof?.BetLines is { Count: > 0 } frozenLines)
+            {
+                outcome = TemplateBetEvaluator.EvaluateLines(frozenLines, runners.Count, pp1, pp2, pp3, payouts);
+            }
+            else
+            {
+                var oreProStake = prof?.Stake > 0 ? prof.Stake : TemplateBetEvaluator.DefaultStakeYen;
+                outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, TemplateBetEvaluator.BetStructures.Default, oreProStake);
+            }
             doc?.Dispose();
 
             totalStaked += outcome.Staked;
@@ -209,12 +232,18 @@ public sealed class SunkCostService
                         locked.Add(prop.Name);
                     if (prop.Value.TryGetProperty("betProfile", out var bp) && bp.ValueKind == JsonValueKind.Object)
                     {
-                        var mode = bp.TryGetProperty("mode", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
                         int stake = bp.TryGetProperty("stake", out var s) && s.ValueKind == JsonValueKind.Number && s.TryGetInt32(out var sv) ? sv : 0;
                         int? aStaked = bp.TryGetProperty("actualStaked", out var ase) && ase.ValueKind == JsonValueKind.Number && ase.TryGetInt32(out var asv) ? asv : null;
                         int? aWon = bp.TryGetProperty("actualWon", out var awe) && awe.ValueKind == JsonValueKind.Number && awe.TryGetInt32(out var awv) ? awv : null;
-                        if (mode is "orepro_default" or "custom" || aStaked.HasValue)
-                            profiles[prop.Name] = new RaceBetProfile(mode ?? "orepro_default", stake, aStaked, aWon);
+                        // Frozen-at-apply line list — the authoritative record of what was placed.
+                        List<TemplateBetEvaluator.BetLine>? betLines = null;
+                        if (bp.TryGetProperty("betLines", out var blEl) && blEl.ValueKind == JsonValueKind.Array)
+                        {
+                            var parsed = TemplateBetEvaluator.ParseFrozenLines(blEl);
+                            if (parsed.Count > 0) betLines = parsed;
+                        }
+                        if (betLines is not null || aStaked.HasValue || stake > 0)
+                            profiles[prop.Name] = new RaceBetProfile(stake, aStaked, aWon, betLines);
                     }
                 }
             }
@@ -333,7 +362,7 @@ public sealed class SunkCostService
     }
 }
 
-public sealed record RaceBetProfile(string Mode, int Stake, int? ActualStaked = null, int? ActualWon = null);
+public sealed record RaceBetProfile(int Stake, int? ActualStaked, int? ActualWon, List<TemplateBetEvaluator.BetLine>? BetLines);
 
 public sealed record SunkCostSummary(
     int PlacedRaces,

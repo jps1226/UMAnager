@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: OddsFetchService.cs
+// LAYER: Service
+// PURPOSE: Builds + enqueues STREAM_ODDS commands (race-id lists) to the Sidecar. One code path
+//          for the manual endpoint and the orchestrator — EnqueueForDate / EnqueueForLiveWindow
+//          / EnqueueForUpcomingDates.
+// KEY DEPENDENCIES: SidecarBridge, AppDbContext, SettingsService.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;

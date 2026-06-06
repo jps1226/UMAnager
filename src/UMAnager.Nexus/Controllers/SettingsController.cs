@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: SettingsController.cs
+// LAYER: API (api/settings)
+// PURPOSE: GET all known settings + the live-odds hard floor; PUT a single setting (validated
+//          against KnownKeys and the 5-min live-odds floor); POST a Discord test ping.
+// KEY DEPENDENCIES: SettingsService, IDiscordNotifier.
+// CAUTION: KnownKeys is the allow-list — add new keys here AND in SettingsService.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.AspNetCore.Mvc;
 using UMAnager.Nexus.Services;
 

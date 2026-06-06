@@ -1,3 +1,14 @@
+// ============================================================
+// FILE: BetWinNotifier.cs
+// LAYER: Service (scoped)
+// PURPOSE: After results land, prices each touched + LOCKED (placed) race's marks via
+//          TemplateBetEvaluator and fires a Discord win ping (with this-race + running-net line).
+//          Idempotent per race via app_state.bet_win_notified_race_ids.
+// KEY DEPENDENCIES: AppDbContext, AppStateService, IDiscordNotifier, SunkCostService,
+//          SettingsService, TemplateBetEvaluator.
+// CAUTION: Waits for a complete top-3 before deciding; only locked races are eligible.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
@@ -56,7 +67,7 @@ public sealed class BetWinNotifier
         var ids = raceIds.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct().ToList();
         if (ids.Count == 0) return;
 
-        var (marks, locked) = await LoadMarksAndLocksAsync();
+        var (marks, locked, frozenLines) = await LoadMarksAndLocksAsync();
         if (marks.Count == 0) return; // no bets placed → nothing to win
 
         var notified = await LoadNotifiedSetAsync();
@@ -75,11 +86,9 @@ public sealed class BetWinNotifier
 
         var races = await db.Races.AsNoTracking()
             .Where(r => freshCandidates.Contains(r.RaceId))
-            .Select(r => new { r.RaceId, r.TrackCode, r.RaceNumber, r.ResultsJson })
+            .Select(r => new { r.RaceId, r.TrackCode, r.RaceNumber, r.RaceDate, r.ResultsJson })
             .ToListAsync(ct);
         var raceMeta = races.ToDictionary(r => r.RaceId, r => r);
-
-        var ladder = await _settings.GetBetTemplateCostsAsync();
 
         // Resolve names for every marked horse across candidates (for the hit-detail line).
         var markedHorseIds = freshCandidates
@@ -117,7 +126,10 @@ public sealed class BetWinNotifier
             JsonElement? payouts = null; JsonDocument? pdoc = null;
             try { pdoc = JsonDocument.Parse(rm.ResultsJson ?? "{}"); payouts = pdoc.RootElement; }
             catch (JsonException) { }
-            var outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, ladder);
+            // Applied races carry frozen lines → score them verbatim; else default template.
+            var outcome = frozenLines.TryGetValue(raceId, out var fl) && fl.Count > 0
+                ? TemplateBetEvaluator.EvaluateLines(fl, runners.Count, pp1, pp2, pp3, payouts)
+                : TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts);
             pdoc?.Dispose();
 
             notified.Add(raceId);
@@ -143,11 +155,13 @@ public sealed class BetWinNotifier
             var label = BuildRaceLabel(rm.TrackCode, rm.RaceNumber);
             var raceNet = outcome.Won - outcome.Staked;
             var raceSign = raceNet >= 0 ? "+" : "−";
-            running ??= await _sunk.GetSummaryAsync(ct);
+            // Scope the running tally to THIS race's JST day — the ping shows the day's running
+            // net, not the lifetime total. (Batch is one race day, so compute once.)
+            running ??= await _sunk.GetSummaryAsync(ct, rm.RaceDate);
             var runSign = running.NetYen >= 0 ? "+" : "−";
             var runningLine =
                 $"This race: {raceSign}¥{Math.Abs(raceNet):N0} (won ¥{outcome.Won:N0} − staked ¥{outcome.Staked:N0}) · "
-              + $"Running net {runSign}¥{Math.Abs(running.NetYen):N0}";
+              + $"Day net {runSign}¥{Math.Abs(running.NetYen):N0}";
 
             try
             {
@@ -173,12 +187,13 @@ public sealed class BetWinNotifier
     }
 
     /// <summary>Load the marks dict (non-X) and the set of locked (placed) race-ids.</summary>
-    private async Task<(Dictionary<string, string> Marks, HashSet<string> Locked)> LoadMarksAndLocksAsync()
+    private async Task<(Dictionary<string, string> Marks, HashSet<string> Locked, Dictionary<string, List<TemplateBetEvaluator.BetLine>> FrozenLines)> LoadMarksAndLocksAsync()
     {
         var marks = new Dictionary<string, string>();
         var locked = new HashSet<string>();
+        var frozen = new Dictionary<string, List<TemplateBetEvaluator.BetLine>>();
         var raw = await _state.GetStringAsync(MarksStateKey);
-        if (string.IsNullOrWhiteSpace(raw)) return (marks, locked);
+        if (string.IsNullOrWhiteSpace(raw)) return (marks, locked, frozen);
         try
         {
             using var doc = JsonDocument.Parse(raw);
@@ -196,15 +211,21 @@ public sealed class BetWinNotifier
             {
                 foreach (var prop in metaEl.EnumerateObject())
                 {
-                    if (prop.Value.ValueKind == JsonValueKind.Object
-                        && prop.Value.TryGetProperty("lockStateAtSave", out var lk)
-                        && lk.ValueKind == JsonValueKind.True)
+                    if (prop.Value.ValueKind != JsonValueKind.Object) continue;
+                    if (prop.Value.TryGetProperty("lockStateAtSave", out var lk) && lk.ValueKind == JsonValueKind.True)
                         locked.Add(prop.Name);
+                    // Frozen-at-apply bet lines → score these verbatim (any custom composition).
+                    if (prop.Value.TryGetProperty("betProfile", out var bpEl) && bpEl.ValueKind == JsonValueKind.Object
+                        && bpEl.TryGetProperty("betLines", out var blEl) && blEl.ValueKind == JsonValueKind.Array)
+                    {
+                        var lines = TemplateBetEvaluator.ParseFrozenLines(blEl);
+                        if (lines.Count > 0) frozen[prop.Name] = lines;
+                    }
                 }
             }
         }
         catch (JsonException) { }
-        return (marks, locked);
+        return (marks, locked, frozen);
     }
 
     private async Task<HashSet<string>> LoadNotifiedSetAsync()

@@ -1,3 +1,13 @@
+// ============================================================
+// FILE: TrayApp.cs  (UMAnager.Tray)
+// LAYER: Supervisor (WinForms tray app)
+// PURPOSE: System-tray context menu to start/stop/restart the Nexus + Sidecar EXEs,
+//          monitor their PIDs (.service-pids.json), and tail their logs.
+// KEY DEPENDENCIES: System.Diagnostics.Process, WinForms NotifyIcon.
+// CAUTION: EXE paths are hard-coded to bin/Release output dirs (net8.0 / net8.0-windows
+//          win-x86). Rediscovers already-running services on launch.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;

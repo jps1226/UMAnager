@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: PipeEnvelope.cs  (Nexus)
+// LAYER: IPC (binary wire format)
+// PURPOSE: The named-pipe message envelope: [4B length LE][2B type LE][payload].
+//          PipeMessageType = Command(1) / RawRecord(2) / Status(3). PipeName = "UMAnager_IPC".
+// CAUTION: Sidecar has a byte-identical copy (Sidecar/Models/PipeEnvelope.cs) — keep both in sync.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Buffers.Binary;
 using System.IO.Pipes;
 

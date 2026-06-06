@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: RtOddsStreamHandler.cs
+// LAYER: Sidecar JV-Link stream handler
+// PURPOSE: JVRTOpen("0B31", raceId) per race → streams real-time O1 odds records back over the
+//          pipe. 0B31's provision unit is per-race, so the handler iterates the supplied race-id list.
+// KEY DEPENDENCIES: IJVLink, SidecarPipeClient.
+// CAUTION: Key MUST be a 16- or 12-char race id; an 8-char date is rejected with rc=-114.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text;
 using UMAnager.Sidecar.Com;
 using UMAnager.Sidecar.Pipes;

@@ -1,3 +1,10 @@
+// ============================================================
+// FILE: HrRecordParser.cs
+// LAYER: Parsing (static, zero-alloc span parser)
+// PURPOSE: HR (払戻 / payout) bytes → races.ResultsJson with all 8 bet types (win/place/bracketQ/
+//          quinella/wide/exacta/trio/trifecta). Payouts are per-¥100; empty/zero slots skipped.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 
 namespace UMAnager.Nexus.Services.Parsing;

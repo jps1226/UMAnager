@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: BreedingHorseBackfillService.cs
+// LAYER: Parsing (one-shot backfill, idempotent)
+// PURPOSE: Reads every UM record's 14 KETTO3 pedigree-ancestor slots and upserts them into
+//          breeding_horses (HansyokuNum + Bamei). The authoritative source of breeding-horse rows.
+// KEY DEPENDENCIES: AppDbContext.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using System.Text;

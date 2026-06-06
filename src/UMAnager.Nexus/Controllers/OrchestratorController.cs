@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: OrchestratorController.cs
+// LAYER: API (api/orchestrator)
+// PURPOSE: Visibility + manual control over the phase machine: status (phase, paused,
+//          last/next tick), force-tick, pause/resume live polling, and manual day-recap trigger.
+// KEY DEPENDENCIES: LiveOrchestrator, PhaseService, DayRecapNotifier, AppDbContext.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;

@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: SurfaceBackfillService.cs
+// LAYER: Parsing (one-shot backfill, idempotent)
+// PURPOSE: Re-parses every RA record with the fixed TrackCD logic and bulk-UPDATEs races.Surface
+//          (the original parser never matched, leaving Surface NULL — which blocked the sire-perf MV).
+// KEY DEPENDENCIES: AppDbContext, RaRecordParser.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;

@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: OreProController.cs
+// LAYER: API (api/orepro)
+// PURPOSE: Thin HTTP surface over OreProVoteApplyService — apply marks to the OrePro cart
+//          (optionally submit), the legacy companion-window gate, and per-race apply-state.
+// KEY DEPENDENCIES: OreProVoteApplyService, SettingsService, AppStateService.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using UMAnager.Nexus.Services;
@@ -10,13 +18,15 @@ public sealed class OreProController : ControllerBase
 {
     private readonly SettingsService _settings;
     private readonly OreProVoteApplyService _apply;
+    private readonly OreProCustomBetService _customBet;
     private readonly AppStateService _appState;
 
-    public OreProController(SettingsService settings, OreProVoteApplyService apply, AppStateService appState)
+    public OreProController(SettingsService settings, OreProVoteApplyService apply, OreProCustomBetService customBet, AppStateService appState)
     {
-        _settings = settings;
-        _apply    = apply;
-        _appState = appState;
+        _settings  = settings;
+        _apply     = apply;
+        _customBet = customBet;
+        _appState  = appState;
     }
 
     /// <summary>
@@ -64,6 +74,21 @@ public sealed class OreProController : ControllerBase
     public async Task<IActionResult> Apply([FromBody] JsonElement payload, CancellationToken ct)
     {
         var result = await _apply.ApplyAsync(payload, ct);
+        return Content(result.GetRawText(), "application/json");
+    }
+
+    /// <summary>
+    /// POC: places an ARBITRARY multi-line custom ticket into the OrePro cart (easy-mode-off),
+    /// decoupled from the ◎〇▲△ marks. Body:
+    ///   { race_id, dry_run?, lines: [ { type, method, umaban, money } ] }
+    /// type 1単 2複 3枠連 4馬連 5ワイド 6馬単 7三連複 8三連単; method 0通常 1フォーメーション 2BOX 3ながし;
+    /// umaban = digits joined by '-' within a group, groups joined by '_' (e.g. "1-4-6", "5_1-3-8-12");
+    /// money = per-combination yen. dry_run=true returns the constructed bet_ids + add URL without firing.
+    /// </summary>
+    [HttpPost("custom-bet/test")]
+    public async Task<IActionResult> CustomBetTest([FromBody] JsonElement payload, CancellationToken ct)
+    {
+        var result = await _customBet.PlaceAsync(payload, ct);
         return Content(result.GetRawText(), "application/json");
     }
 }

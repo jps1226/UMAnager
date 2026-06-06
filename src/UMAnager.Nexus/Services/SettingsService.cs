@@ -1,3 +1,14 @@
+// ============================================================
+// FILE: SettingsService.cs
+// LAYER: Service
+// PURPOSE: User-configurable settings over the app_settings table — poll intervals per phase,
+//          live-odds 5-min hard floor, bet stakes + the mark-count template-cost ladder,
+//          Discord/OrePro config. Keys + Defaults hold the catalog; SeedDefaultsAsync runs at startup.
+// KEY DEPENDENCIES: AppDbContext.
+// CAUTION: GetLiveOddsIntervalAsync clamps below LiveOddsHardFloor (5m, JV-Link rate limit).
+//          StakeForMarkCount is the single source of "what a race cost" (sunk-cost + recap agree).
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
 using UMAnager.Nexus.Data.Entities;

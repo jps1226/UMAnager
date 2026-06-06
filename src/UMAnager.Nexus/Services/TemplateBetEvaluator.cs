@@ -1,3 +1,16 @@
+// ============================================================
+// FILE: TemplateBetEvaluator.cs
+// LAYER: Service (static) — the bet-pricing seam
+// PURPOSE: Builds a race's bet lines (ticket/method/selections/per-combo stake) from the marked
+//          runners + bet structure choice, and scores them against the top-3 + payout JSON. The ONE
+//          place bet shape is decided (BuildLines); Evaluate returns staked/won/hit-labels.
+// KEY DEPENDENCIES: none (standalone static).
+// CAUTION: MIRROR of the frontend buildRaceBetLines / evaluateTemplateOutcome — keep both in sync.
+//          Used by BetWinNotifier, DayRecapNotifier, and SunkCostService.
+// BET STRUCTURES: "default" (単勝+馬連BOX+3連複BOX 50/30/20), "trio_box", "trio_nagashi",
+//                 "quinella_box", "wide_box", "win_only". See BetStructures for the catalog.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 
 namespace UMAnager.Nexus.Services;
@@ -8,16 +21,26 @@ namespace UMAnager.Nexus.Services;
 ///
 /// FUTURE-PROOF for dynamic bets: a race's bets are modelled as a list of self-describing
 /// <see cref="BetLine"/>s (ticket, method, selections, per-combo stake). <see cref="BuildLines"/>
-/// is the ONE place the bet shape is decided — today it derives from the user's mark-count
-/// ladder (see OREPRO_CAPABILITIES.md), but a future source (OrePro easy-mode-off custom bets
-/// read back via the customize API, or an explicit per-race bet record) can return the same
-/// shape and staked/won/labels all flow unchanged. Staked = Σ ComboCount·StakePerCombo, so any
-/// ticket type / method / stake is priced consistently with no "mark count" assumption beyond
-/// how the ladder happens to build the lines today.
+/// is the ONE place the bet shape is decided. A future source (OrePro easy-mode-off custom bets
+/// read back via the customize API) can return the same shape and staked/won/labels all flow
+/// unchanged. Staked = Σ ComboCount·StakePerCombo consistently across all structures.
 /// </summary>
 public static class TemplateBetEvaluator
 {
-    public const int BetUnitYen = 100; // JRA ticket unit; the ladder's default per-combo stake
+    public const int DefaultStakeYen = 10_000;
+
+    /// <summary>
+    /// Valid bet structure identifiers. The frontend and server must agree on these strings.
+    /// </summary>
+    public static class BetStructures
+    {
+        public const string Default      = "default";       // 単勝+馬連BOX+3連複BOX 50/30/20
+        public const string TrioBox      = "trio_box";      // 3連複BOX only
+        public const string TrioNagashi  = "trio_nagashi";  // 3連複ながし — ◎ banker
+        public const string QuinellaBox  = "quinella_box";  // 馬連BOX only
+        public const string WideBox      = "wide_box";      // ワイドBOX only
+        public const string WinOnly      = "win_only";      // 単勝 on ◎ only
+    }
 
     public sealed record MarkedRunner(string Symbol, int? Pp);
 
@@ -45,8 +68,19 @@ public static class TemplateBetEvaluator
         return (int)r;
     }
 
-    /// <summary>The bet-plan seam — build a race's bet lines + total staked from the marked runners.</summary>
-    public static (List<BetLine> Lines, int Staked) BuildLines(IReadOnlyList<MarkedRunner> runners, int[] ladder, string betMode = "custom", int oreProStake = 0)
+    // Round to the nearest ¥100, floored at ¥100. Uses round-half-UP (Math.Floor(x+0.5)) to
+    // match JavaScript's Math.round exactly — the JS buildRaceBetLines mirror must agree to the yen.
+    private static int Round100(double v) => (int)Math.Max(100, Math.Floor(v / 100 + 0.5) * 100);
+
+    /// <summary>
+    /// The bet-plan seam — build a race's bet lines + total staked from the marked runners
+    /// and the chosen bet structure. betStructure defaults to "default" (OrePro 50/30/20 template).
+    /// oreProStake is the total ¥ for the race (default ¥10,000).
+    /// </summary>
+    public static (List<BetLine> Lines, int Staked) BuildLines(
+        IReadOnlyList<MarkedRunner> runners,
+        string betStructure = BetStructures.Default,
+        int oreProStake = DefaultStakeYen)
     {
         var n = runners.Count;
         var lines = new List<BetLine>();
@@ -54,72 +88,75 @@ public static class TemplateBetEvaluator
 
         var honmei = runners.FirstOrDefault(r => r.Symbol == "◎") ?? runners[0];
         var allPps = runners.Where(r => r.Pp.HasValue).Select(r => r.Pp!.Value).ToList();
+        var stake  = oreProStake > 0 ? oreProStake : DefaultStakeYen;
 
-        // Default-OrePro safety net: Win(単勝) on ◎ + 馬連 box + 3連複 box on all marks, with a
-        // Win-heavy allocation (n≥3: 50/30/20; n=2: 50/50). Mirrors the JS buildRaceBetLines
-        // orepro branch — keep both in sync.
-        if (betMode == "orepro_default")
+        if (string.IsNullOrEmpty(betStructure) || betStructure == BetStructures.Default)
         {
-            var stake = oreProStake > 0 ? oreProStake : 10000;
+            // OrePro default: Win(◎) 50% + Quinella BOX 30% + Trio BOX 20%.
+            // n=2: Win 50% + Quinella 50% (trio not possible with 2 horses).
             var hasTrio = n >= 3;
-            double winA = 0.5, quinA = hasTrio ? 0.3 : 0.5, trioA = hasTrio ? 0.2 : 0.0;
             if (honmei.Pp.HasValue)
-                lines.Add(new BetLine { Ticket = "win", Method = "normal", Label = "単勝", Pps = new[] { honmei.Pp.Value }, ComboCount = 1, StakePerCombo = stake * winA });
+                lines.Add(new BetLine { Ticket = "win", Method = "normal", Label = "単勝", Pps = new[] { honmei.Pp.Value }, ComboCount = 1, StakePerCombo = 0 }); // filled below
             if (n >= 2)
             {
                 var c = NCk(n, 2);
-                lines.Add(new BetLine { Ticket = "quinella", Method = "box", Label = "馬連", Pps = allPps, ComboCount = c, StakePerCombo = c > 0 ? stake * quinA / c : 0 });
+                var per = c > 0 ? Round100(stake * (hasTrio ? 0.3 : 0.5) / c) : 0;
+                lines.Add(new BetLine { Ticket = "quinella", Method = "box", Label = "馬連", Pps = allPps, ComboCount = c, StakePerCombo = per });
             }
             if (n >= 3)
             {
                 var c = NCk(n, 3);
-                lines.Add(new BetLine { Ticket = "trio", Method = "box", Label = "3連複", Pps = allPps, ComboCount = c, StakePerCombo = c > 0 ? stake * trioA / c : 0 });
+                var per = c > 0 ? Round100(stake * 0.2 / c) : 0;
+                lines.Add(new BetLine { Ticket = "trio", Method = "box", Label = "3連複", Pps = allPps, ComboCount = c, StakePerCombo = per });
             }
-            var stakedO = (int)Math.Round(lines.Sum(l => l.StakePerCombo * l.ComboCount));
-            return (lines, stakedO);
+            // Win takes the remainder so total = exactly stake.
+            var winLine = lines.FirstOrDefault(l => l.Ticket == "win");
+            if (winLine is not null)
+                winLine.StakePerCombo = stake - lines.Where(l => l.Ticket != "win").Sum(l => l.StakePerCombo * l.ComboCount);
+            return (lines, (int)Math.Round(lines.Sum(l => l.StakePerCombo * l.ComboCount)));
         }
 
-        if (n == 1)
+        // Single-ticket structures: spread stake evenly across all combos.
+        switch (betStructure)
         {
-            var pps = honmei.Pp.HasValue ? new[] { honmei.Pp.Value } : Array.Empty<int>();
-            lines.Add(new BetLine { Ticket = "place", Method = "normal", Label = "複勝", Pps = pps, ComboCount = 1 });
-        }
-        else if (n == 2)
-        {
-            lines.Add(new BetLine { Ticket = "wide", Method = "box", Label = "ワイド", Pps = allPps, ComboCount = NCk(n, 2) });
-        }
-        else if (n == 3)
-        {
-            lines.Add(new BetLine { Ticket = "trio", Method = "box", Label = "3連複", Pps = allPps, ComboCount = NCk(n, 3) });
-            lines.Add(new BetLine { Ticket = "wide", Method = "box", Label = "ワイド", Pps = allPps, ComboCount = NCk(n, 2) });
-        }
-        else if (n == 4)
-        {
-            lines.Add(new BetLine { Ticket = "trio", Method = "box", Label = "3連複", Pps = allPps, ComboCount = NCk(n, 3) });
-        }
-        else // n >= 5: 3連複 軸1頭ながし — ◎ axis, the rest opponents
-        {
-            var oppPps = runners.Where(r => !ReferenceEquals(r, honmei) && r.Pp.HasValue).Select(r => r.Pp!.Value).ToList();
-            lines.Add(new BetLine { Ticket = "trio", Method = "nagashi1", Label = "3連複ながし", Pps = oppPps, AxisPp = honmei.Pp, ComboCount = NCk(n - 1, 2) });
+            case BetStructures.TrioBox when n >= 3:
+                lines.Add(new BetLine { Ticket = "trio", Method = "box", Label = "3連複", Pps = allPps, ComboCount = NCk(n, 3) });
+                break;
+            case BetStructures.TrioNagashi when n >= 3:
+            {
+                var oppPps = runners.Where(r => !ReferenceEquals(r, honmei) && r.Pp.HasValue).Select(r => r.Pp!.Value).ToList();
+                lines.Add(new BetLine { Ticket = "trio", Method = "nagashi1", Label = "3連複ながし", Pps = oppPps, AxisPp = honmei.Pp, ComboCount = NCk(n - 1, 2) });
+                break;
+            }
+            case BetStructures.QuinellaBox when n >= 2:
+                lines.Add(new BetLine { Ticket = "quinella", Method = "box", Label = "馬連", Pps = allPps, ComboCount = NCk(n, 2) });
+                break;
+            case BetStructures.WideBox when n >= 2:
+                lines.Add(new BetLine { Ticket = "wide", Method = "box", Label = "ワイド", Pps = allPps, ComboCount = NCk(n, 2) });
+                break;
+            case BetStructures.WinOnly:
+                if (honmei.Pp.HasValue)
+                    lines.Add(new BetLine { Ticket = "win", Method = "normal", Label = "単勝", Pps = new[] { honmei.Pp.Value }, ComboCount = 1 });
+                break;
         }
 
+        if (lines.Count == 0) return (lines, 0);
         var totalCombos = lines.Sum(l => l.ComboCount);
         if (totalCombos == 0) totalCombos = 1;
-        var totalStake = SettingsService.StakeForMarkCount(n, ladder);
-        var perCombo = (double)totalStake / totalCombos;
+        var perCombo = (double)stake / totalCombos;
         foreach (var l in lines) l.StakePerCombo = perCombo;
-        return (lines, totalStake);
+        return (lines, stake);
     }
 
     public static BetOutcome Evaluate(
         IReadOnlyList<MarkedRunner> markedRunners,
         int? pp1, int? pp2, int? pp3,
         JsonElement? payouts,
-        int[] ladder,
-        string betMode = "custom", int oreProStake = 0)
+        string betStructure = BetStructures.Default,
+        int oreProStake = DefaultStakeYen)
     {
         var n = markedRunners.Count;
-        var (lines, staked) = BuildLines(markedRunners, ladder, betMode, oreProStake);
+        var (lines, staked) = BuildLines(markedRunners, betStructure, oreProStake);
         var labels = new List<string>();
         if (n == 0) return new BetOutcome(0, false, 0, 0, labels);
         if (pp1 is null || pp2 is null || pp3 is null || payouts is null)
@@ -137,6 +174,62 @@ public static class TemplateBetEvaluator
         return new BetOutcome(n, true, staked, won, labels);
     }
 
+    /// <summary>
+    /// Score an EXPLICIT, already-built line list (the frozen betLines a race recorded at apply).
+    /// This is the authoritative path for applied bets — the frontend froze these exact lines, so
+    /// scoring them here keeps the server and UI identical no matter how custom the composition was.
+    /// </summary>
+    public static BetOutcome EvaluateLines(
+        IReadOnlyList<BetLine> lines, int markCount,
+        int? pp1, int? pp2, int? pp3, JsonElement? payouts)
+    {
+        var staked = (int)Math.Round(lines.Sum(l => l.StakePerCombo * l.ComboCount));
+        var labels = new List<string>();
+        if (lines.Count == 0) return new BetOutcome(markCount, false, 0, 0, labels);
+        if (pp1 is null || pp2 is null || pp3 is null || payouts is null)
+            return new BetOutcome(markCount, false, staked, 0, labels);
+
+        var root = payouts.Value;
+        var t3 = new[] { pp1.Value, pp2.Value, pp3.Value };
+        var t3set = new HashSet<int>(t3);
+        int won = 0;
+        foreach (var line in lines)
+        {
+            var w = ScoreLine(line, t3, t3set, root);
+            if (w > 0) { won += w; labels.Add(line.Label); }
+        }
+        return new BetOutcome(markCount, true, staked, won, labels);
+    }
+
+    /// <summary>
+    /// Parse a frozen betLines JSON array (raceMeta.betProfile.betLines) into BetLines. Each
+    /// element: { ticket, method, label, horses:[{pp}], axisPp?, comboCount, stakePerCombo }.
+    /// Mirrors the frontend's normalizeBetProfile line shape.
+    /// </summary>
+    public static List<BetLine> ParseFrozenLines(JsonElement arr)
+    {
+        var list = new List<BetLine>();
+        if (arr.ValueKind != JsonValueKind.Array) return list;
+        foreach (var l in arr.EnumerateArray())
+        {
+            if (l.ValueKind != JsonValueKind.Object) continue;
+            var ticket = l.TryGetProperty("ticket", out var tk) && tk.ValueKind == JsonValueKind.String ? tk.GetString() ?? "" : "";
+            if (string.IsNullOrEmpty(ticket)) continue;
+            var method = l.TryGetProperty("method", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() ?? "normal" : "normal";
+            var label  = l.TryGetProperty("label",  out var lb) && lb.ValueKind == JsonValueKind.String ? lb.GetString() ?? "" : "";
+            var combo  = l.TryGetProperty("comboCount", out var cc) && cc.TryGetInt32(out var cv) ? cv : 0;
+            var per    = l.TryGetProperty("stakePerCombo", out var sp) && sp.ValueKind == JsonValueKind.Number ? sp.GetDouble() : 0;
+            var pps = new List<int>();
+            if (l.TryGetProperty("horses", out var hs) && hs.ValueKind == JsonValueKind.Array)
+                foreach (var h in hs.EnumerateArray())
+                    if (h.ValueKind == JsonValueKind.Object && h.TryGetProperty("pp", out var pp) && pp.TryGetInt32(out var ppv) && ppv > 0)
+                        pps.Add(ppv);
+            int? axis = l.TryGetProperty("axisPp", out var ax) && ax.TryGetInt32(out var axv) && axv > 0 ? axv : null;
+            list.Add(new BetLine { Ticket = ticket, Method = method, Label = label, Pps = pps, AxisPp = axis, ComboCount = combo, StakePerCombo = per });
+        }
+        return list;
+    }
+
     // Score one line against the result. Extend here for new (ticket, method) combos.
     private static int ScoreLine(BetLine line, int[] t3, HashSet<int> t3set, JsonElement root)
     {
@@ -145,12 +238,10 @@ public static class TemplateBetEvaluator
         double won = 0;
         if (line.Ticket == "win")
         {
-            // 単勝 — single horse must finish 1st (t3[0] = winner).
             if (pps.Count > 0 && t3.Length > 0 && t3[0] == pps[0]) won += FindPayout(root, "win", new[] { pps[0] }) * f;
         }
         else if (line.Ticket == "quinella" && line.Method == "box")
         {
-            // 馬連 box — any pair of picks that are the top 2 (t3[0], t3[1]) in either order.
             var top2 = new HashSet<int> { t3[0], t3[1] };
             for (int i = 0; i < pps.Count; i++)
                 for (int j = i + 1; j < pps.Count; j++)
@@ -182,7 +273,6 @@ public static class TemplateBetEvaluator
                 if (others.Count == 2 && others.All(opp.Contains)) won += FindPayout(root, "trio", t3) * f;
             }
         }
-        // Unknown (ticket, method) → 0 for now; add a branch when dynamic bets introduce it.
         return (int)Math.Round(won);
     }
 

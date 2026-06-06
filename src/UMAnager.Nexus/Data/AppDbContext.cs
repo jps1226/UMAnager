@@ -1,3 +1,13 @@
+// ============================================================
+// FILE: AppDbContext.cs
+// LAYER: Data (EF Core DbContext)
+// PURPOSE: EF context for the EF-managed tables (raw_staging, horses, races, race_entries,
+//          app_state, app_settings, breeding_horses, odds_history, vote_history). Applies
+//          all IEntityTypeConfiguration from Data/Configurations.
+// CAUTION: jockeys, trainers, user_horse_lists, and the sire_performance MV are raw-SQL
+//          objects — NOT DbSets here. Schema evolves via inline DDL in Program.cs, not migrations.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data.Entities;
 

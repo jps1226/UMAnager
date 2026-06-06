@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: ListsController.cs
+// LAYER: API (api/lists)
+// PURPOSE: Persists the operator's Bloodlines (breeding horses) + Watchlist (active runners)
+//          to user_horse_lists (raw SQL). Stores only IDs on the wire; rejoins names from
+//          horses + breeding_horses on GET (format "id#name").
+// KEY DEPENDENCIES: AppDbContext (raw SQL — user_horse_lists predates the EF schema).
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;

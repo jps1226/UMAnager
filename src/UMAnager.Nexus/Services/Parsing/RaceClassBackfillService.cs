@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: RaceClassBackfillService.cs
+// LAYER: Parsing (one-shot backfill, idempotent)
+// PURPOSE: Re-parses RA records to fill races.RaceClass from JyokenCD slot 5 (the original parser
+//          never read it, so historical races have RaceClass NULL). Mirrors SurfaceBackfillService.
+// KEY DEPENDENCIES: AppDbContext, RaRecordParser.MapJyokenCdToRaceClass.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;

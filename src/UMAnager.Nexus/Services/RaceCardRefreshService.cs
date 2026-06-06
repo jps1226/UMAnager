@@ -1,3 +1,14 @@
+// ============================================================
+// FILE: RaceCardRefreshService.cs
+// LAYER: Background service
+// PURPOSE: Keeps weekend race cards fresh. TriggerNowAsync enqueues STREAM_TOKU with the
+//          persisted toku_file_cursor; a 15-min self-tick fires it when the 4-hour throttle
+//          (last_race_plan_download) has elapsed. Also invoked directly by AWAITING_POSTS ticks.
+// KEY DEPENDENCIES: SidecarBridge, AppStateService.
+// CAUTION: Records the trigger time (throttle) here, but the cursor is advanced by the pipe
+//          server on STREAM_TOKU_COMPLETE — never set the cursor to UtcNow here.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 namespace UMAnager.Nexus.Services;
 
 public sealed class RaceCardRefreshService : BackgroundService

@@ -1,3 +1,14 @@
+// ============================================================
+// FILE: DifnRecordParsingService.cs
+// LAYER: Parsing (orchestrator)
+// PURPOSE: Drains raw_staging in strict order UM→RA→SE→HR→O2/O5, calling each *RecordParser and
+//          UPSERTing with DataStatus-guarded conflict resolution (only newer data wins). HR mutates
+//          races.ResultsJson; O2/O5 merge into races.OddsJson. Marks staging rows IsProcessed.
+// KEY DEPENDENCIES: AppDbContext, all *RecordParser classes.
+// CALLED BY: NexusPipeServer after every STREAM_*_COMPLETE (and JvLinkController.parse-records).
+// CAUTION: Idempotent (only !IsProcessed rows). Uses typed NpgsqlParameter for nullables (DBNull).
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Npgsql;

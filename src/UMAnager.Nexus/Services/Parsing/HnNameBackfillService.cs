@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: HnNameBackfillService.cs
+// LAYER: Parsing (one-shot backfill, idempotent)
+// PURPOSE: Scans raw_staging HN records (BLDN) and UPDATEs breeding_horses.NameEn with the romaji
+//          name. Enriches only — never inserts rows (BreedingHorseBackfillService owns creation).
+// KEY DEPENDENCIES: AppDbContext, HnRecordParser.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using UMAnager.Nexus.Data;

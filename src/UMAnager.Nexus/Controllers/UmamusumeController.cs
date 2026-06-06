@@ -1,3 +1,13 @@
+// ============================================================
+// FILE: UmamusumeController.cs
+// LAYER: API (api/umamusume)
+// PURPOSE: "Uma Musume mode" — resolves the character roster (Resources/umamusume_characters.json)
+//          to real-horse IDs and bulk/per-char adds them to Bloodlines. Toggle-OFF removes only
+//          what the mode added (tracked in app_state.umamusume_added_ids).
+// KEY DEPENDENCIES: AppDbContext, IWebHostEnvironment, umamusume_characters.json.
+// CAUTION: still_racing characters are skipped (they belong in Watchlist, not Bloodlines).
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;

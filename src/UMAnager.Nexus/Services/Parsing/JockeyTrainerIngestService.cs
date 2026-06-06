@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: JockeyTrainerIngestService.cs
+// LAYER: Parsing (ingest, idempotent)
+// PURPOSE: Scans raw_staging for KS (jockey) + CH (trainer) master records and upserts them into
+//          the snake_case jockeys / trainers tables (Phase 8). Re-runnable.
+// KEY DEPENDENCIES: AppDbContext, KsRecordParser, ChRecordParser.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Npgsql;

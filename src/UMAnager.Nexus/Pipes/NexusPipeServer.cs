@@ -1,3 +1,16 @@
+// ============================================================
+// FILE: NexusPipeServer.cs
+// LAYER: IPC (BackgroundService — the Nexus end of the named pipe)
+// PURPOSE: Hosts the "UMAnager_IPC" pipe server. Forwards queued commands from
+//          SidecarBridge to the Sidecar, receives raw record bytes into raw_staging,
+//          and on each STREAM_*_COMPLETE fans out to the parse/apply/broadcast/notify
+//          chain (DifnRecordParsingService, OddsApplyService, LiveBroadcastService,
+//          BetWinNotifier, DayRecapNotifier, sire/jockey-trainer refreshes).
+// KEY DEPENDENCIES: SidecarBridge, AppStateService, IServiceScopeFactory, PipeEnvelope.
+// CAUTION: NEVER break the pipe on STREAM_*_COMPLETE — the Sidecar reuses the connection.
+//          Persists the toku_file_cursor on STREAM_TOKU_COMPLETE only (JV-Link resume point).
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
@@ -157,7 +170,7 @@ public sealed class NexusPipeServer : BackgroundService
                     var root = doc.RootElement;
 
                     var eventType = root.TryGetProperty("event_type", out var ev) ? ev.GetString() : null;
-                    if (eventType is "STREAM_DIFN_COMPLETE" or "STREAM_TOKU_COMPLETE" or "STREAM_ODDS_COMPLETE" or "STREAM_RESULTS_COMPLETE")
+                    if (eventType is "STREAM_DIFN_COMPLETE" or "STREAM_TOKU_COMPLETE" or "STREAM_ODDS_COMPLETE" or "STREAM_RESULTS_COMPLETE" or "STREAM_RTCARD_COMPLETE")
                     {
                         if (batch.Count > 0)
                             totalFlushed += await FlushBatchAsync(batch, totalFlushed, ct);
@@ -230,6 +243,25 @@ public sealed class NexusPipeServer : BackgroundService
                                 {
                                     _logger.LogWarning(ex, "[Nexus] odds_history purge failed (non-fatal).");
                                 }
+
+                                var orchestrator = scope.ServiceProvider.GetRequiredService<LiveOrchestrator>();
+                                orchestrator.RequestForceTick();
+                            });
+                        }
+
+                        // After a real-time race-card (0B15) stream completes, parse the newly-staged
+                        // RA + SE so finalized posts (DataStatus 1→2) land via the existing UPSERT
+                        // guard, then nudge the orchestrator to re-evaluate phase immediately — this
+                        // is what flips AWAITING_POSTS → AWAITING_ODDS the moment posts are drawn,
+                        // instead of waiting up to a full posts_poll_interval. (Oracle 2026-06-04.)
+                        if (eventType == "STREAM_RTCARD_COMPLETE" && recordCount > 0)
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                using var scope = _scopeFactory.CreateScope();
+                                var svc = scope.ServiceProvider.GetRequiredService<Services.Parsing.DifnRecordParsingService>();
+                                await svc.ParseAllRecordsAsync(CancellationToken.None);
+                                _logger.LogInformation("[Nexus] RTCARD (0B15) auto-parse complete.");
 
                                 var orchestrator = scope.ServiceProvider.GetRequiredService<LiveOrchestrator>();
                                 orchestrator.RequestForceTick();

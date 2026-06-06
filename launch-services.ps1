@@ -25,11 +25,42 @@ function Write-Status {
 function Start-Services {
     Write-Status "Starting UMAnager services..."
 
-    # Build in Release mode first
-    Write-Status "Building projects..."
-    & dotnet build src/UMAnager.Sidecar -c Release -q 2>&1 | Out-Null
-    & dotnet build src/UMAnager.Nexus -c Release -q 2>&1 | Out-Null
+    # Build in Release mode first.
+    # NOTE (session 41 bug): build output used to be piped to Out-Null and $LASTEXITCODE
+    # was never checked. When a running process held the Release DLL locked, the build
+    # FAILED silently and the script relaunched a stale DLL for two days. Now: output is
+    # visible, exit codes are checked, and we abort loudly on failure.
+    $nexusDll = Join-Path $Root "src/UMAnager.Nexus/bin/Release/net8.0/UMAnager.Nexus.dll"
+    $dllBefore = if (Test-Path $nexusDll) { (Get-Item $nexusDll).LastWriteTime } else { $null }
+
+    Write-Status "Building Sidecar (Release)..."
+    & dotnet build src/UMAnager.Sidecar -c Release
+    if ($LASTEXITCODE -ne 0) {
+        Write-Status "ERROR: Sidecar build FAILED (exit $LASTEXITCODE). Aborting — not relaunching stale binary." ERROR
+        exit 1
+    }
+
+    Write-Status "Building Nexus (Release)..."
+    & dotnet build src/UMAnager.Nexus -c Release
+    if ($LASTEXITCODE -ne 0) {
+        Write-Status "ERROR: Nexus build FAILED (exit $LASTEXITCODE). Aborting — not relaunching stale binary." ERROR
+        exit 1
+    }
     Write-Status "Build complete."
+
+    # Confirm the Nexus DLL actually got rewritten. If LastWriteTime didn't advance,
+    # the DLL was almost certainly locked and we're about to launch stale code — warn loudly.
+    $dllAfter = if (Test-Path $nexusDll) { (Get-Item $nexusDll).LastWriteTime } else { $null }
+    if ($null -eq $dllAfter) {
+        Write-Status "ERROR: Nexus DLL not found after build: $nexusDll" ERROR
+        exit 1
+    }
+    if ($null -ne $dllBefore -and $dllAfter -le $dllBefore) {
+        Write-Status "WARNING: Nexus DLL LastWriteTime did not advance ($dllAfter). Build may have been a no-op or the DLL was locked." WARN
+    }
+    else {
+        Write-Status "Nexus DLL fresh: $dllAfter"
+    }
 
     # Clear old logs
     if (Test-Path $SidecarLog) { Remove-Item $SidecarLog -Force }
@@ -140,24 +171,46 @@ function Start-Services {
 function Stop-Services {
     Write-Status "Stopping services..."
 
-    if (-not (Test-Path $PidFile)) {
-        Write-Status "No running services found (PID file missing)" WARN
-        return
+    # Stop by PID file first (if present) — targets the exact processes we launched.
+    if (Test-Path $PidFile) {
+        $pids = Get-Content $PidFile | ConvertFrom-Json
+        if ($pids.sidecar) {
+            Write-Status "Stopping Sidecar (PID: $($pids.sidecar))..."
+            Stop-Process -Id $pids.sidecar -ErrorAction SilentlyContinue -Force
+        }
+        if ($pids.nexus) {
+            Write-Status "Stopping Nexus (PID: $($pids.nexus))..."
+            Stop-Process -Id $pids.nexus -ErrorAction SilentlyContinue -Force
+        }
+        Remove-Item $PidFile -ErrorAction SilentlyContinue
+    }
+    else {
+        Write-Status "No PID file found — falling back to stop-by-name only." WARN
     }
 
-    $pids = Get-Content $PidFile | ConvertFrom-Json
-
-    if ($pids.sidecar) {
-        Write-Status "Stopping Sidecar (PID: $($pids.sidecar))..."
-        Stop-Process -Id $pids.sidecar -ErrorAction SilentlyContinue -Force
+    # ALWAYS stop by name too. This is the robust path: it catches processes started
+    # outside this script (the bug that silently locked the Release DLL for two days,
+    # session 41). Without this, a stale/missing PID file means we kill nothing, the
+    # running process keeps the DLL locked, and the next build silently fails.
+    $byName = Get-Process -Name "UMAnager.Nexus", "UMAnager.Sidecar" -ErrorAction SilentlyContinue
+    if ($byName) {
+        foreach ($p in $byName) {
+            Write-Status "Stopping $($p.ProcessName) by name (PID: $($p.Id))..."
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        }
     }
-    if ($pids.nexus) {
-        Write-Status "Stopping Nexus (PID: $($pids.nexus))..."
-        Stop-Process -Id $pids.nexus -ErrorAction SilentlyContinue -Force
-    }
 
-    Remove-Item $PidFile -ErrorAction SilentlyContinue
-    Write-Status "✓ Services stopped."
+    # Give the OS a moment to release the file locks before any rebuild.
+    Start-Sleep -Milliseconds 500
+
+    # Verify nothing survived — a leftover process WILL relock the DLL.
+    $survivors = Get-Process -Name "UMAnager.Nexus", "UMAnager.Sidecar" -ErrorAction SilentlyContinue
+    if ($survivors) {
+        Write-Status "ERROR: processes still alive after stop: $($survivors.Id -join ', '). DLL may stay locked." ERROR
+    }
+    else {
+        Write-Status "✓ Services stopped."
+    }
 }
 
 function Get-ServiceStatus {

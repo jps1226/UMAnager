@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: DiscordNotifier.cs
+// LAYER: Service (IDiscordNotifier)
+// PURPOSE: Posts plain Discord webhook messages — phase change, race-plan/posts/odds available,
+//          mark-hit win, day recap, orchestrator error, test ping. Defines the MarkHit record.
+// KEY DEPENDENCIES: IHttpClientFactory, SettingsService.
+// CAUTION: Webhook URL is read per-send from app_settings; if unset, every Notify* is a silent no-op.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Net.Http.Json;
 
 namespace UMAnager.Nexus.Services;

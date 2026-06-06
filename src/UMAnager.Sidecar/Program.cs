@@ -1,3 +1,16 @@
+// ============================================================
+// FILE: Program.cs  (UMAnager.Sidecar)
+// LAYER: Entry point / host (x86 console — the ONLY process that touches JV-Link COM)
+// PURPOSE: Parks on a dedicated STA thread, instantiates JVDTLab.JVLink via IDispatch,
+//          does the JVInit handshake, then runs the persistent command loop dispatching
+//          STREAM_DIFN / STREAM_BLDN / STREAM_ODDS / STREAM_RESULTS / STREAM_TOKU to the
+//          matching JvLink/*Handler and streaming raw record bytes back over the pipe.
+// KEY DEPENDENCIES: IJVLink, SidecarPipeClient, DifnStreamHandler, TokuStreamHandler,
+//          RtOddsStreamHandler, RtResultsStreamHandler.
+// CAUTION: ALL COM calls must stay on this STA thread. The pipe is persistent — the loop
+//          keeps running across STREAM_*_COMPLETE; it does not reconnect if torn down.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using UMAnager.Sidecar.Com;
@@ -177,6 +190,32 @@ static int Run(CancellationToken ct)
                 {
                     Console.Error.WriteLine($"[Sidecar] RESULTS stream failed: {ex.Message}");
                     pipeClient.SendResultsCompleteAsync(-1, 0, raceDate, ct).GetAwaiter().GetResult();
+                }
+            }
+            else if (cmd == "STREAM_RTCARD")
+            {
+                // race_date: 8-char YYYYMMDD (JST). 0B15 (速報レース情報 出走馬名表〜) returns the
+                // real-time race card (RA+SE) for all venues on that date — the finalized posts the
+                // instant they're drawn, bypassing the option=2 "this week" sync lag. Oracle 2026-06-04.
+                var raceDate = doc.RootElement.TryGetProperty("race_date", out var rcd) ? rcd.GetString() ?? "" : "";
+                if (string.IsNullOrEmpty(raceDate) || raceDate.Length != 8)
+                {
+                    Console.WriteLine($"[Sidecar] STREAM_RTCARD received with bad race_date '{raceDate}'.");
+                    pipeClient.SendRtCardCompleteAsync(-1, 1, raceDate, ct).GetAwaiter().GetResult();
+                    continue;
+                }
+
+                try
+                {
+                    var (stored, skipped) = RtRaceCardStreamHandler.StreamAsync(jvLink!, pipeClient, raceDate, ct)
+                        .GetAwaiter().GetResult();
+                    pipeClient.SendRtCardCompleteAsync(stored, skipped, raceDate, ct).GetAwaiter().GetResult();
+                    Console.WriteLine($"[Sidecar] STREAM_RTCARD complete. Stored={stored}, Skipped={skipped}");
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[Sidecar] RTCARD stream failed: {ex.Message}");
+                    pipeClient.SendRtCardCompleteAsync(-1, 0, raceDate, ct).GetAwaiter().GetResult();
                 }
             }
             else if (cmd == "STREAM_TOKU")

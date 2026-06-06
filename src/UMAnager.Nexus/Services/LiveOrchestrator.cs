@@ -1,3 +1,16 @@
+// ============================================================
+// FILE: LiveOrchestrator.cs
+// LAYER: Background service — the master clock
+// PURPOSE: Single interruptible loop (mirrors kmy-keiba's DownloadScheduler). Each tick:
+//          recompute desired phase, commit + Discord-ping on change, then act per phase —
+//          LIVE fetches odds+results, RACES_POPULATED/AWAITING_ODDS refresh odds, AWAITING_POSTS
+//          polls race cards. Interval is phase-derived (with pre-live ramp + live-boundary clamp).
+// KEY DEPENDENCIES: PhaseService, SettingsService, OddsFetchService, ResultsFetchService,
+//          SidecarBridge, IDiscordNotifier, AppStateService, RaceCardRefreshService.
+// CAUTION: RequestForceTick breaks the wait; the pipe server calls it after relevant ingests.
+//          Honors the pause flag and only fetches when the Sidecar is connected.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Threading.Channels;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
@@ -23,6 +36,7 @@ public sealed class LiveOrchestrator : BackgroundService
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly AppStateService _appState;
     private readonly RaceCardRefreshService _raceCardRefresh;
+    private readonly RaceCardRtFetchService _raceCardRtFetch;
     private readonly ILogger<LiveOrchestrator> _logger;
 
     private readonly Channel<bool> _forceTickChannel = Channel.CreateBounded<bool>(
@@ -42,6 +56,7 @@ public sealed class LiveOrchestrator : BackgroundService
         IDbContextFactory<AppDbContext> dbFactory,
         AppStateService appState,
         RaceCardRefreshService raceCardRefresh,
+        RaceCardRtFetchService raceCardRtFetch,
         ILogger<LiveOrchestrator> logger)
     {
         _phase           = phase;
@@ -53,6 +68,7 @@ public sealed class LiveOrchestrator : BackgroundService
         _dbFactory       = dbFactory;
         _appState        = appState;
         _raceCardRefresh = raceCardRefresh;
+        _raceCardRtFetch = raceCardRtFetch;
         _logger          = logger;
     }
 
@@ -138,9 +154,11 @@ public sealed class LiveOrchestrator : BackgroundService
         }
         else if (!paused && _bridge.IsConnected && desired == AppPhase.AWAITING_POSTS)
         {
-            // Poll TOKURACESNPN until SE records arrive with PostPosition > 0.
-            var result = await _raceCardRefresh.TriggerNowAsync(ct);
-            _logger.LogInformation("[Orchestrator] AWAITING_POSTS tick: race card refresh → {Result}", result);
+            // Poll the real-time race card via JVRTOpen("0B15") — delivers finalized posts
+            // (DataStatus 1→2) the instant they're drawn, with none of the option=2 "this week"
+            // batch-sync lag that previously stranded us here for hours (Oracle 2026-06-04).
+            var enqueued = await _raceCardRtFetch.EnqueueForPendingPostDatesAsync(ct);
+            _logger.LogInformation("[Orchestrator] AWAITING_POSTS tick: 0B15 race-card fetch enqueued for {Count} date(s).", enqueued);
         }
         else
         {

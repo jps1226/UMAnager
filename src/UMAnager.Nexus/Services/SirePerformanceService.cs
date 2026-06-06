@@ -1,3 +1,12 @@
+// ============================================================
+// FILE: SirePerformanceService.cs
+// LAYER: Service
+// PURPOSE: Owns the sire_performance materialized view (sire × surface × distance bucket).
+//          EnsureSchemaAsync creates the MV + unique index (startup); RefreshAsync refreshes
+//          CONCURRENTLY after new finishes; LoadAllAsync feeds RacesController's sire-fit lookup.
+// KEY DEPENDENCIES: AppDbContext. DistanceBucket() mirrors the MV's CASE for API-side lookups.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
 

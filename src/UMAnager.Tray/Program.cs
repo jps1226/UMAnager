@@ -1,3 +1,9 @@
+// ============================================================
+// FILE: Program.cs  (UMAnager.Tray)
+// LAYER: Entry point (WinForms tray supervisor)
+// PURPOSE: STAThread Main with a single-instance mutex; launches TrayApp.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Runtime.InteropServices;
 
 namespace UMAnager.Tray;

@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: ResultsFetchService.cs
+// LAYER: Service
+// PURPOSE: Enqueues STREAM_RESULTS commands (JVRTOpen 0B12, per-day). One command per call —
+//          0B12 returns all venues for the date, so no per-race iteration.
+// KEY DEPENDENCIES: SidecarBridge.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Text.Json;
 
 namespace UMAnager.Nexus.Services;

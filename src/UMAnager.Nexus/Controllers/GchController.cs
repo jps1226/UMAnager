@@ -1,3 +1,11 @@
+// ============================================================
+// FILE: GchController.cs
+// LAYER: API (api/gch)
+// PURPOSE: Server-side proxy for the GreenChannel live stream used by TV mode. Two upstream
+//          calls (sp.gch.jp/api/vij → streaks.jp playback) returned as { session, playback }.
+// KEY DEPENDENCIES: HttpClient. Ported behavior-identically from v1 server.py.
+// LAST DOCUMENTED: 2026-06-02
+// ============================================================
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
