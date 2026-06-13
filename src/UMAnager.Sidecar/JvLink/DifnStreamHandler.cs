@@ -67,6 +67,11 @@ internal static class DifnStreamHandler
         int rc = jvLink.JVOpen(dataSpec, "19910101000000", 4,
                                 ref readcount, ref downloadcount, out var lastts);
         Console.WriteLine($"[Sidecar] JVOpen returned: rc={rc}");
+        if (rc == JvReturnCodes.Maintenance)
+        {
+            Console.WriteLine($"[Sidecar] JRA-VAN server under maintenance (rc={rc}). Backing off.");
+            return (JvReturnCodes.MaintenanceStored, 0);
+        }
         if (rc < 0)
             throw new InvalidOperationException($"JVOpen({dataSpec}) failed: rc={rc}");
 

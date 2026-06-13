@@ -38,6 +38,7 @@ public sealed class OreProVoteApplyService
     private const string GeneratorApiUrl  = "https://orepro.netkeiba.com/bet/api_post_bet_generator.html";
     private const string BetViewApiUrl    = "https://orepro.netkeiba.com/bet/api_get_bet_view.html";
     private const string BetReferer       = "https://orepro.netkeiba.com/bet/race_list.html";
+    private const string UserSettingUrl   = "https://orepro.netkeiba.com/mydata/api_post_user_setting.html";
 
     private static readonly IReadOnlyDictionary<string, string> SymbolToMarkCode =
         new Dictionary<string, string> { ["◎"] = "1", ["〇"] = "2", ["▲"] = "3", ["△"] = "4" };
@@ -115,6 +116,13 @@ public sealed class OreProVoteApplyService
         {
             return ErrorJson("Payload had no races array.", payload);
         }
+
+        // Phase 37: the marks path needs easy-mode (簡単投票) ON so OrePro's generator builds the
+        // default bet from the applied marks. The custom path flips it OFF; left in that state, a
+        // marks apply would silently produce nothing. Self-correct here so the operator never has
+        // to toggle 簡単投票 by hand. One-shot per apply, real fires only (skipped on dry runs).
+        if (!dryRun)
+            await TrySetSimpleBetAsync(http, "y", ct);
 
         foreach (var race in racesEl.EnumerateArray())
         {
@@ -559,6 +567,36 @@ public sealed class OreProVoteApplyService
     ///   POST /bet/api_post_mybet.html  body: input=UTF-8&output=jsonp&action=update&race_id=...
     ///   Headers: Origin, Referer (shutuba page), X-Requested-With: XMLHttpRequest
     /// </summary>
+    /// <summary>
+    /// Sets the account's 簡単投票 / easy-mode flag (simple_bet = "y" on / "n" off). Best-effort —
+    /// a failure here is logged but doesn't fail the apply (OrePro may already be in the right state).
+    /// </summary>
+    private async Task TrySetSimpleBetAsync(HttpClient http, string value, CancellationToken ct)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, UserSettingUrl)
+            {
+                Content = new FormUrlEncodedContent(new[]
+                {
+                    new KeyValuePair<string,string>("input",      "UTF-8"),
+                    new KeyValuePair<string,string>("output",     "jsonp"),
+                    new KeyValuePair<string,string>("action",     "set"),
+                    new KeyValuePair<string,string>("simple_bet", value),
+                })
+            };
+            req.Headers.Referrer = new Uri(BetReferer);
+            req.Headers.Add("X-Requested-With", "XMLHttpRequest");
+            using var resp = await http.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode)
+                _logger.LogWarning("Set simple_bet={Value} returned HTTP {Status}", value, (int)resp.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed setting simple_bet={Value} (continuing — may already be set)", value);
+        }
+    }
+
     private async Task<(string status, string message, string receiptUrl)> TrySubmitAsync(HttpClient http, string raceId, CancellationToken ct)
     {
         var url = "https://orepro.netkeiba.com/bet/api_post_mybet.html";

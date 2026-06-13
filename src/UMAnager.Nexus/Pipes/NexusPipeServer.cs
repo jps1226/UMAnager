@@ -179,7 +179,30 @@ public sealed class NexusPipeServer : BackgroundService
                         var skippedCount = root.TryGetProperty("skipped_count", out var sc) ? sc.GetInt32() : 0;
 
                         _bridge.StagedRecordCount = (int)totalFlushed;
-                        _bridge.IngestionStatus   = recordCount < 0 ? "Error" : "Complete";
+                        _bridge.IngestionStatus   =
+                            recordCount == AppStateService.MaintenanceRecordCount ? "Maintenance"
+                            : recordCount < 0 ? "Error"
+                            : "Complete";
+
+                        // JV-Link maintenance (rc=-504): the Sidecar reports it as a distinct
+                        // record_count so we can back off instead of hammering a down server. Stamp
+                        // a timestamp the orchestrator reads to widen its retry interval; clear it on
+                        // any successful stream (record_count >= 0 = server responded). A plain -1
+                        // (generic error) leaves the flag untouched. (Oracle 2026-06-07.)
+                        if (recordCount == AppStateService.MaintenanceRecordCount)
+                        {
+                            await _appState.SetTimestampAsync(AppStateService.Keys.MaintenanceDetectedAt, DateTime.UtcNow);
+                            _logger.LogWarning("[Nexus] {EventType}: JRA-VAN server under maintenance (rc=-504). Backing off.", eventType);
+                        }
+                        else if (recordCount >= 0)
+                        {
+                            var priorMaint = await _appState.GetTimestampAsync(AppStateService.Keys.MaintenanceDetectedAt);
+                            if (priorMaint.HasValue)
+                            {
+                                await _appState.SetStringAsync(AppStateService.Keys.MaintenanceDetectedAt, "");
+                                _logger.LogInformation("[Nexus] JRA-VAN maintenance cleared — {EventType} succeeded.", eventType);
+                            }
+                        }
 
                         // Persist the JV-Link cursor returned in last_file_timestamp so the next
                         // Option=2 call resumes exactly where this one stopped.
@@ -263,8 +286,22 @@ public sealed class NexusPipeServer : BackgroundService
                                 await svc.ParseAllRecordsAsync(CancellationToken.None);
                                 _logger.LogInformation("[Nexus] RTCARD (0B15) auto-parse complete.");
 
+                                // Only nudge the orchestrator if the freshly-parsed posts ACTUALLY
+                                // advance the phase (AWAITING_POSTS → AWAITING_ODDS). Force-ticking
+                                // unconditionally here created a self-perpetuating re-fetch loop: the
+                                // 0B15 card always returns records, so every completion re-fetched and
+                                // re-parsed forever — which is exactly what stranded us with no posts
+                                // on 2026-06-12 (1,252 fetches in a tight loop). Gating on the
+                                // authoritative phase determination makes this a true one-shot: it
+                                // fires once when posts first land (flipping us out of AWAITING_POSTS),
+                                // and never spins when they haven't. Mirrors the odds force-tick gate.
+                                var phaseSvc = scope.ServiceProvider.GetRequiredService<PhaseService>();
+                                var desired = await phaseSvc.DetermineDesiredPhaseAsync(DateTime.UtcNow);
                                 var orchestrator = scope.ServiceProvider.GetRequiredService<LiveOrchestrator>();
-                                orchestrator.RequestForceTick();
+                                if (desired != AppPhase.AWAITING_POSTS)
+                                    orchestrator.RequestForceTick();
+                                else
+                                    _logger.LogInformation("[Nexus] RTCARD parsed; phase still AWAITING_POSTS — not force-ticking (prevents 0B15 re-fetch loop).");
                             });
                         }
 

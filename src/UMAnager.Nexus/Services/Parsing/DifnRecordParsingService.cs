@@ -22,13 +22,16 @@ public class DifnRecordParsingService
 {
     private readonly IDbContextFactory<AppDbContext> _contextFactory;
     private readonly ILogger<DifnRecordParsingService> _logger;
+    private readonly PipelineHealthService _health;
 
     public DifnRecordParsingService(
         IDbContextFactory<AppDbContext> contextFactory,
-        ILogger<DifnRecordParsingService> logger)
+        ILogger<DifnRecordParsingService> logger,
+        PipelineHealthService health)
     {
         _contextFactory = contextFactory;
         _logger = logger;
+        _health = health;
     }
 
     public async Task<ParsingStats> ParseAllRecordsAsync(CancellationToken ct = default)
@@ -56,12 +59,14 @@ public class DifnRecordParsingService
                 "DIFN parsing complete: UM={ParsedUm} RA={ParsedRa} SE={ParsedSe} HR={ParsedHr} O2={O2} O5={O5} Failed={Failed} Duration={Duration}ms",
                 stats.ParsedUm, stats.ParsedRa, stats.ParsedSe, stats.ParsedHr, stats.ParsedO2, stats.ParsedO5, stats.FailedCount, stats.DurationMs);
 
+            _health.RecordSuccess("parse");   // T1-1: the parse completed (no throw) — a healthy tick.
             return stats;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "DIFN parsing failed: {Error}", ex.Message);
             stats.ErrorMessage = ex.Message;
+            _health.RecordFailure("parse", ex.Message);   // T1-1: was silent before — now alerts on repeat.
             return stats;
         }
     }

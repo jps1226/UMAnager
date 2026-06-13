@@ -22,15 +22,17 @@ public sealed class OrchestratorController : ControllerBase
     private readonly SettingsService _settings;
     private readonly DayRecapNotifier _dayRecap;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
+    private readonly PipelineHealthService _health;
 
     public OrchestratorController(LiveOrchestrator orchestrator, PhaseService phase, SettingsService settings,
-        DayRecapNotifier dayRecap, IDbContextFactory<AppDbContext> dbFactory)
+        DayRecapNotifier dayRecap, IDbContextFactory<AppDbContext> dbFactory, PipelineHealthService health)
     {
         _orchestrator = orchestrator;
         _phase = phase;
         _settings = settings;
         _dayRecap = dayRecap;
         _dbFactory = dbFactory;
+        _health = health;
     }
 
     [HttpGet("status")]
@@ -45,6 +47,13 @@ public sealed class OrchestratorController : ControllerBase
             last_tick_utc      = _orchestrator.LastTickAtUtc,
             next_tick_eta_utc  = _orchestrator.NextTickEtaUtc,
             last_observed_phase = _orchestrator.LastObservedPhase.ToString(),
+            // JV-Link maintenance (rc=-504): non-null while JRA-VAN is down; the loop is backed off.
+            maintenance               = _orchestrator.MaintenanceSinceUtc != null,
+            maintenance_since_utc     = _orchestrator.MaintenanceSinceUtc,
+            // T1-1: per-step pipeline health (parse / orchestrator-tick / streaming-watchdog). A step
+            // with consecutive_failures > 0 (or a stale seconds_since_success) is the loud signal that
+            // used to be a silent log line.
+            pipeline_health           = _health.Snapshot(),
         });
     }
 

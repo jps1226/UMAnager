@@ -45,7 +45,17 @@ public sealed class AppStateService
 
         // DateTime — wall-clock of last successful UM (horse master) ingest.
         public const string LastUmRefresh = "last_um_refresh";
+
+        // DateTime — wall-clock when JV-Link last reported rc=-504 (JRA-VAN server maintenance).
+        // Set by the pipe server on a maintenance completion; cleared (Value="") on the next
+        // successful (record_count >= 0) stream. The orchestrator backs off to
+        // maintenance_retry_interval while this is set and recent. (Oracle 2026-06-07.)
+        public const string MaintenanceDetectedAt = "maintenance_detected_at";
     }
+
+    // JV-Link "server under maintenance" return code (Oracle 2026-06-07). The Sidecar reports this
+    // value back as a *_COMPLETE record_count so the Nexus can distinguish it from -1 (generic error).
+    public const int MaintenanceRecordCount = -504;
 
     private readonly IDbContextFactory<AppDbContext> _contextFactory;
 

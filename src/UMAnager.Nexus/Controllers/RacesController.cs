@@ -150,7 +150,7 @@ public sealed class RacesController : ControllerBase
             // Caching the computed ETag string avoids all 5 ETag-related DB round-trips
             // on every request. The 30 s TTL is well below the 5-minute live-odds floor.
             // Date-filtered calls skip the shared cache entirely (occasional, on-demand).
-            const string EtagCacheKey = "races-etag-v8";
+            const string EtagCacheKey = "races-etag-v9";
             string? fastEtag = null;
             if (!dateFiltered && _cache.TryGetValue<string>(EtagCacheKey, out fastEtag))
             {
@@ -218,7 +218,7 @@ public sealed class RacesController : ControllerBase
                         .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                         .FirstOrDefaultAsync();
                     var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                    etag = $"\"races-v8-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                    etag = $"\"races-v9-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                     _cache.Set(EtagCacheKey, etag,
                         new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
                 }
@@ -293,8 +293,22 @@ public sealed class RacesController : ControllerBase
                 from e in db.RaceEntries.AsNoTracking()
                 join r in db.Races.AsNoTracking() on e.RaceId equals r.RaceId
                 where entryHorseIds.Contains(e.HorseId!) && e.FinishPos != null && e.FinishPos > 0
-                select new { e.HorseId, e.RaceId, r.RaceDate, Finish = e.FinishPos!.Value, e.FavRank }
+                select new { e.HorseId, e.RaceId, r.RaceDate, Finish = e.FinishPos!.Value, e.FavRank, r.Surface, r.Distance }
             ).ToListAsync();
+
+            // Phase 43: the horse's OWN record split by surface and distance bucket, derived from
+            // the same finished-entry ⋈ race history above (every past start already carries its
+            // race's surface + distance). Parallels Sire_Fit but for the individual horse. Keyed by
+            // horse → list of (surface, distance-bucket, finish) for cheap per-entry aggregation.
+            var histSplitByHorse = horseFinishHistory
+                .GroupBy(x => x.HorseId!)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Select(x => (
+                            Surface: x.Surface ?? "",
+                            Bucket: Services.SirePerformanceService.DistanceBucket(x.Distance),
+                            Finish: x.Finish))
+                          .ToList());
 
             // Phase 28 (finish): field size of each past race the runners contested, so the
             // Ninki-Δ overachiever bonus can be weighted by how deep that field was. One grouped
@@ -373,6 +387,12 @@ public sealed class RacesController : ControllerBase
                     race_number = race.RaceNumber ?? 0,
                     place = race.TrackCode ?? "Unknown",
                     place_name = TrackName(race.TrackCode),
+                    // Phase 43: distance (meters) + surface (turf/dirt) for the race-card chip
+                    // and the surface/distance scoring split. Already stored on races; just
+                    // surface them so the frontend stops seeing undefined (the AI-export block
+                    // already reads info.distance/info.surface).
+                    distance = race.Distance,
+                    surface = race.Surface ?? "",
                     time = race.SortTime?.ToString("HH:mm") ?? "TBA",
                     sort_time = sortTimeUtc.ToString("yyyy-MM-ddTHH:mm:ss"),
                     // Proper ISO-8601 with JST offset so the frontend can convert to any
@@ -432,6 +452,47 @@ public sealed class RacesController : ControllerBase
                         bool jQualifies = jStat != null && (jStat.Starts ?? 0) >= MinJockeyStarts;
                         bool tQualifies = tStat != null && (tStat.Starts ?? 0) >= MinTrainerStarts;
 
+                        // Phase 43: this horse's OWN win%/place% on THIS race's surface and
+                        // distance bucket. Min 3 starts in the split → null (horses race far
+                        // less than sires, so the sire-fit floor of 10 would blank almost
+                        // everyone). Low-weight tiebreaker in the JS scorer, mirroring Sire_Fit.
+                        const int MinHorseSplitStarts = 3;
+                        int? surfaceStarts = null, distStarts = null;
+                        decimal? surfaceWinPct = null, surfacePlacePct = null;
+                        decimal? distWinPct = null, distPlacePct = null;
+                        // Jump (障害) is a separate discipline — never mix jump and flat history.
+                        // Surface-fit is already clean (it matches the exact surface, and "jump"
+                        // only equals "jump"). The distance-fit split is otherwise surface-agnostic
+                        // (turf↔dirt distance aptitude transfers), so we must additionally gate it
+                        // on discipline so a horse's jump-3000m runs don't pollute its flat-long
+                        // distance fit — and vice-versa. (~51 horses in our data carry both.)
+                        bool raceIsJump = raceSurface == "jump";
+                        if (histSplitByHorse.TryGetValue(e.HorseId ?? "", out var hSplit))
+                        {
+                            if (!string.IsNullOrEmpty(raceSurface))
+                            {
+                                var sf = hSplit.Where(x => x.Surface == raceSurface).ToList();
+                                if (sf.Count >= MinHorseSplitStarts)
+                                {
+                                    surfaceStarts   = sf.Count;
+                                    surfaceWinPct   = Math.Round(100m * sf.Count(x => x.Finish == 1) / sf.Count, 1);
+                                    surfacePlacePct = Math.Round(100m * sf.Count(x => x.Finish <= 3) / sf.Count, 1);
+                                }
+                            }
+                            if (!string.IsNullOrEmpty(raceBucket))
+                            {
+                                var ds = hSplit.Where(x => x.Bucket == raceBucket
+                                        && (raceIsJump ? x.Surface == "jump" : x.Surface != "jump"))
+                                    .ToList();
+                                if (ds.Count >= MinHorseSplitStarts)
+                                {
+                                    distStarts   = ds.Count;
+                                    distWinPct   = Math.Round(100m * ds.Count(x => x.Finish == 1) / ds.Count, 1);
+                                    distPlacePct = Math.Round(100m * ds.Count(x => x.Finish <= 3) / ds.Count, 1);
+                                }
+                            }
+                        }
+
                         return (object)new
                         {
                             Horse_ID = e.HorseId,
@@ -447,6 +508,13 @@ public sealed class RacesController : ControllerBase
                             Sire_Fit = sireFitPct,
                             Sire_Place_Fit = sirePlaceFitPct,
                             Sire_Starts = sireFitStarts,
+                            // Phase 43: horse's own surface/distance record (null below 3 starts).
+                            Surface_Win_Pct   = surfaceWinPct,
+                            Surface_Place_Pct = surfacePlacePct,
+                            Surface_Starts    = surfaceStarts,
+                            Dist_Win_Pct      = distWinPct,
+                            Dist_Place_Pct    = distPlacePct,
+                            Dist_Starts       = distStarts,
                             Dam = ResolveAncestorName(horse?.DamId),
                             Dam_ID = horse?.DamId ?? "",
                             BMS = ResolveAncestorName(horse?.BmsId),

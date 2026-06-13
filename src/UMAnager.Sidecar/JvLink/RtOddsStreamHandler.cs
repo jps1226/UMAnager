@@ -46,6 +46,14 @@ internal static class RtOddsStreamHandler
                 continue;
             }
 
+            if (rc == JvReturnCodes.Maintenance)
+            {
+                // Maintenance affects the whole server, not just this race — no point looping the
+                // rest. Report the maintenance sentinel so the Nexus backs off (any odds already
+                // streamed this batch were sent over the pipe and remain valid).
+                Console.WriteLine($"[Sidecar]   JRA-VAN server under maintenance (rc={rc}). Aborting odds batch.");
+                return (JvReturnCodes.MaintenanceStored, skipped);
+            }
             if (rc != 0)
             {
                 // rc=-1: no applicable data (race not yet open / no odds published). Common; skip quietly.

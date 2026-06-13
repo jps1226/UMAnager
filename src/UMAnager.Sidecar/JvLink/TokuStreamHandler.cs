@@ -51,6 +51,11 @@ internal static class TokuStreamHandler
             Console.WriteLine("[Sidecar] No new race-card data available (rc=-1).");
             return (0, 0, fromTime); // no advance — preserve caller's cursor
         }
+        if (rc == JvReturnCodes.Maintenance)
+        {
+            Console.WriteLine($"[Sidecar] JRA-VAN server under maintenance (rc={rc}). Backing off.");
+            return (JvReturnCodes.MaintenanceStored, 0, fromTime); // no advance — preserve cursor
+        }
         if (rc < 0)
             throw new InvalidOperationException($"JVOpen({dataSpec}) failed: rc={rc}");
 

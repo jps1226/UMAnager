@@ -353,6 +353,28 @@
         #show-overlay-btn:hover { background: rgba(29, 209, 161, 0.18); }
         body.overlay-mode #racelist-panel.is-hidden ~ #show-overlay-btn { display: inline-flex; align-items: center; gap: 6px; }
 
+        /* Floating fullscreen pill — the gch-header (which holds #fullscreen-btn) is hidden in
+           overlay mode, so this gives an always-visible fullscreen control there. Top-LEFT so it
+           never collides with the top-right show/hide-overlay controls. */
+        #tv-fullscreen-float {
+            position: absolute;
+            top: 14px;
+            left: 14px;
+            z-index: 19;
+            background: rgba(11, 12, 16, 0.7);
+            backdrop-filter: blur(8px);
+            color: #8fe6c4;
+            border: 1px solid rgba(47, 90, 72, 0.85);
+            border-radius: 999px;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            display: none;
+        }
+        #tv-fullscreen-float:hover { background: rgba(47, 90, 72, 0.28); }
+        body.overlay-mode #tv-fullscreen-float { display: inline-flex; align-items: center; gap: 6px; }
+
         /* Mode-toggle button (always visible on desktop; hidden on mobile-portrait override below) */
         #mode-toggle-btn {
             background: #222;
@@ -456,6 +478,17 @@
             white-space: nowrap;
         }
         #flip-panels-btn:hover { background: #2c3e50; color: #d6efff; }
+        #fullscreen-btn {
+            background: #222;
+            color: #8fe6c4;
+            border: 1px solid #2f5a48;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        #fullscreen-btn:hover { background: #1e3a30; color: #c4f5e2; }
 
         /* iframe fill area */
         #gch-iframe-area {
@@ -648,6 +681,7 @@
             /* Overlay-mode chrome is a desktop affordance — hide on mobile portrait */
             #mode-toggle-btn,
             #show-overlay-btn,
+            #tv-fullscreen-float,
             #hide-overlay-btn { display: none !important; }
             body.overlay-mode #racelist-panel { display: none !important; }
             #gch-panel { flex: 0 0 auto; }
@@ -850,6 +884,7 @@
             </a>
             <button id="mode-toggle-btn" onclick="toggleOverlayMode()" title="Toggle Overlay / Split layout (M)">🎴 Overlay</button>
             <button id="flip-panels-btn" onclick="togglePanelFlip()">⇄ Flip Panels</button>
+            <button id="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle fullscreen (F)">⛶ Fullscreen</button>
             <button id="toggle-gch-size" onclick="toggleGchSize()">▲ Collapse</button>
         </div>
         <div id="gch-iframe-area">
@@ -898,6 +933,7 @@
     </div>
 
     <button id="show-overlay-btn" onclick="setOverlayVisible(true)" title="Show race overlay (O)">🎴 Show Marks</button>
+    <button id="tv-fullscreen-float" onclick="toggleFullscreen()" title="Toggle fullscreen (F)">⛶ Fullscreen</button>
 </div>
 </div>
 
@@ -1038,6 +1074,34 @@ function togglePanelFlip() {
     applyPanelFlipUi();
     persistLayoutPrefs();
 }
+
+// Fullscreen the whole TV page (hides browser chrome for a clean wall display). Cross-browser
+// (standard + WebKit prefixes for older Safari). The button label/title follow the actual
+// fullscreen state via the fullscreenchange listener, so it stays correct if the user exits
+// with Esc or the OS.
+function toggleFullscreen() {
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    if (!fsEl) {
+        const el = document.documentElement;
+        const req = el.requestFullscreen || el.webkitRequestFullscreen;
+        if (req) { try { req.call(el); } catch (_) {} }
+    } else {
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if (exit) { try { exit.call(document); } catch (_) {} }
+    }
+}
+function applyFullscreenUi() {
+    const active = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    ['fullscreen-btn', 'tv-fullscreen-float'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) {
+            btn.textContent = active ? '⛶ Exit Full' : '⛶ Fullscreen';
+            btn.title = active ? 'Exit fullscreen (F)' : 'Toggle fullscreen (F)';
+        }
+    });
+}
+document.addEventListener('fullscreenchange', applyFullscreenUi);
+document.addEventListener('webkitfullscreenchange', applyFullscreenUi);
 
 function applyOverlayModeUi() {
     document.body.classList.toggle('overlay-mode', overlayMode);
@@ -2229,6 +2293,7 @@ function installHotkeys() {
         const k = (e.key || '').toLowerCase();
         if (k === 'm') { e.preventDefault(); toggleOverlayMode(); }
         else if (k === 'o') { e.preventDefault(); toggleOverlayVisible(); }
+        else if (k === 'f') { e.preventDefault(); toggleFullscreen(); }
     });
 }
 

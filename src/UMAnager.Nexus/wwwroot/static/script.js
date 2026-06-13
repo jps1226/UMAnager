@@ -300,6 +300,19 @@ function compositionLabel(comp) {
     const id = compositionPresetId(comp);
     return id === 'custom' ? 'Custom' : (BET_PRESETS[id]?.label || 'Custom');
 }
+// The fewest marks at which a composition can place ANY line = min(minMarks) across its lines.
+// A race with fewer marks than this floor can't form a single line of the preset → it won't place
+// (the preset is a contract; no fallback to a bet type it doesn't contain). e.g. Trio chase
+// (trio=3, wide=2) → floor 2; Balanced (win=1, q=2, t=3) → floor 1.
+function compositionMarkFloor(comp) {
+    const lines = (comp && Array.isArray(comp.lines)) ? comp.lines : [];
+    let floor = Infinity;
+    for (const l of lines) {
+        const t = BET_LINE_TYPES[l && l.type];
+        if (t && Number.isFinite(t.minMarks)) floor = Math.min(floor, t.minMarks);
+    }
+    return Number.isFinite(floor) ? floor : 1;
+}
 
 // Day-level composition cache: { 'YYYY-MM-DD': {presetId,lines} }. Synced with the server via
 // /api/marks/day-bet/{date}. Temporary per race day (server ignores it once the day passes).
@@ -671,6 +684,23 @@ function raceStatusEmoji(race) {
     return '🕒';
 }
 
+// Phase 43: surface + distance chip for the race header (e.g. "🌱 Turf 1600m").
+// distance/surface now come straight from /api/races info (races-v9). Returns '' when
+// the race has neither yet (pre-ingest), so the header simply omits it. Inline-styled
+// to avoid a style.css version bump.
+function raceSurfaceDistChip(info) {
+    if (!info) return '';
+    const dist = (info.distance && Number(info.distance) > 0) ? `${info.distance}m` : '';
+    const surfRaw = String(info.surface || '').toLowerCase();
+    let icon = '', label = '', color = '';
+    if (surfRaw === 'turf') { icon = '🌱'; label = 'Turf'; color = '#3fae5a'; }
+    else if (surfRaw === 'dirt') { icon = '🟤'; label = 'Dirt'; color = '#c08a4a'; }
+    else if (surfRaw === 'jump') { icon = '🚧'; label = 'Jump'; color = '#b06ad0'; } // 障害 — a separate discipline
+    const text = [label, dist].filter(Boolean).join(' ');
+    if (!text) return '';
+    return ` <span class="race-sd-chip" style="display:inline-block;font-size:0.78em;font-weight:600;padding:1px 7px;margin:0 4px;border-radius:10px;background:${color}22;color:${color};border:1px solid ${color}66;vertical-align:middle;">${icon} ${text}</span>`;
+}
+
 function raceHasHistoryData(race) {
     if (!race) return false;
     if (race.info?.history_refreshed) return true;
@@ -760,10 +790,18 @@ async function refreshPhaseBadge() {
         if (!badge || !sub) return;
 
         const phase = data.phase || 'WAITING_FOR_RACES';
-        badge.classList.remove('phase-waiting', 'phase-posts', 'phase-upcoming', 'phase-live');
+        const inMaintenance = !!data.maintenance;
+        badge.classList.remove('phase-waiting', 'phase-posts', 'phase-upcoming', 'phase-live', 'phase-maintenance');
+        badge.style.removeProperty('background');
         const labelEl = badge.querySelector('.phase-badge-label');
 
-        if (phase === 'LIVE_OPERATIONS') {
+        if (inMaintenance) {
+            // JRA-VAN server is under maintenance (rc=-504) — the orchestrator is backed off.
+            // Amber inline so it stands out regardless of phase; no style.css dependency.
+            badge.classList.add('phase-maintenance');
+            badge.style.background = '#8a5a00';
+            labelEl.textContent = '🛠 JRA-VAN maintenance';
+        } else if (phase === 'LIVE_OPERATIONS') {
             badge.classList.add('phase-live');
             labelEl.textContent = '🔴 LIVE';
         } else if (phase === 'AWAITING_POSTS') {
@@ -782,11 +820,12 @@ async function refreshPhaseBadge() {
 
         _phaseBadgeState.eta = data.next_tick_eta_utc ? new Date(data.next_tick_eta_utc) : null;
         _phaseBadgeState.phase = phase;
+        _phaseBadgeState.maintenance = inMaintenance;
         _updateTickCountdown();
     } catch { /* silently ignore network errors */ }
 }
 
-const _phaseBadgeState = { eta: null, phase: '' };
+const _phaseBadgeState = { eta: null, phase: '', maintenance: false };
 const _tickActionLabel = {
     LIVE_OPERATIONS:   'odds refresh',
     RACES_POPULATED:   'odds refresh',
@@ -797,7 +836,8 @@ const _tickActionLabel = {
 function _updateTickCountdown() {
     const sub = document.getElementById('phase-badge-sub');
     if (!sub) return;
-    const { eta, phase } = _phaseBadgeState;
+    const { eta, phase, maintenance } = _phaseBadgeState;
+    if (maintenance && !eta) { sub.textContent = 'Server down · retrying'; return; }
     if (!eta) {
         sub.textContent = phase === 'WAITING_FOR_RACES' ? 'No upcoming races'
                         : phase === 'AWAITING_POSTS'   ? 'Draw pending'
@@ -805,7 +845,7 @@ function _updateTickCountdown() {
         return;
     }
     const diffMs = eta - Date.now();
-    const action = _tickActionLabel[phase] || 'tick';
+    const action = maintenance ? 'maintenance retry' : (_tickActionLabel[phase] || 'tick');
     if (diffMs <= 0) {
         sub.textContent = `${action} imminent`;
         return;
@@ -2763,6 +2803,8 @@ function getFormulaWeights() {
         pedigreeMultiplier:   parseFW(fw.pedigreeMultiplier,    30),
         formWeight:           parseFW(fw.formWeight,            80),
         sireFitWeight:        parseFW(fw.sireFitWeight,         10),
+        surfaceFitWeight:     parseFW(fw.surfaceFitWeight,       8),
+        distanceFitWeight:    parseFW(fw.distanceFitWeight,      8),
         jockeyWeight:         parseFW(fw.jockeyWeight,          20),
         trainerWeight:        parseFW(fw.trainerWeight,         20),
     };
@@ -2856,6 +2898,21 @@ function calculatePowerScore(row, riskVal, raceClass) {
     const sireFitVal = (row.Sire_Fit === null || row.Sire_Fit === undefined) ? null : parseFloat(row.Sire_Fit);
     if (sireFitVal !== null && Number.isFinite(sireFitVal)) {
         basePedScore += (sireFitVal / 100) * fw.sireFitWeight * sireFitBoost;
+    }
+
+    // Phase 43: the horse's OWN surface- and distance-fit — a low-weight tiebreaker that
+    // nudges horses proven on THIS race's surface and distance bucket. The server gates
+    // these to null below 3 starts in the split, so lightly-raced horses contribute 0.
+    // Win% based, so it rewards proven winners at the trip (a pure tiebreaker, not a boost):
+    // unlike Sire_Fit it is NOT amplified in maiden/debut races — own-record is least
+    // available exactly there, so it stays at face weight. Rides the merit weight (risk-scaled).
+    const surfaceFitVal = (row.Surface_Win_Pct === null || row.Surface_Win_Pct === undefined) ? null : parseFloat(row.Surface_Win_Pct);
+    if (surfaceFitVal !== null && Number.isFinite(surfaceFitVal)) {
+        basePedScore += (surfaceFitVal / 100) * fw.surfaceFitWeight;
+    }
+    const distFitVal = (row.Dist_Win_Pct === null || row.Dist_Win_Pct === undefined) ? null : parseFloat(row.Dist_Win_Pct);
+    if (distFitVal !== null && Number.isFinite(distFitVal)) {
+        basePedScore += (distFitVal / 100) * fw.distanceFitWeight;
     }
 
     // 4. THE SLIDER MIXER (rebuilt 2026-05-31 — see SLIDER_TUNING.md)
@@ -3048,6 +3105,20 @@ function explainPowerScore(row, riskVal) {
         pedLines.push({ label: `Sire Fit ${sireFitVal.toFixed(1)}% × ${fw.sireFitWeight}${boostLabel}`, value: sf });
     } else {
         pedLines.push({ label: 'Sire Fit — (no sample)', value: 0 });
+    }
+
+    // Phase 43: horse's OWN surface/distance fit (mirror of calculatePowerScore — keep in sync).
+    const surfaceFitVal = (row.Surface_Win_Pct === null || row.Surface_Win_Pct === undefined) ? null : parseFloat(row.Surface_Win_Pct);
+    if (surfaceFitVal !== null && Number.isFinite(surfaceFitVal)) {
+        const sfc = (surfaceFitVal / 100) * fw.surfaceFitWeight;
+        basePedScore += sfc;
+        pedLines.push({ label: `Surface fit ${surfaceFitVal.toFixed(1)}% (${row.Surface_Starts || '?'} st) × ${fw.surfaceFitWeight}`, value: sfc });
+    }
+    const distFitVal = (row.Dist_Win_Pct === null || row.Dist_Win_Pct === undefined) ? null : parseFloat(row.Dist_Win_Pct);
+    if (distFitVal !== null && Number.isFinite(distFitVal)) {
+        const dfc = (distFitVal / 100) * fw.distanceFitWeight;
+        basePedScore += dfc;
+        pedLines.push({ label: `Distance fit ${distFitVal.toFixed(1)}% (${row.Dist_Starts || '?'} st) × ${fw.distanceFitWeight}`, value: dfc });
     }
 
     // VALUE branch (long-odds reward — the chaos dimension). Mirrors calculatePowerScore:
@@ -3788,6 +3859,22 @@ function getEngineMarkPlanForRace(r_id, opts = {}) {
         if (m.odds !== null && m.odds > trimCeil) { target--; } else { break; } // null = unknown odds, not a longshot → keep
     }
 
+    // Phase 34 (partial): respect the active bet preset as a contract. If the engine's count can't
+    // even form the lowest-minMarks line of this race's composition (e.g. it wants 2 but a pure-trio
+    // preset needs 3), abstain entirely — better NO suggestion than marks that can't be bet. The
+    // operator can then switch preset or place a custom bet. No fallback to a foreign bet type.
+    // Defensive: this lookup must NEVER throw (it runs inside the bulk Auto-Bet-Day sweep — a
+    // throw here would abort the whole day). Default floor 1 (= no gate) on any failure, and only
+    // abstain when a genuinely-finite floor exceeds the engine's count.
+    let presetFloor = 1;
+    try {
+        const f = compositionMarkFloor(resolveBetComposition(r_id));
+        if (Number.isFinite(f) && f >= 1) presetFloor = f;
+    } catch (e) {
+        console.warn('getEngineMarkPlanForRace: preset-floor lookup failed for', r_id, e);
+    }
+    if (presetFloor > target) return empty('below-preset-floor');
+
     const seq = markSequenceForCount(target);
     const assignments = [];
     for (let i = 0; i < seq.length && i < scored.length; i++) {
@@ -3965,8 +4052,48 @@ function getTraditionalRoleAssignments(r_id) {
     return result;
 }
 
+// Phase 34 (partial): flag races that HAVE marks but whose marks can't form ANY line of the active
+// preset (e.g. 1 mark on Trio chase, floor 2) → the bet will NOT place and Apply will skip it.
+// Surfaces it in the race header so the operator can switch preset or place a custom bet instead of
+// being silently skipped. Recomputed on every mark/preset change (called from updateAutoBetHighlighting).
+function updateWontPlaceBadges() {
+    Object.keys(globalRaceEntries).forEach(r_id => {
+      try {
+        const meta = document.getElementById(`header-meta-${r_id}`);
+        if (!meta) return;
+        const existing = meta.querySelector('.wont-place-badge');
+        let show = false, floorN = 0, presetName = '';
+        if (countRaceMarks(r_id) > 0) {
+            const race = findRaceObjById(r_id);
+            if (race) {
+                const built = buildRaceBetLines(race);
+                if (!(built.lines || []).length) {
+                    show = true;
+                    const comp = resolveBetComposition(r_id);
+                    floorN = compositionMarkFloor(comp);
+                    presetName = compositionLabel(comp);
+                }
+            }
+        }
+        if (show) {
+            const title = `This race's marks can't form any line of "${presetName}" (needs ≥${floorN} marks). ` +
+                          `It will be SKIPPED at Apply — switch the preset or place a custom bet.`;
+            const html = ` <span class="wont-place-badge" title="${escapeHtml(title)}" ` +
+                `style="display:inline-block;font-size:0.72em;font-weight:700;padding:1px 7px;margin-left:6px;border-radius:10px;` +
+                `background:#7a1f1f;color:#ffd9d9;border:1px solid #c0392b;vertical-align:middle;">⚠ won't place (need ≥${floorN})</span>`;
+            if (existing) existing.outerHTML = html; else meta.insertAdjacentHTML('beforeend', html);
+        } else if (existing) {
+            existing.remove();
+        }
+      } catch (e) {
+        console.warn('updateWontPlaceBadges: skipped race', r_id, e);
+      }
+    });
+}
+
 function updateAutoBetHighlighting() {
     document.querySelectorAll('.mark-btn.auto-bet-preview').forEach(btn => btn.classList.remove('auto-bet-preview'));
+    updateWontPlaceBadges();   // always — independent of the highlight toggle
 
     if (!isAutoBetHighlightingEnabled()) return;
 
@@ -4356,7 +4483,7 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
 
         html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
             <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
-                <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> <span id="header-meta-${r_id}">${raceStatusEmoji(race)} ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName} ${winBadgesHtml}</span>
+                <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> <span id="header-meta-${r_id}">${raceStatusEmoji(race)} ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName}${raceSurfaceDistChip(race.info)} ${winBadgesHtml}</span>
 
                 ${historyBtnHtml}
                 ${trendsBtnHtml}
@@ -6051,36 +6178,58 @@ function buildLinesFromComposition(comp, runners) {
     const floor100 = x => Math.floor((Number(x) || 0) / 100) * 100;
     const n = (runners || []).length;
     const honmei = runners.find(r => r.symbol === '◎') || runners[0] || null;
-    const out = [];
-    (comp?.lines || []).forEach((spec, idx) => {
-        const t = BET_LINE_TYPES[spec.type];
-        if (!t || n < t.minMarks) return;
-        const yen = Math.max(0, parseInt(spec.yen, 10) || 0);
-        if (yen <= 0) return;
-        const combos = t.combos(n);
-        if (combos <= 0) return;
+    const hasHonmei = !!(honmei && honmei.pp);
 
+    // UNIFORM-SPEND model (operator pref 2026-06-12): a composition always bets its FULL intended
+    // total (Σ line ¥, e.g. ¥10,000) regardless of how many marks the race has. Lines that can't
+    // form at this mark count — a 3連複 box with <3 marks, a ワイド with <2, a 単勝 with no ◎ —
+    // have their budget REDISTRIBUTED proportionally across the lines that CAN form. When nothing
+    // drops (e.g. the tuned 4-mark card) this is a no-op and the preset ¥ are preserved exactly.
+    const specs = (comp?.lines || [])
+        .map((spec, idx) => ({ idx, t: BET_LINE_TYPES[spec.type], yen: Math.max(0, parseInt(spec.yen, 10) || 0) }))
+        .filter(s => s.t && s.yen > 0);
+    const targetTotal = specs.reduce((sum, s) => sum + s.yen, 0);
+    if (targetTotal <= 0) return { lines: [], staked: 0 };
+
+    // Formable at this mark count: enough marks, ≥1 combination, and (for ◎-anchored lines) a ◎.
+    const formable = specs
+        .map(s => ({ ...s, combos: s.t.combos(n) }))
+        .filter(s => n >= s.t.minMarks && s.combos > 0
+                     && !((s.t.pick === 'honmei' || s.t.pick === 'opp') && !hasHonmei));
+    if (!formable.length) return { lines: [], staked: 0 }; // e.g. 1 mark on a box-only preset → can't bet
+
+    // Scale the formable lines back up to the full target, then quantize to ¥100/combo.
+    const formableYen = formable.reduce((sum, s) => sum + s.yen, 0);
+    let built = formable.map(s => {
+        const scaled = targetTotal * s.yen / formableYen;
+        const perCombo = floor100(s.combos === 1 ? scaled : scaled / s.combos);
+        return { s, perCombo, lineTotal: perCombo * s.combos };
+    }).filter(b => b.perCombo >= 100); // can't place a real <¥100/combo ticket
+    if (!built.length) return { lines: [], staked: 0 };
+
+    // Floor-rounding leaves a sub-¥100×combos remainder vs target. Hand it to the most flexible
+    // survivor (fewest combos — a 1-combo line absorbs any ¥100 remainder exactly), so the placed
+    // total lands on the target. In the redistribution cases a low-combo survivor almost always exists.
+    const remainder = floor100(targetTotal - built.reduce((sum, b) => sum + b.lineTotal, 0));
+    if (remainder > 0) {
+        const absorber = built.reduce((best, b) => (b.s.combos < best.s.combos ? b : best), built[0]);
+        const addPerCombo = floor100(remainder / absorber.s.combos);
+        if (addPerCombo > 0) { absorber.perCombo += addPerCombo; absorber.lineTotal = absorber.perCombo * absorber.s.combos; }
+    }
+
+    const out = built.map(({ s, perCombo }) => {
+        const t = s.t;
         let horses, axisPp;
-        if (t.pick === 'honmei') {
-            if (!honmei || !honmei.pp) return;
-            horses = [honmei];
-        } else if (t.pick === 'opp') {
-            if (!honmei || !honmei.pp) return;
-            horses = runners.filter(r => r !== honmei);
-            axisPp = honmei.pp;
-        } else { // 'all'
-            horses = runners.slice();
-        }
-
-        const perCombo = combos === 1 ? floor100(yen) : floor100(yen / combos);
-        if (perCombo < 100) return; // underfunded for this 点数 — can't place a real ¥100 ticket
-        out.push({
-            ticket: t.ticket, method: t.method, label: t.jpLabel, // JP ticket name → TICKET_LABEL_EN maps it to English in breakdowns
+        if (t.pick === 'honmei')      { horses = [honmei]; }
+        else if (t.pick === 'opp')    { horses = runners.filter(r => r !== honmei); axisPp = honmei.pp; }
+        else                          { horses = runners.slice(); }
+        return {
+            ticket: t.ticket, method: t.method, label: t.jpLabel,
             horses, ...(axisPp ? { axisPp } : {}),
-            comboCount: combos, stakePerCombo: perCombo, _specIndex: idx,
-        });
+            comboCount: s.combos, stakePerCombo: perCombo, _specIndex: s.idx,
+        };
     });
-    const staked = out.reduce((s, l) => s + l.stakePerCombo * l.comboCount, 0);
+    const staked = out.reduce((sum, l) => sum + l.stakePerCombo * l.comboCount, 0);
     return { lines: out, staked };
 }
 
@@ -7516,6 +7665,12 @@ async function clearActiveDayBets() {
 // NOTE: this guards the BULK sweep only; the per-race auto-pick button is an explicit override
 // and still overwrites (applyAutoPickSelectionsToRace is intentionally unguarded).
 function raceHasUserMarks(r_id) {
+    // A race only counts as "hand-marked" (→ protected from the Auto Bet Day sweep) if it STILL
+    // has actual marks. 🧹 Clear Day Bets nulls every mark but stamps markSource='manual' +
+    // manualAdjustments to record the action — that left every cleared race looking hand-marked,
+    // so the sweep skipped them all and set zero marks. Clearing exists precisely to re-evaluate
+    // via the engine, so a race with no marks must NOT block Auto Bet Day. Require marks present.
+    if (countRaceMarks(r_id) === 0) return false;
     const meta = globalRaceMeta[r_id];
     if (!meta || typeof meta !== 'object') return false;
     const src = String(meta.markSource || '').trim();
@@ -7573,6 +7728,7 @@ async function autoBetActiveDay() {
         let skippedLocked = 0;
         let skippedManual = 0;
         let abstained = 0;
+        let errored = 0;
 
         eligibleRaceIds.forEach(r_id => {
             if (isRaceLocked(r_id)) {
@@ -7586,11 +7742,18 @@ async function autoBetActiveDay() {
                 return;
             }
 
-            const result = applyAutoPickSelectionsToRace(r_id, null);
-            if (result.changed) {
-                changedRaceIds.push(r_id);
+            // Isolate each race: a throw on ONE race must not abort the whole day's sweep
+            // (that was the "Auto Bet Day set zero marks" regression — one bad race nuked all).
+            try {
+                const result = applyAutoPickSelectionsToRace(r_id, null);
+                if (result.changed) {
+                    changedRaceIds.push(r_id);
+                }
+                if (result.count === 0) abstained += 1; // engine chose to skip this race
+            } catch (e) {
+                errored += 1;
+                console.error('Auto Bet Day: race', r_id, 'failed —', e);
             }
-            if (result.count === 0) abstained += 1; // engine chose to skip this race
         });
 
         if (changedRaceIds.length) {
@@ -7619,12 +7782,13 @@ async function autoBetActiveDay() {
         const lockNote = skippedLocked ? ` Skipped ${skippedLocked} locked race(s).` : '';
         const manualNote = skippedManual ? ` Left ${skippedManual} hand-marked race(s) untouched.` : '';
         const abstainNote = abstained ? ` Engine abstained on ${abstained} race(s) (no good bet at Risk ${riskVal}).` : '';
+        const errorNote = errored ? ` ⚠ ${errored} race(s) errored (see console).` : '';
         if (!changedRaceIds.length) {
-            setOreProSessionStatus(`Auto-pick finished but produced no new marks for ${date}.${abstainNote}${manualNote}${lockNote}`, 'warn');
+            setOreProSessionStatus(`Auto-pick finished but produced no new marks for ${date}.${abstainNote}${manualNote}${lockNote}${errorNote}`, 'warn');
             return;
         }
         setOreProSessionStatus(
-            `Auto-picked ${changedRaceIds.length} race(s) for ${date} at Risk ${riskVal}. Click Apply Votes to send them to OrePro.${abstainNote}${manualNote}${lockNote}`,
+            `Auto-picked ${changedRaceIds.length} race(s) for ${date} at Risk ${riskVal}. Click Apply Votes to send them to OrePro.${abstainNote}${manualNote}${lockNote}${errorNote}`,
             'info'
         );
     } finally {
@@ -7639,6 +7803,87 @@ async function autoBetActiveDay() {
 /// in the results panel. Each per-race call uses submit_after_apply so the bet is both
 /// staged and committed in OrePro. This keeps the platforms separated: Auto Bet Day only
 /// updates marks within UMAnager; Apply Votes is the explicit push to OrePro.
+// Phase 37 (D/E): route ONE race's apply to the path its composition demands, then submit.
+//   • balanced preset (= OrePro's exact default Win+馬連box+三連複box) → MARKS path: send marks,
+//     OrePro's generator builds the identical default. Proven, reconciles to the yen.
+//   • any other preset / custom composition → CUSTOM path: place the explicit priced lines
+//     (e.g. Trio chase + Wide net) so OrePro gets exactly what UMAnager priced.
+// Both submit. Easy-mode (簡単投票) is now self-managed server-side (marks path forces it ON,
+// custom path forces it OFF), so the operator never toggles it by hand. Returns a normalized
+// result so the single-race and day callers share one code path:
+//   { ok, expired, submitted, mode, message, data, result }
+async function applyRaceRoutedToOrePro(r_id) {
+    const useCustom = compositionPresetId(resolveBetComposition(r_id)) !== DEFAULT_PRESET;
+
+    if (useCustom) {
+        const race = findRaceObjById(r_id);
+        const built = race ? buildOreProCustomLinesForRace(race) : { lines: [] };
+        if (!built.lines.length) {
+            return { ok: false, expired: false, submitted: false, mode: 'custom',
+                     message: 'No custom lines to place — mark horses / set a composition first.', data: null, result: null };
+        }
+
+        // MARKS-FIRST (proven 2026-06-13; see memory orepro-custom-bet-api). OrePro's submit gate
+        // rejects with 「印が不足しています…◎」 unless ≥1 ◎ exists on the race, and the ◎〇▲△ marks are
+        // what render atop the 俺プロフ ticket. So push the race's marks WITHOUT committing (omit
+        // submit_after_apply), then place + submit the custom lines below. Non-fatal if no marks
+        // resolve — the custom submit still runs and will surface the gate error if marks are truly
+        // absent. Re-betting overwrites cleanly (bet_list is replaced, not appended), so no clear step.
+        const marksPayload = buildOreProApplyVotesPayloadForRace(r_id);
+        if (marksPayload.races.length) {
+            try {
+                await fetch('/api/orepro/votes/apply', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(marksPayload),   // no submit_after_apply ⇒ marks set, not committed
+                });
+            } catch (err) {
+                console.warn('[OrePro] marks-first step failed for', r_id, '— continuing to custom place+submit', err);
+            }
+        }
+
+        let data = null;
+        try {
+            const res = await fetch('/api/orepro/custom-bet/test', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    race_id: r_id, dry_run: false, submit_after_apply: true,
+                    lines: built.lines.map(({ type, method, umaban, money }) => ({ type, method, umaban, money })),
+                })
+            });
+            data = await res.json();
+        } catch (err) {
+            return { ok: false, expired: false, submitted: false, mode: 'custom', message: `request failed: ${err?.message || err}`, data: null, result: null };
+        }
+        const st = String(data?.status || '').toLowerCase();
+        return { ok: st === 'ok', expired: looksLikeExpiredOreProSession(null, data),
+                 submitted: !!data?.submitted, mode: 'custom', message: data?.message || st, data, result: data };
+    }
+
+    // MARKS path (default / easy mode).
+    const payload = buildOreProApplyVotesPayloadForRace(r_id);
+    if (!payload.races.length) {
+        return { ok: false, expired: false, submitted: false, mode: 'marks', message: 'no resolvable marks', data: null, result: null };
+    }
+    payload.submit_after_apply = true;
+    payload.go_next_race = true;
+    let data = null;
+    try {
+        const res = await fetch('/api/orepro/votes/apply', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+        });
+        data = await res.json();
+    } catch (err) {
+        return { ok: false, expired: false, submitted: false, mode: 'marks', message: `request failed: ${err?.message || err}`, data: null, result: null };
+    }
+    const result = Array.isArray(data?.results) ? data.results[0] : (data?.result?.results?.[0] || null);
+    const topStatus = String(data?.status || '').trim().toLowerCase();
+    const rowStatus = String(result?.status || '').trim().toLowerCase();
+    const ok = topStatus !== 'error' && rowStatus !== 'error';
+    let msg = result?.message || data?.message || 'applied';
+    try { const n = JSON.parse(msg || '{}'); if (n?.message) msg = n.message; } catch (_) {}
+    return { ok, expired: looksLikeExpiredOreProSession(result, data), submitted: ok, mode: 'marks', message: msg, data, result };
+}
+
 async function applySingleRaceVotesToOrePro(event, raceId) {
     if (event) {
         event.preventDefault();
@@ -7669,29 +7914,14 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
     setOreProSessionStatus(`Applying marks to OrePro for race ${raceId}, then submitting and moving to the next race...`, 'info');
 
     try {
-        const res = await fetch('/api/orepro/votes/apply', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-
-        const result = Array.isArray(data?.results)
-            ? data.results[0]
-            : (data?.result?.results?.[0] || null);
-        const topStatus = String(data?.status || '').trim().toLowerCase();
-        const rowStatus = String(result?.status || '').trim().toLowerCase();
-        const requestCompleted = topStatus !== 'error' && rowStatus !== 'error';
-        const collapseSucceeded = didOreProAdvanceToNextRace(data, result)
-            || requestCompleted;
-        const mode = collapseSucceeded || rowStatus === 'ok' ? 'ok' : 'warn';
-        let serverMessage = result?.message || data?.message || `Applied votes for race ${raceId}.`;
-        try {
-            const nested = JSON.parse(serverMessage || '{}');
-            if (nested?.message) serverMessage = nested.message;
-        } catch (_) {}
-
-        setOreProSessionStatus(serverMessage, mode);
+        // Phase 37: route by this race's composition (default→marks, custom→custom-lines) + submit.
+        const routed = await applyRaceRoutedToOrePro(raceId);
+        const data = routed.data;
+        const result = routed.result;
+        const requestCompleted = routed.ok;
+        const collapseSucceeded = routed.ok;
+        const mode = routed.ok ? 'ok' : 'warn';
+        setOreProSessionStatus(`[${routed.mode}] ${routed.message}`, mode);
 
         // Refresh persistent apply-state badges. After this and a re-render, the race
         // title will show "📝 Applied" or "📤 Submitted".
@@ -7699,7 +7929,7 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
         loadVoteHistory().then(renderVoteHistory); // Phase 30: refresh "Voted N×" badges
         try { renderLiveViewPanel(); } catch (_) {}
 
-        if ((requestCompleted || rowStatus === 'ok') && isAutoLockAfterSubmitEnabled()) {
+        if (requestCompleted && isAutoLockAfterSubmitEnabled()) {
             // Lock ONLY this race — applying one race shouldn't lock others you're still editing.
             if (lockSingleRaceAfterSubmit(raceId) > 0) {
                 saveMarksToServer().then(() => refreshSunkCostStat()).catch(() => {}); // persist auto-lock (sunk-cost basis)
@@ -7733,7 +7963,7 @@ async function applySingleRaceVotesToOrePro(event, raceId) {
 
         // If the user wants the v1-style "go to receipt page" UX, navigate the popup to
         // bet_complete.html after a successful submit.
-        const submitOk = result?.submitFlow?.submitStatus === 'ok';
+        const submitOk = routed.submitted;
         const navAfter = String(globalOreProSettings?.orepro_nav_to_complete_after_submit || 'false').toLowerCase() === 'true';
         if (submitOk && navAfter && isOreProCompanionOpen()) {
             try {
@@ -7908,20 +8138,44 @@ async function applyAllDayVotesToOrePro() {
     // mobile would silently exclude it from the bulk apply (the exact bug reported).
     const isSubmitted = (r_id) => !!(globalOreProApplyState?.[r_id]?.submitted);
 
-    const eligible = allIds.filter(r_id => hasMarks(r_id) && !isSubmitted(r_id));
+    // Phase 34: a marked race that can't form ANY line of its composition (e.g. 1 mark on Trio
+    // chase, floor 2) will NOT place — exclude it from the run and report it separately as SKIPPED
+    // rather than letting it count as a failure. The operator handles those via custom bets.
+    const canForm = (r_id) => {
+        const race = findRaceObjById(r_id);
+        return !!race && (buildRaceBetLines(race).lines || []).length > 0;
+    };
+    const marked = allIds.filter(r_id => hasMarks(r_id) && !isSubmitted(r_id));
+    const eligible  = marked.filter(canForm);
+    const wontPlace = marked.filter(r_id => !canForm(r_id));
     const submittedCount = allIds.filter(r_id => isSubmitted(r_id)).length;
-    const unbetCount = allIds.length - eligible.length - submittedCount;
+    const unbetCount = allIds.length - marked.length - submittedCount;
+
+    const raceLabel = (r_id) => {
+        const race = findRaceObjById(r_id);
+        return race ? `${trackName(race.info.place)} R${race.info.race_number}` : r_id;
+    };
 
     if (!eligible.length) {
-        setOreProSessionStatus(`No unsubmitted races with votes for ${date}.`, 'warn');
+        const wp = wontPlace.length ? ` (${wontPlace.length} marked race(s) can't form the current preset — handle via custom bet)` : '';
+        setOreProSessionStatus(`No placeable unsubmitted races with votes for ${date}.${wp}`, 'warn');
+        if (wontPlace.length) {
+            window.alert(`⚠️ Nothing to apply for ${date}.\n\n${wontPlace.length} marked race(s) won't place under the current preset (not enough marks):\n` +
+                wontPlace.map(raceLabel).map(l => `  • ${l}`).join('\n') +
+                `\n\nSwitch the preset for those races, add marks, or place them as custom bets.`);
+        }
         return;
     }
 
-    // First confirm: only if some races on the day have no marks at all.
-    if (unbetCount > 0) {
+    // First confirm: surface BOTH unmarked races and marked-but-unplaceable races.
+    if (unbetCount > 0 || wontPlace.length > 0) {
+        const parts = [];
+        if (unbetCount > 0) parts.push(`${unbetCount} race(s) have no votes yet`);
+        if (wontPlace.length > 0) parts.push(`${wontPlace.length} race(s) have marks but WON'T place under the current preset (need more marks): ${wontPlace.map(raceLabel).join(', ')}`);
         const first = window.confirm(
-            `⚠️ ${unbetCount} of ${allIds.length} race(s) for ${date} have no votes yet.\n\n` +
-            `Apply votes for the ${eligible.length} race(s) that DO have marks and skip the rest?`
+            `⚠️ For ${date}:\n  • ${parts.join('\n  • ')}\n\n` +
+            `Apply + submit the ${eligible.length} placeable race(s) and skip the rest?` +
+            (wontPlace.length ? `\n\n(The won't-place races are left for you to handle via custom bets.)` : '')
         );
         if (!first) return;
     }
@@ -7959,36 +8213,16 @@ async function applyAllDayVotesToOrePro() {
             if (btn) btn.textContent = `⏳ Applying ${i + 1}/${eligible.length}`;
             setOreProSessionStatus(`Applying race ${i + 1}/${eligible.length} (${r_id})...`, 'info');
 
-            const payload = buildOreProApplyVotesPayloadForRace(r_id);
-            if (!payload.races.length) {
+            // Phase 37: route each race by its composition (default→marks, custom→custom-lines),
+            // submit, and record shared apply-state. The helper has its own try/catch.
+            const routed = await applyRaceRoutedToOrePro(r_id);
+            if (routed.ok) {
+                okCount++;
+            } else {
                 failCount++;
-                failureLines.push(`[skip] ${r_id}: no resolvable marks`);
-                continue;
-            }
-            payload.submit_after_apply = true;
-            payload.go_next_race = (i < eligible.length - 1);
-
-            try {
-                const res = await fetch('/api/orepro/votes/apply', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const data = await res.json();
-                const result = Array.isArray(data?.results) ? data.results[0] : (data?.result?.results?.[0] || null);
-                const topStatus = String(data?.status || '').trim().toLowerCase();
-                const rowStatus = String(result?.status || '').trim().toLowerCase();
-                if (topStatus !== 'error' && rowStatus !== 'error') {
-                    okCount++;
-                } else {
-                    failCount++;
-                    failureLines.push(`[${rowStatus || topStatus || 'error'}] ${r_id}: ${result?.message || data?.message || 'unknown'}`);
-                    // Dead cookie fails every race identically — stop now and report the real cause.
-                    if (looksLikeExpiredOreProSession(result, data)) { sessionExpired = true; break; }
-                }
-            } catch (err) {
-                failCount++;
-                failureLines.push(`[exception] ${r_id}: ${err?.message || err}`);
+                failureLines.push(`[${routed.mode}] ${r_id}: ${routed.message}`);
+                // Dead cookie fails every race identically — stop now and report the real cause.
+                if (routed.expired) { sessionExpired = true; break; }
             }
         }
 
@@ -8036,7 +8270,13 @@ async function applyAllDayVotesToOrePro() {
             : (okCount > 0
                 ? `${okCount} succeeded, ${failCount} failed (see diagnostics panel).`
                 : `All ${failCount} submission(s) failed (see diagnostics panel).`);
-        window.alert(`${alertIcon} Apply Day Votes finished for ${date}.\n\n${alertTail}`);
+        // Phase 34: explicitly call out the marked races we SKIPPED because they can't form the
+        // current preset — so the operator knows to handle them via custom bets.
+        const skipTail = wontPlace.length
+            ? `\n\n⚠ Skipped ${wontPlace.length} race(s) that won't place under the current preset (handle via custom bet):\n` +
+              wontPlace.map(raceLabel).map(l => `  • ${l}`).join('\n')
+            : '';
+        window.alert(`${alertIcon} Apply Day Votes finished for ${date}.\n\n${alertTail}${skipTail}`);
 
         // Drop any failure detail into the diagnostics panel so the operator can see what didn't go through.
         if (failureLines.length) {
@@ -10620,7 +10860,7 @@ function refreshRaceHeaderMeta(raceId) {
     const info = race.info || {};
     const localName = localizeRaceName(info.race_name) || localizeRaceClass(info.race_class);
     const winBadgesHtml = buildRaceWinBadgesHtml(race);
-    meta.innerHTML = `${raceStatusEmoji(race)} ${info.time} | ${trackName(info.place)} R${info.race_number}: ${localName} ${winBadgesHtml}`;
+    meta.innerHTML = `${raceStatusEmoji(race)} ${info.time} | ${trackName(info.place)} R${info.race_number}: ${localName}${raceSurfaceDistChip(info)} ${winBadgesHtml}`;
 }
 
 function patchRaceEntries(raceId, entries, fields) {

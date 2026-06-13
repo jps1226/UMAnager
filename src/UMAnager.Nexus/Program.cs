@@ -54,6 +54,7 @@ builder.Services.AddDbContextFactory<AppDbContext>(opts =>
     opts.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
 
 builder.Services.AddSingleton<SidecarBridge>();
+builder.Services.AddSingleton<PipelineHealthService>();   // T1-1: pipeline health/alerting (singleton).
 builder.Services.AddSingleton<AppStateService>();
 builder.Services.AddSingleton<SettingsService>();
 builder.Services.AddSingleton<PhaseService>();

@@ -45,6 +45,10 @@ public sealed class SettingsService
         // Int — minutes before post time when a race enters the LIVE window (kmy-keiba RB41 gate).
         public const string LiveWindowMinutes = "live_window_minutes";
 
+        // TimeSpan — retry cadence while JRA-VAN is under maintenance (rc=-504). Replaces the normal
+        // phase interval so we probe gently instead of hammering a down server. (Oracle 2026-06-07.)
+        public const string MaintenanceRetryInterval = "maintenance_retry_interval";
+
         // String — Discord webhook URL for phase-change and bet-win notifications. Nullable.
         public const string DiscordWebhookUrl = "discord_webhook_url";
 
@@ -106,6 +110,7 @@ public sealed class SettingsService
         public static readonly TimeSpan OddsPollIntervalPreliveRamp = TimeSpan.FromMinutes(15);
         public const int                LiveWindowMinutes        = 90;
         public const int                PreliveRampWindowMinutes = 120;
+        public static readonly TimeSpan MaintenanceRetryInterval = TimeSpan.FromMinutes(30);
         public const string?            DiscordWebhookUrl        = null;
         public const string?            OreProSessionCookie      = null;
         public const string             OreProUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -240,6 +245,7 @@ public sealed class SettingsService
         AddIfMissing(Keys.OddsPollIntervalAwaiting, Defaults.OddsPollIntervalAwaiting.ToString());
         AddIfMissing(Keys.OddsPollIntervalLive,    Defaults.OddsPollIntervalLive.ToString());
         AddIfMissing(Keys.LiveWindowMinutes,       Defaults.LiveWindowMinutes.ToString());
+        AddIfMissing(Keys.MaintenanceRetryInterval, Defaults.MaintenanceRetryInterval.ToString());
         AddIfMissing(Keys.DiscordWebhookUrl,       Defaults.DiscordWebhookUrl);
         AddIfMissing(Keys.OreProSessionCookie,     Defaults.OreProSessionCookie);
         AddIfMissing(Keys.OreProUserAgent,         Defaults.OreProUserAgent);

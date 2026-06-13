@@ -24,5 +24,29 @@ public sealed class SidecarBridge
         });
 
     public int    StagedRecordCount { get; set; }
-    public string IngestionStatus   { get; set; } = "Idle"; // "Idle" | "Streaming" | "Complete" | "Error"
+
+    // "Idle" | "Streaming" | "Complete" | "Error". The setter auto-stamps StreamingSinceUtc on the
+    // Idle→Streaming edge and clears it when leaving Streaming, so the LiveOrchestrator watchdog can
+    // detect a Sidecar that hung mid-stream WITHOUT ever sending a completion (which would otherwise
+    // leave ingest stuck "Streaming" forever — dead for the rest of an unattended weekend). T1-3.
+    private string _ingestionStatus = "Idle";
+    public string IngestionStatus
+    {
+        get => _ingestionStatus;
+        set
+        {
+            if (value == "Streaming")
+            {
+                if (_ingestionStatus != "Streaming") StreamingSinceUtc = DateTime.UtcNow;
+            }
+            else
+            {
+                StreamingSinceUtc = null;
+            }
+            _ingestionStatus = value;
+        }
+    }
+
+    /// <summary>UTC time the current "Streaming" state began; null when not streaming. Drives the watchdog.</summary>
+    public DateTime? StreamingSinceUtc { get; private set; }
 }

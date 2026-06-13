@@ -41,6 +41,11 @@ internal static class RtRaceCardStreamHandler
             return (0, 1);
         }
 
+        if (rc == JvReturnCodes.Maintenance)
+        {
+            Console.WriteLine($"[Sidecar]   JRA-VAN server under maintenance (rc={rc}). Backing off.");
+            return (JvReturnCodes.MaintenanceStored, 0);
+        }
         if (rc != 0)
         {
             // rc=-1: no applicable data (race card not yet announced for this date). Common before

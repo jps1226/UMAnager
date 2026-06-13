@@ -38,6 +38,11 @@ internal static class RtResultsStreamHandler
             return (0, 1);
         }
 
+        if (rc == JvReturnCodes.Maintenance)
+        {
+            Console.WriteLine($"[Sidecar]   JRA-VAN server under maintenance (rc={rc}). Backing off.");
+            return (JvReturnCodes.MaintenanceStored, 0);
+        }
         if (rc != 0)
         {
             // rc=-1: no applicable data (race day has no results yet). Common pre-race; skip quietly.

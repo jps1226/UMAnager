@@ -55,11 +55,13 @@ public sealed class OreProCustomBetService
 
     private readonly ILogger<OreProCustomBetService> _logger;
     private readonly SettingsService _settings;
+    private readonly AppStateService _appState;
 
-    public OreProCustomBetService(ILogger<OreProCustomBetService> logger, SettingsService settings)
+    public OreProCustomBetService(ILogger<OreProCustomBetService> logger, SettingsService settings, AppStateService appState)
     {
         _logger   = logger;
         _settings = settings;
+        _appState = appState;
     }
 
     private sealed record BetLine(int Type, int Method, string Umaban, int Money);
@@ -77,6 +79,10 @@ public sealed class OreProCustomBetService
             return Err($"race_id did not resolve to a 12-digit netkeiba id (got '{race12}').");
 
         var dryRun = payload.TryGetProperty("dry_run", out var dr) && dr.ValueKind == JsonValueKind.True;
+        // Phase 37 (D/E): when true, after placing the custom lines into the cart we also COMMIT
+        // them via api_post_mybet (same call the marks path uses) and record shared apply-state so
+        // Auto Bet Day skips this race. Never honored on a dry run.
+        var submitAfter = payload.TryGetProperty("submit_after_apply", out var sa) && sa.ValueKind == JsonValueKind.True;
 
         if (!payload.TryGetProperty("lines", out var linesEl) || linesEl.ValueKind != JsonValueKind.Array || linesEl.GetArrayLength() == 0)
             return Err("lines[] is required and must be a non-empty array of {type, method, umaban, money}.");
@@ -278,21 +284,118 @@ public sealed class OreProCustomBetService
             _logger.LogDebug(ex, "Custom-bet: cart read-back failed for {Race} (non-fatal)", race12);
         }
 
+        // ── Submit (commit the cart) when asked ──────────────────────────────────
+        // Reuses OrePro's bet-agnostic commit endpoint (api_post_mybet action=update), the SAME
+        // one the marks path uses — it commits whatever is in the cart for the race, so it works
+        // for a custom orebet_ ticket too. Only fires when the add was confirmed, to avoid
+        // committing a half-placed bet.
+        string submitStatus = "not-requested";
+        string submitMessage = "";
+        bool submitted = false;
+        if (submitAfter && confirmed)
+        {
+            (submitStatus, submitMessage) = await TrySubmitAsync(http, race12, ct);
+            submitted = submitStatus == "ok";
+        }
+        else if (submitAfter && !confirmed)
+        {
+            submitStatus = "skipped";
+            submitMessage = "Submit skipped — cart read-back did not confirm the lines.";
+        }
+
+        // Record shared apply-state (same key/shape as the marks path) keyed by the JRA 16-char id,
+        // so the frontend's apply badges + Auto Bet Day's "already submitted → skip" both see it.
+        if (submitAfter)
+            await RecordApplyStateAsync(rawRaceId, lines.Count, submitted, submitMessage, ct);
+
+        var finalStatus = !confirmed ? "warn"
+                        : (submitAfter && !submitted) ? "warn"
+                        : "ok";
         return Json(new
         {
-            status     = confirmed ? "ok" : "warn",
-            message    = confirmed
-                ? "Custom ticket placed in the OrePro cart and confirmed via cart read-back."
-                : "Add fired, but the cart read-back did not confirm all bet_ids. Check OrePro manually.",
+            status     = finalStatus,
+            message    = !confirmed
+                ? "Add fired, but the cart read-back did not confirm all bet_ids. Check OrePro manually."
+                : submitAfter
+                    ? (submitted ? "Custom ticket placed AND submitted to OrePro." : $"Custom ticket placed, but submit FAILED: {submitMessage}")
+                    : "Custom ticket placed in the OrePro cart and confirmed via cart read-back.",
             raceId12   = race12,
             prefix,
             betIds     = betEntries.Select(b => b.bet_id).ToArray(),
             confirmed,
             easyModeOff,
+            submitted,
+            submitStatus,
             cartBetIds,
             addResponse = Trunc(addResp, 300),
             cartRaw     = Trunc(cartRaw, 800),
         });
+    }
+
+    /// <summary>
+    /// Commits the cart for the given netkeiba race_id via api_post_mybet (action=update) — the
+    /// same bet-agnostic commit the marks path uses. Returns ("ok", …) only on an explicit OK.
+    /// </summary>
+    private async Task<(string status, string message)> TrySubmitAsync(HttpClient http, string race12, CancellationToken ct)
+    {
+        const string url = "https://orepro.netkeiba.com/bet/api_post_mybet.html";
+        var form = new[]
+        {
+            new KeyValuePair<string,string>("input",   "UTF-8"),
+            new KeyValuePair<string,string>("output",  "jsonp"),
+            new KeyValuePair<string,string>("action",  "update"),
+            new KeyValuePair<string,string>("race_id", race12),
+        };
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = new FormUrlEncodedContent(form) };
+            req.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
+            req.Headers.Add("Origin", "https://orepro.netkeiba.com");
+            req.Headers.Add("X-Requested-With", "XMLHttpRequest");
+            using var resp = await http.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            if (!resp.IsSuccessStatusCode)
+                return ("error", $"Submit HTTP {(int)resp.StatusCode}. Body: {Trunc(body, 200)}");
+            if (body.Contains("\"status\":\"OK\"", StringComparison.OrdinalIgnoreCase))
+                return ("ok", "Bet submitted to OrePro.");
+            return ("warn", $"Submit returned 200 but no OK status. Body: {Trunc(body, 200)}");
+        }
+        catch (Exception ex)
+        {
+            return ("error", $"Submit threw: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Persists OrePro apply-state under the SAME key/shape as OreProVoteApplyService, so the
+    /// frontend's "📤 Submitted" badges and Auto Bet Day's skip-already-submitted both work for
+    /// custom-path bets. Keyed by the JRA 16-char race id (what the frontend keys on).
+    /// </summary>
+    private async Task RecordApplyStateAsync(string jraRaceId, int lineCount, bool submitted, string? lastMessage, CancellationToken ct)
+    {
+        try
+        {
+            var existing = await _appState.GetStringAsync(OreProVoteApplyService.ApplyStateKey) ?? "{}";
+            Dictionary<string, JsonElement> dict;
+            try { dict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(existing) ?? new(); }
+            catch { dict = new(); }
+
+            var now = DateTime.UtcNow.ToString("O");
+            dict[jraRaceId] = JsonSerializer.SerializeToElement(new
+            {
+                appliedAt   = now,
+                submitted,
+                submittedAt = submitted ? now : (string?)null,
+                marksCount  = lineCount,   // line count for custom tickets (vs mark count for the marks path)
+                lastMessage,
+                via         = "custom",
+            });
+            await _appState.SetStringAsync(OreProVoteApplyService.ApplyStateKey, JsonSerializer.Serialize(dict));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Custom-bet: failed to persist apply state for {RaceId}", jraRaceId);
+        }
     }
 
     /// <summary>Parses the cart "get" JSON and returns the bet_ids currently in data.bet_list._cd.</summary>
