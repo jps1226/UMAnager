@@ -822,7 +822,46 @@ async function refreshPhaseBadge() {
         _phaseBadgeState.phase = phase;
         _phaseBadgeState.maintenance = inMaintenance;
         _updateTickCountdown();
+        renderPipelineHealth(data.pipeline_health);
     } catch { /* silently ignore network errors */ }
+}
+
+// Pipeline-health dot (T1-1). A subtle indicator beside the sidebar "UMAnager" title.
+// Consumes /api/orchestrator/status → pipeline_health, a dict keyed by step name ('parse',
+// 'orchestrator-tick', 'streaming-watchdog') with each step's { consecutive_failures,
+// seconds_since_success, last_error, healthy }. The dot COLOUR is the only signal — green all-ok,
+// amber a step failing 1–2× (degraded), red a step failed ≥3× (the same threshold that fires the
+// Discord alert). Full per-step detail lives in the hover tooltip. Born from the 2026-06-13
+// silent-results-outage (see TECH_DEBT.md T1-1).
+function renderPipelineHealth(health) {
+    const dot = document.getElementById('health-dot');
+    if (!dot) return;
+    const steps = (health && typeof health === 'object') ? Object.entries(health) : [];
+    const fmtAgo = s => (s == null) ? null : (s < 90 ? `${Math.round(s)}s` : `${Math.round(s / 60)}m`);
+
+    if (!steps.length) {
+        dot.className = 'health-dot health-unknown';
+        dot.title = 'Pipeline health — no steps have reported since the last Nexus restart.';
+        return;
+    }
+
+    // Worst state across steps: ≥3 consecutive failures = down, 1–2 = degraded, 0 = ok.
+    let worst = 'ok';
+    for (const [, s] of steps) {
+        const cf = Number(s?.consecutive_failures || 0);
+        if (cf >= 3)     { worst = 'down'; }
+        else if (cf > 0) { if (worst !== 'down') worst = 'degraded'; }
+    }
+    dot.className = 'health-dot ' + (worst === 'down' ? 'health-down' : worst === 'degraded' ? 'health-degraded' : 'health-ok');
+
+    const headline = worst === 'down' ? 'Pipeline: a step is DOWN' : worst === 'degraded' ? 'Pipeline: a step is degraded' : 'Pipeline: healthy';
+    dot.title = headline + '\n' + steps.map(([name, s]) => {
+        const cf = Number(s?.consecutive_failures || 0);
+        const fresh = fmtAgo(s?.seconds_since_success);
+        const state = cf >= 3 ? `DOWN (${cf}× in a row)` : cf > 0 ? `degraded (${cf}×)` : 'ok';
+        const err = (cf > 0 && s?.last_error) ? ` — ${String(s.last_error).slice(0, 90)}` : '';
+        return `• ${name}: ${state}; last ok ${fresh != null ? fresh + ' ago' : 'never'}${err}`;
+    }).join('\n');
 }
 
 const _phaseBadgeState = { eta: null, phase: '', maintenance: false };

@@ -1366,6 +1366,25 @@ th {
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
 }
+/* Pipeline-health dot (T1-1): a subtle indicator next to the sidebar "UMAnager" title.
+   Surfaces /api/orchestrator/status → pipeline_health. Dot colour is the only signal
+   (green ok / amber degraded / red down); full per-step detail is in the title tooltip. */
+.health-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+    margin-left: 7px;
+    vertical-align: middle;
+    box-shadow: 0 0 4px currentColor;
+    cursor: default;
+}
+.health-dot.health-ok       { background: #35c46a; color: #35c46a; }
+.health-dot.health-degraded { background: #d99a1c; color: #d99a1c; }
+.health-dot.health-down     { background: #e0463e; color: #e0463e; animation: health-pulse 1.4s ease-in-out infinite; }
+.health-dot.health-unknown  { background: #666;    color: #666; box-shadow: none; }
+@keyframes health-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .phase-waiting {
     background: rgba(255, 255, 255, 0.04);
     border-color: rgba(255, 255, 255, 0.1);
