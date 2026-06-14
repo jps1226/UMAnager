@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260613-3">
+    <link rel="stylesheet" href="/static/style.css?v=20260613-14">
 </head>
 <body>
 
@@ -14,7 +14,13 @@
 
 <div class="sidebar">
     <div class="sidebar-brand-row">
-        <h2 class="sidebar-brand-title">🐎 UMAnager<span id="health-dot" class="health-dot health-unknown" title="Pipeline health"></span></h2>
+        <div class="sidebar-brand-left">
+            <h2 class="sidebar-brand-title">🐎 UMAnager<span id="health-dot" class="health-dot health-unknown" title="Pipeline health"></span></h2>
+            <div id="phase-badge" class="phase-pill phase-waiting">
+                <span class="phase-badge-label">⏸ Waiting</span>
+                <span id="phase-badge-sub" class="phase-badge-sub"></span>
+            </div>
+        </div>
         <div class="sidebar-brand-actions">
             <span class="app-version-badge">V1.0</span>
             <button onclick="showSettingsModal()" title="Settings" class="settings-icon-btn">⚙️</button>
@@ -22,6 +28,11 @@
     </div>
 
     <div class="sidebar-top-controls">
+        <div class="view-switcher view-switcher-sidebar">
+            <button id="main-view-races" onclick="switchMainView('races')" class="toolbar-btn toolbar-btn-muted is-active">🏠 Main</button>
+            <button id="main-view-voting" onclick="switchMainView('voting')" class="toolbar-btn toolbar-btn-muted">🗳️ Voting</button>
+            <button id="main-view-horse" onclick="switchMainView('horse')" class="toolbar-btn toolbar-btn-muted">🔍 Horse</button>
+        </div>
     </div>
 
     <div class="sidebar-scroll">
@@ -137,9 +148,6 @@
             <div class="top-bar-left">
                 <div class="view-switcher view-switcher-topbar">
                     <button id="mobile-menu-btn" class="mobile-menu-btn" onclick="toggleMobileSidebar()" aria-label="Open menu">☰</button>
-                    <button id="main-view-races" onclick="switchMainView('races')" class="toolbar-btn toolbar-btn-muted is-active">🏠 Main</button>
-                    <button id="main-view-voting" onclick="switchMainView('voting')" class="toolbar-btn toolbar-btn-muted">🗳️ Voting</button>
-                    <button id="main-view-horse" onclick="switchMainView('horse')" class="toolbar-btn toolbar-btn-muted">🔍 Horse</button>
                 </div>
                 <div class="active-date-nav active-date-nav-topbar">
                     <button type="button" id="active-date-prev" class="active-date-nav-btn" onclick="shiftActiveDate(-1)">◀</button>
@@ -149,6 +157,16 @@
                         <div id="active-date-meta" class="active-date-meta">0 races</div>
                     </div>
                     <button type="button" id="active-date-next" class="active-date-nav-btn" onclick="shiftActiveDate(1)">▶</button>
+                </div>
+                <div class="top-bar-risk">
+                    <div class="top-bar-risk-label">MODE: <span id="risk-label" class="risk-label-value">Balanced (50)</span></div>
+                    <input type="range" id="risk-slider" min="0" max="100" step="5" value="50" oninput="updateRiskLabel(this.value)">
+                    <div class="top-bar-risk-scale">
+                        <span>SAFE / CHALK</span>
+                        <span>CHAOS / VALUE</span>
+                    </div>
+                    <div id="pre-odds-notice" class="pre-odds-notice" style="display:none;"></div>
+                    <div id="dev-paint-time" class="dev-only" style="font-size:10px; color:#888; text-align:center; margin-top:3px; letter-spacing:0.03em;"></div>
                 </div>
             </div>
             <div class="top-bar-center">
@@ -172,38 +190,13 @@
             </div>
             <div class="top-bar-right">
                 <div class="top-bar-right-row">
-                    <div id="phase-badge" class="phase-badge phase-waiting">
-                        <div class="phase-badge-label">⏸ Waiting</div>
-                        <div id="phase-badge-sub" class="phase-badge-sub">Loading…</div>
-                    </div>
                     <div id="quick-stats" class="quick-stats">
-                        <div class="quick-stat-block">
-                            <div class="quick-stat-label">Marks</div>
-                            <div id="qs-marks" class="quick-stat-value">—</div>
-                            <div id="qs-marks-detail" class="quick-stat-sub">no day</div>
-                        </div>
-                        <div class="quick-stat-block">
-                            <div class="quick-stat-label">Agreement</div>
-                            <div id="qs-agreement" class="quick-stat-value">—</div>
-                            <div id="qs-agreement-sub" class="quick-stat-sub">engine vs you</div>
-                            <div id="qs-agreement-best" class="quick-stat-sub quick-stat-best" title="Risk slider value that would best match your marks today"></div>
-                        </div>
                         <div class="quick-stat-block">
                             <div class="quick-stat-label">Day Net</div>
                             <div id="qs-pl" class="quick-stat-value" title="The viewed day's net: every placed (locked) bet's stake counts immediately (in the red), climbing back as bets win.">—</div>
                             <div id="qs-pl-sub" class="quick-stat-sub">stake / net</div>
                         </div>
                     </div>
-                </div>
-                <div class="top-bar-risk">
-                    <div class="top-bar-risk-label">MODE: <span id="risk-label" class="risk-label-value">Balanced (50)</span></div>
-                    <input type="range" id="risk-slider" min="0" max="100" step="5" value="50" oninput="updateRiskLabel(this.value)">
-                    <div class="top-bar-risk-scale">
-                        <span>SAFE / CHALK</span>
-                        <span>CHAOS / VALUE</span>
-                    </div>
-                    <div id="pre-odds-notice" class="pre-odds-notice" style="display:none;"></div>
-                    <div id="dev-paint-time" class="dev-only" style="font-size:10px; color:#888; text-align:center; margin-top:3px; letter-spacing:0.03em;"></div>
                 </div>
             </div>
             <div id="scrape-console" class="console-box console-top-bar dev-only"></div>
@@ -278,6 +271,19 @@
                 <button id="btn-lock-all-bets" onclick="toggleLockAllBetsForActiveDay()" class="toolbar-btn toolbar-btn-muted" title="Lock every marked race for the selected day — locking marks them as placed bets so they count toward your sunk cost / Day Net.">🔒 Lock All Bets</button>
                 <button id="btn-orepro-clear-day" onclick="clearActiveDayBets()" class="toolbar-btn toolbar-btn-muted" title="Clear all saved marks for the selected day so you can re-evaluate the card">🧹 Clear Day Bets</button>
                 <button id="btn-reestimate-day" onclick="reEstimateActiveDay()" class="toolbar-btn toolbar-btn-muted">🧮 Re-estimate Day</button>
+            </div>
+        </div>
+        <div id="quick-stats-voting" class="quick-stats voting-head-stats">
+            <div class="quick-stat-block">
+                <div class="quick-stat-label">Marks</div>
+                <div id="qs-marks" class="quick-stat-value">—</div>
+                <div id="qs-marks-detail" class="quick-stat-sub">no day</div>
+            </div>
+            <div class="quick-stat-block">
+                <div class="quick-stat-label">Agreement</div>
+                <div id="qs-agreement" class="quick-stat-value">—</div>
+                <div id="qs-agreement-sub" class="quick-stat-sub">engine vs you</div>
+                <div id="qs-agreement-best" class="quick-stat-sub quick-stat-best" title="Risk slider value that would best match your marks today"></div>
             </div>
         </div>
         <div id="voting-sunk-cost" class="voting-sunk-cost">
@@ -651,6 +657,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260613-3"></script>
+<script src="/static/script.js?v=20260613-11"></script>
 </body>
 </html>

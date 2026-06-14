@@ -17,12 +17,21 @@
     color: #000;
 }
 
-        .sidebar { width: 380px; background-color: #1a1c23; padding: 20px; overflow: hidden; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 0; }
+        /* Fluid width: scales with the viewport so it stays usable under Windows display scaling
+           (125%/150%) and on smaller laptops, but never exceeds the original 380px on a full screen. */
+        .sidebar { width: clamp(260px, 24vw, 380px); background-color: #1a1c23; padding: 20px; overflow: hidden; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 0; }
         .sidebar-scroll { flex: 1; overflow-y: auto; min-height: 0; padding-right: 4px; margin-right: -4px; }
         .sidebar-footer { margin-top: 10px; padding-top: 10px; flex-shrink: 0; background: linear-gradient(180deg, rgba(26, 28, 35, 0), rgba(26, 28, 35, 0.92) 16px, rgba(26, 28, 35, 1) 100%); }
-        .sidebar-brand-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 15px; flex-shrink: 0; }
+        .sidebar-brand-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; flex-shrink: 0; gap: 8px; }
+        .sidebar-brand-left { display: flex; align-items: center; gap: 9px; min-width: 0; flex-wrap: wrap; }
         .sidebar-brand-title { margin: 0; color: #1dd1a1; }
-        .sidebar-brand-actions { display: flex; align-items: center; gap: 8px; }
+        .sidebar-brand-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+        /* Compact phase pill beside the title — reuses the .phase-* state classes for its colour.
+           The countdown sub-line is hidden and surfaced as the pill's hover tooltip (set in JS). */
+        .phase-pill { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 7px; font-size: 11px; font-weight: bold; white-space: nowrap; cursor: default; }
+        .phase-pill .phase-badge-label { font-size: 11px; letter-spacing: 0.3px; }
+        .phase-pill .phase-badge-sub { display: none; }
+        .voting-head-stats { margin-bottom: 12px; }
         .app-version-badge { font-size: 10px; color: #666; font-weight: bold; letter-spacing: 1px; }
         .settings-icon-btn { background: #262730; border: 1px solid #444; color: #1dd1a1; font-size: 16px; width: 28px; height: 28px; padding: 0; border-radius: 4px; }
         .sidebar-top-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; flex-shrink: 0; }
@@ -136,11 +145,15 @@
 
         /* NEW: Flex column to separate the sticky header from the scrolling body */
         .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; background-color: #0e1117; }
-        .top-sticky-bar { padding: 20px 40px 0 40px; flex-shrink: 0; position: relative; z-index: 100; }
-        .scrollable-races { flex: 1; overflow-y: auto; padding: 0 40px 20px 40px; }
+        /* Side padding scales down on narrower/scaled viewports so content isn't pushed off-screen.
+           overflow-x:auto gives a horizontal-scroll fallback for wide tables instead of clipping them. */
+        .top-sticky-bar { padding: 12px clamp(16px, 2.5vw, 40px) 0 clamp(16px, 2.5vw, 40px); flex-shrink: 0; position: relative; z-index: 100; }
+        .scrollable-races { flex: 1; overflow-y: auto; overflow-x: auto; padding: 0 clamp(16px, 2.5vw, 40px) 20px clamp(16px, 2.5vw, 40px); }
 
         /* --- TOP BAR: 3-section flex layout --- */
-        .top-bar-clock-row { display: flex; align-items: stretch; gap: 16px; margin-bottom: 20px; }
+        /* flex-wrap lets the right-hand section (phase/health/quick-stats) drop to a second line
+           instead of being clipped off the right edge when the bar is wider than the viewport. */
+        .top-bar-clock-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
         .top-bar-left   { display: flex; flex-direction: column; gap: 8px; align-items: stretch; flex-shrink: 0; min-width: 0; }
         .top-bar-center { display: flex; gap: 16px; align-items: stretch; flex: 0 0 auto; }
         .top-bar-right  { display: flex; flex-direction: column; align-items: stretch; margin-left: auto; flex-shrink: 0; gap: 4px; justify-content: center; }
@@ -150,6 +163,14 @@
         .top-bar-risk input[type=range] { width: 100%; cursor: pointer; accent-color: #ff9f43; }
         .top-bar-risk-scale { display: flex; justify-content: space-between; font-size: 9px; color: #555; font-weight: bold; letter-spacing: 0.3px; margin-top: 1px; }
         .pre-odds-notice { font-size: 9px; color: #c8860a; text-align: center; margin-top: 3px; letter-spacing: 0.02em; opacity: 0.85; }
+
+        /* Windows display-scaling (125%/150%) & smaller laptops: instead of letting the top-bar wrap
+           to two rows, COMPACT it — shrink the oversized clock/stat type, padding and gaps so the whole
+           bar (clocks + stats + slider) fits on ONE row. Sections may shrink (min-width:0) so nothing
+           clips. Big monitors (>1600px) keep the original roomy layout untouched. */
+        /* Clock compaction is now unconditional (in the base rules above) rather than gated on a
+           window-width media query — the cramped area is the main content (window minus the sidebar),
+           which a viewport media query can't measure, so breakpoints kept missing. */
 
         /* Compact date control — date display is now the calendar trigger */
         .active-date-nav-topbar { background: rgba(255, 255, 255, 0.05); border: 1px solid #333; border-radius: 10px; padding: 4px 8px; }
@@ -190,15 +211,21 @@
         .quick-stat-sunk-reset { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
         .quick-stat-sunk-reset:hover { color: #c5d3ee; }
 
-        .clock-container { display: flex; justify-content: center; gap: 40px; background-color: rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 10px; flex-shrink: 0; margin-bottom: 0; }
+        /* align-items:center stops the short JST/CT boxes from stretching to the taller "Next race"
+           box (that stretch was the empty space under the clock numbers). Tighter gap/padding trims
+           the panel's overall bulk. */
+        .clock-container { display: flex; justify-content: center; align-items: center; gap: 18px; background-color: rgba(255, 255, 255, 0.05); padding: 6px 14px; border-radius: 10px; flex-shrink: 0; margin-bottom: 0; }
         .console-top-bar { flex: 1; min-width: 200px; height: 102px; max-height: 102px; margin-top: 0; border-radius: 10px; font-size: 11px; display: none; }
         .clock-box { text-align: center; }
-        .clock-label { font-size: 12px; color: #888; letter-spacing: 1px; }
-        .clock-time { font-size: 24px; font-weight: bold; }
+        .clock-label { font-size: 11px; color: #888; letter-spacing: 0.6px; line-height: 1.1; }
+        .clock-time { font-size: 20px; font-weight: bold; line-height: 1.15; }
         .main-toolbar { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #333; padding-bottom: 6px; }
         .main-toolbar-left { display: flex; align-items: center; gap: 10px; }
         .view-switcher { display: flex; gap: 6px; margin-right: 4px; }
         .view-switcher .toolbar-btn.is-active { background: #1f5f4e; border-color: #1dd1a1; color: #d9fff5; }
+        /* Sidebar variant (tabs relocated from the top bar): fill the sidebar width evenly. */
+        .view-switcher-sidebar { margin-right: 0; }
+        .view-switcher-sidebar .toolbar-btn { flex: 1; justify-content: center; padding-left: 6px; padding-right: 6px; }
         .active-date-nav {
             display: flex;
             align-items: center;
@@ -1317,27 +1344,30 @@ th {
     background: rgba(255, 75, 75, 0.1);
     border: 1px solid rgba(255, 75, 75, 0.3);
     border-radius: 8px;
-    padding: 5px 20px;
+    padding: 4px 14px;
     text-align: center;
-    min-width: 180px;
+    min-width: 0;
 }
 .countdown-title {
-    font-size: 11px;
+    font-size: 10px;
     color: #ff7675;
     font-weight: bold;
-    letter-spacing: 1px;
+    letter-spacing: 0.8px;
     text-transform: uppercase;
+    line-height: 1.1;
 }
 .countdown-time {
-    font-size: 24px;
+    font-size: 20px;
     font-weight: bold;
     color: #ff4b4b;
     font-variant-numeric: tabular-nums; /* Stops text jittering as seconds change */
+    line-height: 1.15;
 }
 .countdown-race {
-    font-size: 12px;
+    font-size: 11px;
     color: #ccc;
     font-weight: bold;
+    line-height: 1.1;
 }
 
 /* --- PHASE BADGE --- */

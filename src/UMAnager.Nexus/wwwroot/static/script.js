@@ -738,8 +738,9 @@ function parseRaceSortTime(sortTimeStr, raceInfo = null) {
 
 // --- CLOCK & COUNTDOWN ---
 function updateClock() {
-    const jstOpts = {hour: '2-digit', minute:'2-digit', second:'2-digit', hour12: false, timeZone: 'Asia/Tokyo'};
-    const cstOpts = {hour: '2-digit', minute:'2-digit', second:'2-digit', hour12: true, timeZone: 'America/Chicago'};
+    // JST/CT show HH:MM (no seconds) — narrower + less noise; the countdown below keeps its seconds.
+    const jstOpts = {hour: '2-digit', minute:'2-digit', hour12: false, timeZone: 'Asia/Tokyo'};
+    const cstOpts = {hour: '2-digit', minute:'2-digit', hour12: true, timeZone: 'America/Chicago'};
     const now = new Date();
     
     document.getElementById('jst').innerText = now.toLocaleTimeString('en-US', jstOpts);
@@ -876,23 +877,33 @@ function _updateTickCountdown() {
     const sub = document.getElementById('phase-badge-sub');
     if (!sub) return;
     const { eta, phase, maintenance } = _phaseBadgeState;
-    if (maintenance && !eta) { sub.textContent = 'Server down · retrying'; return; }
-    if (!eta) {
-        sub.textContent = phase === 'WAITING_FOR_RACES' ? 'No upcoming races'
-                        : phase === 'AWAITING_POSTS'   ? 'Draw pending'
-                        : '';
-        return;
+    let text;
+    if (maintenance && !eta) {
+        text = 'Server down · retrying';
+    } else if (!eta) {
+        text = phase === 'WAITING_FOR_RACES' ? 'No upcoming races'
+             : phase === 'AWAITING_POSTS'   ? 'Draw pending'
+             : '';
+    } else {
+        const diffMs = eta - Date.now();
+        const action = maintenance ? 'maintenance retry' : (_tickActionLabel[phase] || 'tick');
+        if (diffMs <= 0) {
+            text = `${action} imminent`;
+        } else {
+            const mins = Math.floor(diffMs / 60000);
+            const secs = Math.floor((diffMs % 60000) / 1000);
+            const timeStr = mins > 0 ? `${mins}m ${String(secs).padStart(2, '0')}s` : `${secs}s`;
+            text = `Next ${action}: ${timeStr}`;
+        }
     }
-    const diffMs = eta - Date.now();
-    const action = maintenance ? 'maintenance retry' : (_tickActionLabel[phase] || 'tick');
-    if (diffMs <= 0) {
-        sub.textContent = `${action} imminent`;
-        return;
+    sub.textContent = text;
+    // The phase pill (sidebar) hides this sub line via CSS and surfaces it as the hover tooltip,
+    // alongside the phase label — so the pill stays compact but the countdown is one hover away.
+    const badge = document.getElementById('phase-badge');
+    if (badge) {
+        const label = (badge.querySelector('.phase-badge-label')?.textContent || '').trim();
+        badge.title = text ? `${label} · ${text}` : label;
     }
-    const mins = Math.floor(diffMs / 60000);
-    const secs = Math.floor((diffMs % 60000) / 1000);
-    const timeStr = mins > 0 ? `${mins}m ${String(secs).padStart(2, '0')}s` : `${secs}s`;
-    sub.textContent = `Next ${action}: ${timeStr}`;
 }
 
 refreshPhaseBadge();
