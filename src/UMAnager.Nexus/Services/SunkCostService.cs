@@ -71,6 +71,44 @@ public sealed class SunkCostService
     /// race day (used by the per-race win ping so it shows the DAY's running net, not lifetime).</summary>
     public async Task<SunkCostSummary> GetSummaryAsync(CancellationToken ct = default, DateTime? jstRaceDate = null)
     {
+        // The tally is just the aggregate of the per-race recap (single source of truth, so the
+        // header net, the per-race badges, and the TV ticker can never disagree). The sunk-cost
+        // RESET cutoff applies to the tally only.
+        var resetAt = await GetResetCutoffAsync();
+        var perRace = await GetPerRaceRecapAsync(jstRaceDate, applyResetCutoff: true, ct);
+        if (perRace.Count == 0)
+            return SunkCostSummary.Empty(resetAt);
+
+        long totalStaked = 0, totalWon = 0;
+        int settled = 0, pending = 0, hits = 0;
+        foreach (var r in perRace)
+        {
+            totalStaked += r.Staked;
+            if (r.HasResults) { settled++; totalWon += r.Won; if (r.Won > 0) hits++; }
+            else pending++;
+        }
+
+        return new SunkCostSummary(
+            PlacedRaces:    perRace.Count,
+            SettledRaces:   settled,
+            PendingRaces:   pending,
+            HitRaces:       hits,
+            TotalStakedYen: totalStaked,
+            TotalWonYen:    totalWon,
+            SunkCostYen:    totalStaked - totalWon,
+            NetYen:         totalWon - totalStaked,
+            ResetAt:        resetAt?.ToString("yyyy-MM-dd"));
+    }
+
+    /// <summary>Per-race recap for DISPLAY (the TV ticker + dashboard win badges): each placed
+    /// (locked + marked) race's staked/won/net + the ticket labels that actually hit, scored via
+    /// the SAME authoritative evaluator the tally uses — so a "win" reflects the bet you actually
+    /// placed, never just your marks. By default the sunk-cost RESET cutoff is NOT applied (a reset
+    /// is a tally concept; result badges should still show); only <see cref="GetSummaryAsync"/>
+    /// passes <paramref name="applyResetCutoff"/>=true.</summary>
+    public async Task<List<RaceRecap>> GetPerRaceRecapAsync(
+        DateTime? jstRaceDate = null, bool applyResetCutoff = false, CancellationToken ct = default)
+    {
         var (marks, lockedRaces, profiles) = await LoadMarksAndLocksAsync();
 
         // Placed races = locked AND carry at least one (non-X) mark.
@@ -81,10 +119,8 @@ public sealed class SunkCostService
             if (n > 0) markCountByRace[raceId] = n;
         }
 
-        var resetAt = await GetResetCutoffAsync();
-
-        if (markCountByRace.Count == 0)
-            return SunkCostSummary.Empty(resetAt);
+        var result = new List<RaceRecap>();
+        if (markCountByRace.Count == 0) return result;
 
         var placedIds = markCountByRace.Keys.ToList();
 
@@ -94,16 +130,15 @@ public sealed class SunkCostService
             .Select(r => new { r.RaceId, r.RaceDate, r.ResultsJson })
             .ToListAsync(ct);
 
-        // Apply the reset cutoff: only count races on/after the reset JST date.
-        if (resetAt is DateTime cutoff)
+        // Tally-only: count races on/after the reset JST date.
+        if (applyResetCutoff && await GetResetCutoffAsync() is DateTime cutoff)
             races = races.Where(r => r.RaceDate >= cutoff).ToList();
 
-        // Optional single-day scope (per-race win ping → "Day net" instead of lifetime).
+        // Optional single-day scope (TV shows the day-of-action; per-race win ping → "Day net").
         if (jstRaceDate is DateTime day)
             races = races.Where(r => r.RaceDate == day).ToList();
 
-        if (races.Count == 0)
-            return SunkCostSummary.Empty(resetAt);
+        if (races.Count == 0) return result;
 
         var countedIds = races.Select(r => r.RaceId).ToHashSet();
 
@@ -114,9 +149,6 @@ public sealed class SunkCostService
             .Select(e => new { e.RaceId, e.HorseId, e.PostPosition, e.FinishPos })
             .ToListAsync(ct);
         var entriesByRace = entries.GroupBy(e => e.RaceId).ToDictionary(g => g.Key, g => g.ToList());
-
-        long totalStaked = 0, totalWon = 0;
-        int settled = 0, pending = 0, hits = 0;
 
         foreach (var race in races)
         {
@@ -142,46 +174,47 @@ public sealed class SunkCostService
             catch (JsonException) { }
 
             profiles.TryGetValue(race.RaceId, out var prof);
-
-            // Imported OrePro-history race: use the ACTUAL ¥ staked/returned verbatim (truth).
-            if (prof?.ActualStaked is int aStaked)
-            {
-                doc?.Dispose();
-                totalStaked += aStaked;
-                var aWon = prof.ActualWon ?? 0;
-                settled++; totalWon += aWon; if (aWon > 0) hits++;
-                continue;
-            }
-
-            // Applied race: score the FROZEN line list verbatim (matches the UI exactly, for any
-            // custom composition). Unapplied-but-locked race: fall back to the default template.
-            TemplateBetEvaluator.BetOutcome outcome;
-            if (prof?.BetLines is { Count: > 0 } frozenLines)
-            {
-                outcome = TemplateBetEvaluator.EvaluateLines(frozenLines, runners.Count, pp1, pp2, pp3, payouts);
-            }
-            else
-            {
-                var oreProStake = prof?.Stake > 0 ? prof.Stake : TemplateBetEvaluator.DefaultStakeYen;
-                outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, TemplateBetEvaluator.BetStructures.Default, oreProStake);
-            }
+            var (staked, won, hasResults, labels, imported) = ScoreRace(runners, prof, pp1, pp2, pp3, payouts);
             doc?.Dispose();
 
-            totalStaked += outcome.Staked;
-            if (outcome.HasResults) { settled++; totalWon += outcome.Won; if (outcome.AnyHit) hits++; }
-            else pending++;
+            result.Add(new RaceRecap(
+                RaceId:     race.RaceId,
+                MarkCount:  markCountByRace[race.RaceId],
+                HasResults: hasResults,
+                Staked:     staked,
+                Won:        won,
+                Net:        won - staked,
+                HitLabels:  labels,
+                Imported:   imported));
+        }
+        return result;
+    }
+
+    /// <summary>Score ONE race's placed bet → (staked, won, hasResults, hit-labels, imported).
+    /// Imported OrePro-history races use the ACTUAL ¥ verbatim; applied races score their FROZEN
+    /// line list (matches the UI exactly for any custom composition); a locked-but-unapplied race
+    /// falls back to the default template. The single seam shared by the tally and the per-race
+    /// recap so they can never diverge.</summary>
+    private static (int Staked, int Won, bool HasResults, List<string> Labels, bool Imported) ScoreRace(
+        IReadOnlyList<TemplateBetEvaluator.MarkedRunner> runners,
+        RaceBetProfile? prof, int? pp1, int? pp2, int? pp3, JsonElement? payouts)
+    {
+        // Imported OrePro-history race: ACTUAL ¥ staked/returned is truth (no per-ticket labels).
+        if (prof?.ActualStaked is int aStaked)
+        {
+            var aWon = prof.ActualWon ?? 0;
+            return (aStaked, aWon, true, new List<string>(), true);
         }
 
-        return new SunkCostSummary(
-            PlacedRaces:    races.Count,
-            SettledRaces:   settled,
-            PendingRaces:   pending,
-            HitRaces:       hits,
-            TotalStakedYen: totalStaked,
-            TotalWonYen:    totalWon,
-            SunkCostYen:    totalStaked - totalWon,
-            NetYen:         totalWon - totalStaked,
-            ResetAt:        resetAt?.ToString("yyyy-MM-dd"));
+        TemplateBetEvaluator.BetOutcome outcome;
+        if (prof?.BetLines is { Count: > 0 } frozenLines)
+            outcome = TemplateBetEvaluator.EvaluateLines(frozenLines, runners.Count, pp1, pp2, pp3, payouts);
+        else
+        {
+            var oreProStake = prof?.Stake > 0 ? prof.Stake : TemplateBetEvaluator.DefaultStakeYen;
+            outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, TemplateBetEvaluator.BetStructures.Default, oreProStake);
+        }
+        return (outcome.Staked, outcome.Won, outcome.HasResults, outcome.HitLabels, false);
     }
 
     /// <summary>Reset the tally so only races on/after the given JST date (default: today) count.</summary>
@@ -363,6 +396,13 @@ public sealed class SunkCostService
 }
 
 public sealed record RaceBetProfile(int Stake, int? ActualStaked, int? ActualWon, List<TemplateBetEvaluator.BetLine>? BetLines);
+
+/// <summary>One placed race's display recap (TV ticker + dashboard win badges). HitLabels are the
+/// Japanese ticket labels that actually paid (単勝/馬連/ワイド/3連複/3連複ながし); empty for imported
+/// history (only the net ¥ is known). Net = Won − Staked.</summary>
+public sealed record RaceRecap(
+    string RaceId, int MarkCount, bool HasResults,
+    int Staked, int Won, int Net, IReadOnlyList<string> HitLabels, bool Imported);
 
 public sealed record SunkCostSummary(
     int PlacedRaces,

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- The Theory `name` parameter is intentionally kept for readable test-case IDs, not used in-body. -->
+    <NoWarn>$(NoWarn);xUnit1026</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reference the Nexus app for the authoritative bet evaluator (TemplateBetEvaluator). -->
+    <ProjectReference Include="..\..\src\UMAnager.Nexus\UMAnager.Nexus.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The SHARED golden vectors — the same file the JS runner (tests/parity) asserts against. -->
+    <Content Include="..\parity\bet_vectors.json" Link="bet_vectors.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

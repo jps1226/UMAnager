@@ -26,6 +26,21 @@ public sealed class SunkCostController : ControllerBase
     public async Task<IActionResult> Get(CancellationToken ct)
         => Ok(await _sunk.GetSummaryAsync(ct));
 
+    /// <summary>Per-race recap for DISPLAY — each placed race's staked/won/net + the ticket labels
+    /// that actually hit, scored from the bet you really placed (not your marks). Consumed by the
+    /// TV ticker and the dashboard win badges so a "win" never shows on a race you didn't bet.
+    /// Optional <c>?date=YYYY-MM-DD</c> (JST) scopes to a single race day (TV's day-of-action view).
+    /// The sunk-cost reset cutoff is NOT applied here (that's a tally-only concept).</summary>
+    [HttpGet("per-race")]
+    public async Task<IActionResult> PerRace([FromQuery] string? date, CancellationToken ct)
+    {
+        DateTime? day = null;
+        if (!string.IsNullOrWhiteSpace(date) && DateTime.TryParse(date, out var d))
+            day = DateTime.SpecifyKind(d.Date, DateTimeKind.Utc);
+        var recap = await _sunk.GetPerRaceRecapAsync(day, applyResetCutoff: false, ct);
+        return Ok(recap);
+    }
+
     public sealed record ResetRequest(string? Date);
 
     /// <summary>Reset the tally to count only races on/after the given JST date (default: today).</summary>

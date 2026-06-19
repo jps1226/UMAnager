@@ -51,6 +51,11 @@ public sealed class AppStateService
         // successful (record_count >= 0) stream. The orchestrator backs off to
         // maintenance_retry_interval while this is set and recent. (Oracle 2026-06-07.)
         public const string MaintenanceDetectedAt = "maintenance_detected_at";
+
+        // DateTime — wall-clock of the last raw_staging dedup/retention pass (T1-2). The
+        // orchestrator runs the pass at most once per day to keep duplicate UM/SE/RA rows from
+        // re-accumulating (every weekly master pull + weekend refresh re-stages the same records).
+        public const string LastRawStagingRetention = "last_raw_staging_retention";
     }
 
     // JV-Link "server under maintenance" return code (Oracle 2026-06-07). The Sidecar reports this

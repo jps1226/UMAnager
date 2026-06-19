@@ -122,6 +122,10 @@ public sealed class LiveOrchestrator : BackgroundService
         //    that guards on "Streaming", so a stuck lock is freed at the top of the tick.
         CheckStreamingWatchdog();
 
+        // 0b. Daily raw_staging retention (T1-2) — trim re-streamed duplicate UM/SE/RA rows so the
+        //     5GB bloat can't rebuild. Internally gated to once/24h and skipped while streaming.
+        await MaybeRunRetentionAsync(ct);
+
         // 1. Update phase if data state has changed. Fire Discord notifications on every
         //    transition; additionally fire RacePlanPopulated on WAITING_FOR_RACES → RACES_POPULATED
         //    (the moment the weekend's race plan first lands per CLAUDE.md Phase 6 spec).
@@ -335,17 +339,90 @@ public sealed class LiveOrchestrator : BackgroundService
     private void CheckStreamingWatchdog()
     {
         var since = _bridge.StreamingSinceUtc;
-        if (_bridge.IngestionStatus != "Streaming" || since is null) return;
+
+        // Healthy tick: not mid-stream, or a stream still within the timeout. Record SUCCESS so the
+        // step reflects CURRENT health and recovers to green after an isolated intervention — the
+        // watchdog firing is the safety net WORKING, so it must not show "DOWN / last ok never"
+        // forever once things recover. (Only a stream that stays stuck across ticks now alerts.)
+        if (_bridge.IngestionStatus != "Streaming" || since is null
+            || DateTime.UtcNow - since.Value <= StreamingWatchdogTimeout)
+        {
+            _health.RecordSuccess("streaming-watchdog");
+            return;
+        }
 
         var stuckFor = DateTime.UtcNow - since.Value;
-        if (stuckFor <= StreamingWatchdogTimeout) return;
-
         _logger.LogWarning(
             "[Orchestrator] Streaming-lock watchdog: ingest stuck 'Streaming' for {Mins:F0}m with no completion — resetting to Idle.",
             stuckFor.TotalMinutes);
         _bridge.IngestionStatus = "Idle";   // setter clears StreamingSinceUtc; lock is freed
         _health.RecordFailure("streaming-watchdog",
             $"Ingest stuck 'Streaming' {stuckFor.TotalMinutes:F0}m with no completion — auto-reset to Idle.");
+    }
+
+    // T1-2: keep raw_staging from regrowing the duplicate bloat. JV-Link re-streams the whole horse
+    // master weekly and re-streams each weekend's entries on every odds/results refresh, so the table
+    // accumulates ~7-11 stale copies of every UM/SE/RA record. The parsed tables (horses/races/
+    // race_entries) already hold the deduplicated truth, and the backfills only ever need the newest
+    // copy per key — so this trims everything but the newest staged row per logical key, at most once
+    // per day. Skipped while streaming to avoid contending with the inserts.
+    private async Task MaybeRunRetentionAsync(CancellationToken ct)
+    {
+        if (_bridge.IngestionStatus == "Streaming") return;
+
+        var last = await _appState.GetTimestampAsync(AppStateService.Keys.LastRawStagingRetention);
+        if (last.HasValue && (DateTime.UtcNow - last.Value).TotalHours < 24) return;
+
+        try
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync(ct);
+            db.Database.SetCommandTimeout(300);
+
+            // Keep only the newest staged row (max Id) per logical key; delete older duplicates.
+            // Byte offsets are 1-indexed per the JRA-VAN spec (PG substring is 1-indexed too):
+            //   UM HorseId = bytes 12-21 ; RA RaceId = bytes 12-27 ; SE RaceId 12-27 + HorseId 31-40.
+            // Never touches the newest row of a key (Id < keep_id), so an as-yet-unparsed newest copy
+            // is always preserved for the parser.
+            const string umSql = @"
+                DELETE FROM raw_staging r USING (
+                    SELECT max(""Id"") AS keep_id, substring(""RawBytes"" FROM 12 FOR 10) AS k
+                    FROM raw_staging WHERE ""RecordType"" = 'UM' GROUP BY k
+                ) g
+                WHERE r.""RecordType"" = 'UM'
+                  AND substring(r.""RawBytes"" FROM 12 FOR 10) = g.k
+                  AND r.""Id"" < g.keep_id";
+            const string raSql = @"
+                DELETE FROM raw_staging r USING (
+                    SELECT max(""Id"") AS keep_id, substring(""RawBytes"" FROM 12 FOR 16) AS k
+                    FROM raw_staging WHERE ""RecordType"" = 'RA' GROUP BY k
+                ) g
+                WHERE r.""RecordType"" = 'RA'
+                  AND substring(r.""RawBytes"" FROM 12 FOR 16) = g.k
+                  AND r.""Id"" < g.keep_id";
+            const string seSql = @"
+                DELETE FROM raw_staging r USING (
+                    SELECT max(""Id"") AS keep_id,
+                           substring(""RawBytes"" FROM 12 FOR 16) || substring(""RawBytes"" FROM 31 FOR 10) AS k
+                    FROM raw_staging WHERE ""RecordType"" = 'SE' GROUP BY k
+                ) g
+                WHERE r.""RecordType"" = 'SE'
+                  AND substring(r.""RawBytes"" FROM 12 FOR 16) || substring(r.""RawBytes"" FROM 31 FOR 10) = g.k
+                  AND r.""Id"" < g.keep_id";
+
+            var trimmed = await db.Database.ExecuteSqlRawAsync(umSql, ct);
+            trimmed += await db.Database.ExecuteSqlRawAsync(raSql, ct);
+            trimmed += await db.Database.ExecuteSqlRawAsync(seSql, ct);
+
+            await _appState.SetTimestampAsync(AppStateService.Keys.LastRawStagingRetention, DateTime.UtcNow);
+            if (trimmed > 0)
+                _logger.LogInformation("[Orchestrator] raw_staging retention: trimmed {Count} duplicate UM/SE/RA rows.", trimmed);
+            _health.RecordSuccess("retention");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Orchestrator] raw_staging retention failed: {Error}", ex.Message);
+            _health.RecordFailure("retention", ex.Message);
+        }
     }
 
     private async Task MaybeEnqueueUmRefreshAsync(CancellationToken ct)

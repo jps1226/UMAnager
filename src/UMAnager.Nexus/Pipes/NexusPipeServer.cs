@@ -36,6 +36,20 @@ public sealed class NexusPipeServer : BackgroundService
     private static readonly HashSet<string> s_partialFollowupScheduled = new();
     private static readonly object s_partialFollowupLock = new();
 
+    // T1-2 (raw_staging bloat): only stage record types something actually consumes. Anything
+    // else the DIFN/BLDN master stream delivers (SK, BR, BN, JG, CK, RC, O3, O4, O6, H1, H6,
+    // TK, BT, WF, …) was being kept forever, unread, and was a major source of the 5GB bloat.
+    // If a future feature needs one of these, add it here and re-stream from JV-Link.
+    //   Parsed by DifnRecordParsingService: UM, RA, SE, HR, O2 (馬連), O5 (3連複)
+    //   Applied by OddsApplyService:        O1 (win/place odds + fav rank → race_entries.Odds)
+    //   Re-read by backfills:               HN (HnNameBackfill), KS/CH (JockeyTrainerIngest), + RA/SE/UM above
+    // ⚠ O1 is REQUIRED for live win odds — dropping it silently kills the odds feed (regression
+    //   caught 2026-06-19: O1 was missing here, so no win odds could land). Do NOT remove it.
+    private static readonly HashSet<string> s_stagedRecordTypes = new()
+    {
+        "UM", "RA", "SE", "HR", "O1", "O2", "O5", "HN", "KS", "CH",
+    };
+
     public NexusPipeServer(
         SidecarBridge bridge,
         IDbContextFactory<AppDbContext> dbFactory,
@@ -135,6 +149,7 @@ public sealed class NexusPipeServer : BackgroundService
     {
         var batch = new List<RawStagingRecord>(500);
         long totalFlushed = 0;
+        long totalDropped = 0;   // T1-2: unused record types skipped at the door (see s_stagedRecordTypes)
 
         try
         {
@@ -153,6 +168,14 @@ public sealed class NexusPipeServer : BackgroundService
                 if (msg.Type == PipeMessageType.RawRecord)
                 {
                     var recType = Encoding.ASCII.GetString(msg.Payload[..2]);
+
+                    // T1-2: drop record types nothing consumes before they ever hit the table.
+                    if (!s_stagedRecordTypes.Contains(recType))
+                    {
+                        totalDropped++;
+                        continue;
+                    }
+
                     batch.Add(new RawStagingRecord
                     {
                         RecordType = recType,
@@ -174,6 +197,10 @@ public sealed class NexusPipeServer : BackgroundService
                     {
                         if (batch.Count > 0)
                             totalFlushed += await FlushBatchAsync(batch, totalFlushed, ct);
+
+                        if (totalDropped > 0)
+                            _logger.LogInformation("[Nexus] {EventType}: skipped {Dropped} unused-type records (not staged — T1-2).",
+                                eventType, totalDropped);
 
                         var recordCount  = root.TryGetProperty("record_count",  out var rc) ? rc.GetInt32() : -1;
                         var skippedCount = root.TryGetProperty("skipped_count", out var sc) ? sc.GetInt32() : 0;

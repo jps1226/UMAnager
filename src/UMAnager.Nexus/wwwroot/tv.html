@@ -141,6 +141,16 @@
             border: 1px solid #4d70c5;
             background: rgba(77, 112, 197, 0.2);
         }
+        #results-ticker .rt-hit-net-pos {
+            color: #b8f0c0;
+            border: 1px solid #2e8b46;
+            background: rgba(46, 139, 70, 0.18);
+        }
+        #results-ticker .rt-hit-net-neg {
+            color: #f0b8b8;
+            border: 1px solid #a14040;
+            background: rgba(161, 64, 64, 0.18);
+        }
 
         /* ── App shell ──
            Use dvh (dynamic viewport height) so the layout respects mobile browser
@@ -956,6 +966,13 @@ const MARK_RANK = { '◎': 1, '〇': 2, '▲': 3, '△': 4 };
 let racesData = null;
 let marksData = null;
 let activeDate = null;
+// Per-race recap from the backend (/api/sunk-cost/per-race): the bet you ACTUALLY placed +
+// what hit. Keyed by race_id. The results ticker uses this so a "win" reflects a real placed
+// bet, not just your marks (fixes phantom ◎ wins on races you didn't bet).
+let recapByRace = {};
+// Japanese ticket label → short English + ticker pill style. Mirrors the backend HitLabels.
+const TICKET_LABEL_EN  = { '単勝': 'Win', '馬連': 'Quinella', 'ワイド': 'Wide', '3連複': 'Trio', '3連複ながし': 'Trio' };
+const TICKET_PILL_CLASS = { '単勝': 'rt-hit-honmei', '馬連': 'rt-hit-quinella', 'ワイド': 'rt-hit-quinella', '3連複': 'rt-hit-trio', '3連複ながし': 'rt-hit-trio' };
 let gchPlayer = null;
 let splitPercent = 50;
 let panelFlipped = false;
@@ -1444,12 +1461,15 @@ async function loadRaces() {
     forceScrollOnNextCollapse = true;
     try {
         await loadTvDisplayLocalTime();
-        const [r, m] = await Promise.all([
+        const [r, m, recap] = await Promise.all([
             fetch('/api/races').then(res => res.json()),
-            fetch('/api/marks').then(res => res.json())
+            fetch('/api/marks').then(res => res.json()),
+            fetch('/api/sunk-cost/per-race').then(res => res.ok ? res.json() : []).catch(() => [])
         ]);
         racesData = r;
         marksData = m;
+        recapByRace = {};
+        (Array.isArray(recap) ? recap : []).forEach(rc => { if (rc && rc.RaceId) recapByRace[String(rc.RaceId)] = rc; });
         renderAll();
     } catch (e) {
         showError('Failed to load race data: ' + e.message);
@@ -1700,26 +1720,33 @@ function renderResultsTicker() {
     const raceNo = info.race_number || '?';
     const raceTime = tvFormatRaceTime(info);
 
-    // Same recap logic as the main dashboard's buildRaceWinBadgesHtml /
-    // evaluateRaceRecap: need a complete top-3, then check ◎ → 1st, picked-set
-    // covers 1+2 (quinella), picked-set covers 1+2+3 (trio).
-    const finishByRank = {};
-    (Array.isArray(race.entries) ? race.entries : []).forEach(row => {
-        const rank = parseInt(String(row.Finish || '').trim(), 10);
-        if (!rank || rank < 1 || rank > 3) return;
-        const hid = String(row.Horse_ID ?? '').split('.')[0].trim();
-        if (hid && !finishByRank[rank]) finishByRank[rank] = hid;
-    });
-    const hasCompleteTop3 = !!(finishByRank[1] && finishByRank[2] && finishByRank[3]);
-    const pickedSet = new Set(Object.keys(markByHorse));
-    const honmeiHit   = hasCompleteTop3 && markByHorse[finishByRank[1]] === '◎';
-    const quinellaHit = hasCompleteTop3 && pickedSet.has(finishByRank[1]) && pickedSet.has(finishByRank[2]);
-    const trioHit     = hasCompleteTop3 && quinellaHit && pickedSet.has(finishByRank[3]);
+    // Win pills reflect the bet you ACTUALLY placed, from the backend recap (the same
+    // authoritative evaluator the dashboard + sunk-cost tally use) — NOT just your marks.
+    // No recap for this race = you didn't bet it, so no win pill (fixes phantom ◎ wins).
+    const recap = recapByRace[raceId];
+    const settled = !!(recap && recap.HasResults);
+    const recapLabels = (recap && Array.isArray(recap.HitLabels)) ? recap.HitLabels : [];
+    const recapNet = (recap && Number.isFinite(Number(recap.Net))) ? Number(recap.Net) : null;
+    // A real win = at least one ticket hit, or (imported history with no labels) net positive.
+    const isWin = settled && (recapLabels.length > 0 || (recapNet != null && recapNet > 0));
 
     const hitPills = [];
-    if (honmeiHit)   hitPills.push('<span class="rt-hit-pill rt-hit-honmei" title="◎ Honmei hit">◎ Win</span>');
-    if (quinellaHit) hitPills.push('<span class="rt-hit-pill rt-hit-quinella" title="Quinella Box hit">Q Box</span>');
-    if (trioHit)     hitPills.push('<span class="rt-hit-pill rt-hit-trio" title="Trio Box hit">T Box</span>');
+    if (settled) {
+        const seenLabels = new Set();
+        recapLabels.forEach(lbl => {
+            if (seenLabels.has(lbl)) return;
+            seenLabels.add(lbl);
+            const en  = TICKET_LABEL_EN[lbl] || lbl;
+            const cls = TICKET_PILL_CLASS[lbl] || 'rt-hit-trio';
+            hitPills.push(`<span class="rt-hit-pill ${cls}" title="${esc(en)} hit (placed bet)">${esc(en)} Win</span>`);
+        });
+        // Net pill — shows on every placed+settled race (even a loss; that's the honest signal).
+        if (recapNet != null) {
+            const sign = recapNet >= 0 ? '+' : '-';
+            const netCls = recapNet >= 0 ? 'rt-hit-net-pos' : 'rt-hit-net-neg';
+            hitPills.push(`<span class="rt-hit-pill ${netCls}" title="Net for this race">Net ${sign}¥${Math.abs(recapNet).toLocaleString()}</span>`);
+        }
+    }
 
     const soundLabel = tickerSoundEnabled ? '🔔' : '🔕';
     let html = `<button id="rt-sound-toggle" type="button" onclick="toggleTickerSound()" title="Toggle ticker chime">${soundLabel}</button>`;
@@ -1759,17 +1786,16 @@ function renderResultsTicker() {
     // a new race, or a hit appeared on the race we were already showing (e.g. the
     // top-3 just completed). Same-race silent re-renders don't re-trigger.
     const raceChanged = raceId !== lastTickerRaceId;
-    const hitAppeared = !lastTickerHadHit && hitPills.length > 0;
+    const hitAppeared = !lastTickerHadHit && isWin;   // win-flash only on a REAL win, not a loss's net pill
     if (raceChanged || hitAppeared) {
-        const winFlash = hitPills.length > 0;
         ticker.classList.remove('is-flashing', 'is-flashing-win');
         // Re-flow so re-adding the class restarts the animation reliably.
         void ticker.offsetWidth;
-        ticker.classList.add(winFlash ? 'is-flashing-win' : 'is-flashing');
-        playTickerChime(winFlash);
+        ticker.classList.add(isWin ? 'is-flashing-win' : 'is-flashing');
+        playTickerChime(isWin);
     }
     lastTickerRaceId = raceId;
-    lastTickerHadHit = hitPills.length > 0;
+    lastTickerHadHit = isWin;
 }
 
 /* ── Main render ── */

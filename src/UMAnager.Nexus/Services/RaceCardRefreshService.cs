@@ -50,8 +50,8 @@ public sealed class RaceCardRefreshService : BackgroundService
         if (!_bridge.IsConnected)
             return "Sidecar not connected — command not sent.";
 
-        if (_bridge.IngestionStatus == "Streaming")
-            return "Stream already in progress — skipped.";
+        if (_bridge.IngestionStatus is "Streaming" or "Maintenance")
+            return $"Ingest busy ({_bridge.IngestionStatus}) — skipped.";
 
         // JV-Link Option=2 cursor: prior lastfiletimestamp from JVOpen, or "00000000000000" on first run.
         var fromTime = await _appState.GetStringAsync(AppStateService.Keys.TokuFileCursor)
@@ -73,6 +73,15 @@ public sealed class RaceCardRefreshService : BackgroundService
     {
         try
         {
+            // JV-Van maintenance back-off: don't fire a doomed STREAM_TOKU into a server that's
+            // returning rc=-504 — it just hangs until the watchdog resets it (the noise behind the
+            // 2026-06-16 false alarm). Mirrors the orchestrator's 6h-stale-guarded maintenance read.
+            if (await IsMaintenanceActiveAsync())
+            {
+                _logger.LogDebug("Race card refresh skipped — JV-Van under maintenance (backing off).");
+                return;
+            }
+
             var last = await _appState.GetTimestampAsync(AppStateService.Keys.LastRacePlanDownload);
             var elapsed = last.HasValue ? DateTime.UtcNow - last.Value : TimeSpan.MaxValue;
 
@@ -92,5 +101,14 @@ public sealed class RaceCardRefreshService : BackgroundService
         {
             _logger.LogError(ex, "Race card refresh check failed: {Error}", ex.Message);
         }
+    }
+
+    // JV-Van maintenance is active if a maintenance completion (rc=-504) was stamped within the
+    // last 6h. Same signal + stale-guard the LiveOrchestrator backs off on; cleared (Value="") on
+    // the next successful stream, so this reads false again as soon as JV-Van recovers.
+    private async Task<bool> IsMaintenanceActiveAsync()
+    {
+        var ts = await _appState.GetTimestampAsync(AppStateService.Keys.MaintenanceDetectedAt);
+        return ts.HasValue && DateTime.UtcNow - ts.Value <= TimeSpan.FromHours(6);
     }
 }

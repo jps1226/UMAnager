@@ -1,0 +1,30 @@
+{
+  "_doc": "Golden-vector parity fixtures for the bet pricing/scoring math (tech-debt T2-1). 'scoring' is the SHARED cross-language guard: the same frozen bet lines + result + payouts must score identically in C# (TemplateBetEvaluator.EvaluateLines) and JS (scoreBetLine summed). 'jsBuilding' locks the JS-only composition→lines builder (buildLinesFromComposition, incl. the uniform-¥10k redistribution). 'csBuilding' locks the C# structure→lines builder (TemplateBetEvaluator.BuildLines). The two builders use DIFFERENT input models by design (composition+yen vs structure-name) so they are NOT compared to each other — each side asserts its own expected. Expected values were generated from the live code and frozen here as the contract; a change to either side that alters a number breaks its test. Labels and line lists are compared order-insensitively (both sides sort).",
+
+  "scoring": [
+    { "name": "S1_win_hit",   "lines": [{"ticket":"win","method":"normal","label":"単勝","horses":[{"pp":3}],"comboCount":1,"stakePerCombo":5000}], "result": {"pp1":3,"pp2":7,"pp3":1}, "payouts": {"win":[{"combo":[3],"payout":250}]}, "expect": {"won":12500,"labels":["単勝"]} },
+    { "name": "S2_win_miss",  "lines": [{"ticket":"win","method":"normal","label":"単勝","horses":[{"pp":3}],"comboCount":1,"stakePerCombo":5000}], "result": {"pp1":7,"pp2":3,"pp3":1}, "payouts": {"win":[{"combo":[3],"payout":250}]}, "expect": {"won":0,"labels":[]} },
+    { "name": "S3_quinella_box_hit", "lines": [{"ticket":"quinella","method":"box","label":"馬連","horses":[{"pp":3},{"pp":7},{"pp":1}],"comboCount":3,"stakePerCombo":500}], "result": {"pp1":3,"pp2":7,"pp3":1}, "payouts": {"quinella":[{"combo":[3,7],"payout":1320}]}, "expect": {"won":6600,"labels":["馬連"]} },
+    { "name": "S4_wide_box_three_legs", "lines": [{"ticket":"wide","method":"box","label":"ワイド","horses":[{"pp":3},{"pp":7},{"pp":1}],"comboCount":3,"stakePerCombo":1000}], "result": {"pp1":3,"pp2":7,"pp3":1}, "payouts": {"wide":[{"combo":[3,7],"payout":600},{"combo":[1,3],"payout":550},{"combo":[1,7],"payout":700}]}, "expect": {"won":18500,"labels":["ワイド"]} },
+    { "name": "S5_trio_box_hit", "lines": [{"ticket":"trio","method":"box","label":"3連複","horses":[{"pp":3},{"pp":7},{"pp":1},{"pp":5}],"comboCount":4,"stakePerCombo":500}], "result": {"pp1":3,"pp2":7,"pp3":1}, "payouts": {"trio":[{"combo":[1,3,7],"payout":5300}]}, "expect": {"won":26500,"labels":["3連複"]} },
+    { "name": "S6_trio_nagashi_axis_hit", "lines": [{"ticket":"trio","method":"nagashi1","label":"3連複ながし","horses":[{"pp":7},{"pp":1},{"pp":5}],"axisPp":3,"comboCount":3,"stakePerCombo":500}], "result": {"pp1":3,"pp2":7,"pp3":1}, "payouts": {"trio":[{"combo":[1,3,7],"payout":5300}]}, "expect": {"won":26500,"labels":["3連複ながし"]} },
+    { "name": "S7_trio_nagashi_axis_miss", "lines": [{"ticket":"trio","method":"nagashi1","label":"3連複ながし","horses":[{"pp":7},{"pp":1},{"pp":5}],"axisPp":3,"comboCount":3,"stakePerCombo":500}], "result": {"pp1":7,"pp2":1,"pp3":5}, "payouts": {"trio":[{"combo":[1,5,7],"payout":9999}]}, "expect": {"won":0,"labels":[]} },
+    { "name": "S8_multi_line_win_plus_quinella", "lines": [{"ticket":"win","method":"normal","label":"単勝","horses":[{"pp":3}],"comboCount":1,"stakePerCombo":5000},{"ticket":"quinella","method":"box","label":"馬連","horses":[{"pp":3},{"pp":7},{"pp":1}],"comboCount":3,"stakePerCombo":1000}], "result": {"pp1":3,"pp2":7,"pp3":1}, "payouts": {"win":[{"combo":[3],"payout":250}],"quinella":[{"combo":[3,7],"payout":1320}]}, "expect": {"won":25700,"labels":["単勝","馬連"]} }
+  ],
+
+  "jsBuilding": [
+    { "name": "J1_balanced_n4", "composition": {"lines":[{"type":"win","yen":5000},{"type":"quinella_box","yen":3000},{"type":"trio_box","yen":2000}]}, "runners": [{"symbol":"◎","pp":3},{"symbol":"〇","pp":7},{"symbol":"▲","pp":1},{"symbol":"△","pp":5}], "expect": {"staked":10000,"lines":["単勝|5000|1","馬連|500|6","3連複|500|4"]} },
+    { "name": "J2_balanced_n2_redistribute", "composition": {"lines":[{"type":"win","yen":5000},{"type":"quinella_box","yen":3000},{"type":"trio_box","yen":2000}]}, "runners": [{"symbol":"◎","pp":3},{"symbol":"〇","pp":7}], "expect": {"staked":10000,"lines":["単勝|6300|1","馬連|3700|1"]} },
+    { "name": "J3_trio_chase_n4", "composition": {"lines":[{"type":"trio_box","yen":4000},{"type":"wide_box","yen":6000}]}, "runners": [{"symbol":"◎","pp":3},{"symbol":"〇","pp":7},{"symbol":"▲","pp":1},{"symbol":"△","pp":5}], "expect": {"staked":10000,"lines":["3連複|1000|4","ワイド|1000|6"]} },
+    { "name": "J4_win_place_n1", "composition": {"lines":[{"type":"win","yen":6000},{"type":"place","yen":4000}]}, "runners": [{"symbol":"◎","pp":3}], "expect": {"staked":10000,"lines":["単勝|6000|1","複勝|4000|1"]} },
+    { "name": "J5_trio_box_n3_scratch_shrink", "composition": {"lines":[{"type":"trio_box","yen":10000}]}, "runners": [{"symbol":"◎","pp":3},{"symbol":"〇","pp":7},{"symbol":"▲","pp":1}], "expect": {"staked":10000,"lines":["3連複|10000|1"]} },
+    { "name": "J6_trio_box_n4", "composition": {"lines":[{"type":"trio_box","yen":10000}]}, "runners": [{"symbol":"◎","pp":3},{"symbol":"〇","pp":7},{"symbol":"▲","pp":1},{"symbol":"△","pp":5}], "expect": {"staked":10000,"lines":["3連複|2500|4"]} }
+  ],
+
+  "csBuilding": [
+    { "name": "C1_default_n4", "betStructure": "default", "stake": 10000, "runners": [{"symbol":"◎","pp":3},{"symbol":"〇","pp":7},{"symbol":"▲","pp":1},{"symbol":"△","pp":5}], "expect": {"staked":10000,"lines":["単勝|5000|1","馬連|500|6","3連複|500|4"]} },
+    { "name": "C2_default_n2", "betStructure": "default", "stake": 10000, "runners": [{"symbol":"◎","pp":3},{"symbol":"〇","pp":7}], "expect": {"staked":10000,"lines":["単勝|5000|1","馬連|5000|1"]} },
+    { "name": "C3_trio_box_n3", "betStructure": "trio_box", "stake": 10000, "runners": [{"symbol":"◎","pp":3},{"symbol":"〇","pp":7},{"symbol":"▲","pp":1}], "expect": {"staked":10000,"lines":["3連複|10000|1"]} },
+    { "name": "C4_win_only_n4", "betStructure": "win_only", "stake": 10000, "runners": [{"symbol":"◎","pp":3},{"symbol":"〇","pp":7},{"symbol":"▲","pp":1},{"symbol":"△","pp":5}], "expect": {"staked":10000,"lines":["単勝|10000|1"]} }
+  ]
+}
