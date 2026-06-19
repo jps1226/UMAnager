@@ -270,6 +270,31 @@ const BET_PRESETS = {
 };
 const DEFAULT_PRESET = 'balanced';
 
+// Phase 34 — per-preset COUNT BAND + selection TILT (design locked 2026-06-19).
+// The active bet preset sets how MANY marks the engine suggests (a hard min–max band = a fence)
+// and a small ranking lean for the SUPPORTING marks (the ◎ banker never moves):
+//   tilt < 0 = consistency (chalk-leaning supporting marks); tilt > 0 = ceiling (overlay-leaning); 0 = neutral.
+//   requireAxis = abstain unless there's a genuine ◎ standout (nagashi needs a real banker).
+// Final count = clamp( min + round(risk·(max−min)) + shapeNudge, min, max ), then clamped to field size.
+// See getEngineMarkPlanForRace for how the three inputs (preset band / risk position / shape nudge) stack.
+const PRESET_PLANS = {
+    win_place:     { id: 'win_place',     min: 1, max: 2, tilt: -15, requireAxis: false },
+    balanced:      { id: 'balanced',      min: 3, max: 4, tilt:   0, requireAxis: false },
+    quinella_wide: { id: 'quinella_wide', min: 3, max: 4, tilt:  -8, requireAxis: false },
+    trio_chase:    { id: 'trio_chase',    min: 4, max: 5, tilt: +15, requireAxis: false },
+    nagashi_chase: { id: 'nagashi_chase', min: 5, max: 6, tilt: +15, requireAxis: true  },
+    wide_safe:     { id: 'wide_safe',     min: 2, max: 4, tilt:  -8, requireAxis: false },
+};
+// A custom/edited composition (no exact preset match) → neutral band derived from its contract floor.
+function presetPlanForComposition(comp) {
+    const id = compositionPresetId(comp);
+    if (PRESET_PLANS[id]) return PRESET_PLANS[id];
+    let floor = 2;
+    try { const f = compositionMarkFloor(comp); if (Number.isFinite(f) && f >= 1) floor = Math.max(2, f); } catch (_) {}
+    return { id: 'custom', min: floor, max: Math.max(floor, 4), tilt: 0, requireAxis: false };
+}
+const PRESET_PLANS_DEFAULT = { id: 'custom', min: 2, max: 4, tilt: 0, requireAxis: false };
+
 // A composition = { presetId, lines:[{type,yen}] }. presetId is for the label only ('custom'
 // once the lines are edited away from the named preset). Deep-clones the preset's lines.
 function compositionFromPreset(presetId) {
@@ -370,6 +395,10 @@ function repriceDayRaces(date) {
     try { updateQuickStats(); } catch (_) {}
     try { refreshSunkCostStat(); } catch (_) {}
     if (currentMainView === 'voting') { try { renderLiveViewPanel(); } catch (_) {} }
+    // Rebuilding the rows above wiped the .auto-bet-preview highlight classes; re-apply them so the
+    // engine's suggested marks survive a preset/line change (the suggestions themselves now depend
+    // on the preset, so this MUST run after every reprice — not just on a full refresh).
+    try { updateAutoBetHighlighting(); } catch (_) {}
 }
 
 // Populate the day preset <select> once (presets + a Custom sentinel).
@@ -571,7 +600,7 @@ function onRaceComposerAddLine(rid)           { mutateRaceComposition(rid, c => 
 
 async function clearRaceBetOverride(rid) {
     raceBetOverrideUiOpen.delete(rid);
-    if (globalRaceMeta[rid]) delete globalRaceMeta[rid].betComposition;
+    if (globalRaceMeta[rid]) { delete globalRaceMeta[rid].betComposition; delete globalRaceMeta[rid].betCompositionAutoBackup; }
     touchRaceMeta(rid);
     try { await saveMarksToServer(); } catch (_) { /* state still live in-session */ }
     const tbody = document.getElementById(`tbody-${rid}`);
@@ -579,6 +608,24 @@ async function clearRaceBetOverride(rid) {
     try { updateQuickStats(); } catch (_) {}
     try { refreshSunkCostStat(); } catch (_) {}
     if (currentMainView === 'voting') renderLiveViewPanel();
+}
+
+// ── Phase 34: Auto Bet Day "abstain backup preset" ───────────────────────────
+// When the day's preset abstains on a race because the BET TYPE doesn't fit it (e.g. Nagashi with
+// no clear axis), Auto Bet Day can re-bet that race with a backup preset instead. The rescue sets a
+// per-race composition override TAGGED as auto-created (betCompositionAutoBackup) so a later sweep
+// can tell it apart from the operator's own overrides and re-decide it fresh (self-correcting).
+function getAbstainBackupPreset() {
+    const v = appConfig.ui?.abstainBackupPreset;
+    return (v && BET_PRESETS[v]) ? v : 'none';
+}
+function isAutoBackupOverride(rid) { return globalRaceMeta[rid]?.betCompositionAutoBackup === true; }
+function setAutoBackupOverride(rid, presetId) {
+    globalRaceMeta[rid] = { ...(globalRaceMeta[rid] || {}), betComposition: compositionFromPreset(presetId), betCompositionAutoBackup: true };
+}
+function clearAutoBackupOverride(rid) {
+    const m = globalRaceMeta[rid];
+    if (m && m.betCompositionAutoBackup) { delete m.betComposition; delete m.betCompositionAutoBackup; }
 }
 
 // Per-race bet record — what was ACTUALLY bet on a race, frozen at APPLY so later day/stake
@@ -2753,7 +2800,9 @@ function normalizeMarksPayload(payload) {
                     : [],
                 betProfile: normalizeBetProfile(meta.betProfile),
                 // Per-race bet COMPOSITION override (Voting tab). Preserve only valid shapes.
-                ...(normalizeComposition(meta.betComposition) ? { betComposition: normalizeComposition(meta.betComposition) } : {})
+                ...(normalizeComposition(meta.betComposition) ? { betComposition: normalizeComposition(meta.betComposition) } : {}),
+                // Phase 34: tag marking an override as auto-created by Auto Bet Day's backup-preset rescue.
+                ...(meta.betCompositionAutoBackup === true ? { betCompositionAutoBackup: true } : {})
             };
         });
     }
@@ -3295,6 +3344,7 @@ function renderScoreExplain(row, anchor) {
         'small-field': 'field too small', 'no-safe-anchor': 'no safe anchor', 'no-odds': 'pre-odds (no market prices)',
         'chalk-no-overlay': 'chalk, no value', 'underpriced-fav': 'underpriced favorite',
         'shape-risk-mismatch': 'shape/risk mismatch', 'empty': 'no field',
+        'nagashi-no-axis': 'nagashi — no axis horse', 'below-preset-floor': 'too few marks for this bet',
     };
     const engineShapeText = ENGINE_SHAPE_LABELS[enginePlan.shape] || enginePlan.shape || '';
     const enginePlanNote = enginePlan.count > 0
@@ -3886,14 +3936,12 @@ function getEngineMarkPlanForRace(r_id, opts = {}) {
     else if (naturalCount === 3)                              shape = 'tight-top3';
     else                                                      shape = 'tight-pack';
 
-    // ── Count = COVERAGE (aim 4, trim untrusted longshots; never abstain) ─────
-    // The engine's ONLY job is how many marks. It backs your top ~4, but TRIMS the marginal
-    // mark (the 4th, then the 3rd) when its win odds exceed a risk-scaled "trust ceiling":
-    // low risk trims hard (toward 2 — fewer, safer), CHAOS keeps the longshots (toward 4).
-    // Floor of 2 so a pair always forms; never returns 0 (you bet every race). The chosen
-    // STRUCTURE (default / nagashi / box / win — see BET_STRUCTURES + buildRaceBetLines) then
-    // decides what bet these N marks actually form. This matches your real style: single +
-    // boxes whose width follows the count. Shape/standout are kept for the popover readout.
+    // ── Count = PRESET BAND → RISK POSITION → SHAPE NUDGE (Phase 34) ──────────
+    // Three inputs stack, each owning a different layer so they can't fight:
+    //   1. the active bet PRESET sets a hard count band (min–max = a fence the count can't escape);
+    //   2. the RISK slider sets the position inside that band (low = fewer/safer, high = wider);
+    //   3. the field SHAPE nudges ±1 within the band (a lone favorite → fewer; a flat pack → more).
+    // The chosen bet STRUCTURE then decides what these N marks form (see buildRaceBetLines).
     const zone = risk <= T.SAFE_MAX ? 'SAFE' : risk >= T.CHAOS_MIN ? 'CHAOS' : 'BLEND';
 
     // Pre-odds: SAFE/BLEND both rely on market prices to know who is chalk vs value.
@@ -3902,49 +3950,91 @@ function getEngineMarkPlanForRace(r_id, opts = {}) {
     const hasOdds = scored.some(e => e.odds !== null);
     if (!hasOdds && zone !== 'CHAOS') return empty('no-odds');
 
-    const trimCeil = zone === 'CHAOS' ? Infinity : (T.OREPRO_TRIM_BASE + r * T.OREPRO_TRIM_SPAN);
-    let target = Math.min(4, fieldSize);
-    while (target > 2) {
-        const m = scored[target - 1];           // the marginal (lowest-ranked) candidate mark
-        if (m.odds !== null && m.odds > trimCeil) { target--; } else { break; } // null = unknown odds, not a longshot → keep
-    }
+    // Resolve the active preset → its plan {min,max,tilt,requireAxis}. Defensive: this runs inside
+    // the bulk Auto-Bet-Day sweep, so a throw here must never abort the day → fall back to a
+    // neutral default plan on any failure.
+    let comp = null, plan = PRESET_PLANS_DEFAULT;
+    try { comp = opts.compositionOverride || resolveBetComposition(r_id); plan = presetPlanForComposition(comp); }
+    catch (e) { console.warn('getEngineMarkPlanForRace: preset-plan lookup failed for', r_id, e); }
 
-    // Phase 34 (partial): respect the active bet preset as a contract. If the engine's count can't
-    // even form the lowest-minMarks line of this race's composition (e.g. it wants 2 but a pure-trio
-    // preset needs 3), abstain entirely — better NO suggestion than marks that can't be bet. The
-    // operator can then switch preset or place a custom bet. No fallback to a foreign bet type.
-    // Defensive: this lookup must NEVER throw (it runs inside the bulk Auto-Bet-Day sweep — a
-    // throw here would abort the whole day). Default floor 1 (= no gate) on any failure, and only
-    // abstain when a genuinely-finite floor exceeds the engine's count.
+    // Nagashi (and any requireAxis preset) needs a genuine ◎ standout to bank on. No axis → abstain
+    // rather than suggest a bankerless nagashi (operator's call: strategy-abstain is nagashi-only).
+    if (plan.requireAxis && !hasAxis) return empty('nagashi-no-axis');
+
+    // Shape nudge: a dominant single trims toward the low end; a flat/packed field widens toward the
+    // top. The nudge can never break the preset fence (the clamp below enforces that).
+    let shapeNudge = 0;
+    if (shape === 'lone-favorite' || shape === 'two-clear') shapeNudge = -1;
+    else if (shape === 'tight-pack' || shape === 'wide-open') shapeNudge = +1;
+
+    // Count: band bottom + risk-scaled position + shape nudge, clamped to the fence and field size.
+    const band = Math.max(0, plan.max - plan.min);
+    let target = plan.min + Math.round(r * band) + shapeNudge;
+    target = Math.max(plan.min, Math.min(plan.max, target));
+    target = Math.min(target, fieldSize);
+
+    // Preset-floor contract gate (unchanged intent): a count below the composition's mark floor
+    // can't form a single line of the preset → abstain rather than suggest unplaceable marks.
     let presetFloor = 1;
-    try {
-        const f = compositionMarkFloor(resolveBetComposition(r_id));
-        if (Number.isFinite(f) && f >= 1) presetFloor = f;
-    } catch (e) {
-        console.warn('getEngineMarkPlanForRace: preset-floor lookup failed for', r_id, e);
-    }
+    try { const f = compositionMarkFloor(comp); if (Number.isFinite(f) && f >= 1) presetFloor = f; }
+    catch (e) { console.warn('getEngineMarkPlanForRace: preset-floor lookup failed for', r_id, e); }
     if (presetFloor > target) return empty('below-preset-floor');
+
+    // Selection TILT: the ◎ banker is ALWAYS your top conviction pick (raw-risk #1) — the preset
+    // never moves your banker. The tilt only re-leans the SUPPORTING marks: consistency presets
+    // (tilt<0) rank them with a chalk-leaning risk, ceiling presets (tilt>0) lean toward overlays.
+    // Count uses the RAW risk above; only the supporting order uses the tilted risk, so the two
+    // knobs stay independent. tilt 0 → reuse the neutral `scored` order (no second scoring pass).
+    const axis = scored[0];
+    let supporting = scored.slice(1);
+    if (plan.tilt !== 0) {
+        const selRisk = Math.max(0, Math.min(100, risk + plan.tilt));
+        supporting = entries.map(row => {
+            const odds = parseFloat(row.Odds);
+            return { h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, selRisk),
+                     odds: (Number.isFinite(odds) && odds > 0) ? odds : null };
+        }).filter(e => e.h_id !== axis.h_id).sort((a, b) => b.power - a.power);
+    }
+    const ordered = [axis, ...supporting];
 
     const seq = markSequenceForCount(target);
     const assignments = [];
-    for (let i = 0; i < seq.length && i < scored.length; i++) {
-        assignments.push({ h_id: scored[i].h_id, symbol: seq[i] });
+    for (let i = 0; i < seq.length && i < ordered.length; i++) {
+        assignments.push({ h_id: ordered[i].h_id, symbol: seq[i] });
     }
     return {
         count: target, assignments, reason: shape, shape,
         detail: { standout: +standout.toFixed(2), naturalCount, hasAxis, hasOverlay, underpricedFav, wideOpen,
-                  trimCeil: trimCeil === Infinity ? null : Math.round(trimCeil), target },
+                  preset: plan.id, band: [plan.min, plan.max], tilt: plan.tilt, shapeNudge, target },
     };
+}
+
+// Abstain reasons that mean "this BET TYPE doesn't fit this race" (vs genuinely unbettable). The
+// abstain-backup preset rescues only these — shared by the live preview and the Auto Bet Day sweep.
+const ENGINE_PRESET_FIT_ABSTAINS = new Set(['nagashi-no-axis', 'below-preset-floor']);
+
+// Live preview of the engine plan WITH the abstain-backup preset applied transiently (no committed
+// per-race override). If the active preset abstains because the bet type doesn't fit, and a backup
+// preset is set + would produce a pick, returns the BACKUP plan flagged viaBackup. Lets the live
+// highlight overlay + abstain pill SHOW the backup before the operator runs Auto Bet Day.
+function getLiveEnginePlanWithBackup(r_id) {
+    const plan = getEngineMarkPlanForRace(r_id);
+    if (plan.count > 0) return { plan, viaBackup: false };
+    const backup = getAbstainBackupPreset();
+    if (backup === 'none' || !ENGINE_PRESET_FIT_ABSTAINS.has(plan.shape)) return { plan, viaBackup: false };
+    const bplan = getEngineMarkPlanForRace(r_id, { compositionOverride: compositionFromPreset(backup) });
+    return bplan.count > 0 ? { plan: bplan, viaBackup: true, backupId: backup } : { plan, viaBackup: false };
 }
 
 // Mark-aware view of the engine plan: same target COUNT, but respects marks the user
 // already placed (keeps their singletons, counts their △) and fills only the remaining
 // slots from unmarked horses. Used by the highlight overlay. Engine abstains → [].
+// Applies the abstain-backup preset as a live preview so backup races highlight too.
 function getMarkAwareAutoBetRankingsForRace(r_id) {
     const entries = globalRaceEntries[r_id];
     if (!entries || entries.length === 0) return [];
 
-    const plan = getEngineMarkPlanForRace(r_id);
+    const plan = getLiveEnginePlanWithBackup(r_id).plan;
     if (plan.count === 0) return [];                     // engine abstains → highlight nothing
     const seq = markSequenceForCount(plan.count);
     const currentRisk = getCurrentAutoPickRisk();
@@ -4141,9 +4231,65 @@ function updateWontPlaceBadges() {
     });
 }
 
+// Phase 34: flag races where the ENGINE abstains (no auto-pick) for an ACTIONABLE reason — a nagashi
+// with no clear axis to bank on, or a field the preset can't fit — so the operator can spot them and
+// place a different bet type by hand. Mark-blind (the engine's own view), independent of any marks
+// already placed. Deliberately skips transient/no-data reasons ('no-odds' = odds not published yet,
+// 'empty' = no card) which aren't actionable and would otherwise pill every pre-odds race. Skips a
+// race already showing the red "won't place" badge so we never stack two pills saying the same thing.
+const ENGINE_ABSTAIN_PILL = {
+    'nagashi-no-axis':    'no clear axis horse to bank a nagashi on',
+    'below-preset-floor': 'the engine wants fewer marks than this bet type needs',
+    'small-field':        'field too small to model confidently',
+};
+function updateEngineAbstainBadges() {
+    Object.keys(globalRaceEntries).forEach(r_id => {
+      try {
+        const meta = document.getElementById(`header-meta-${r_id}`);
+        if (!meta) return;
+        const existing = meta.querySelector('.engine-abstain-badge, .engine-backup-badge');
+        let html = '';
+        if (isAutoBackupOverride(r_id)) {
+            // Rescued by Auto Bet Day: the main bet type didn't fit, so it was bet with the backup.
+            const label = compositionLabel(getRaceBetCompositionOverride(r_id));
+            const title = `Auto Bet Day rescued this race: your main bet type didn't fit, so it was bet ` +
+                          `with "${label}" instead. Clear the per-race bet override to undo.`;
+            html = ` <span class="engine-backup-badge" title="${escapeHtml(title)}" ` +
+                `style="display:inline-block;font-size:0.72em;font-weight:700;padding:1px 7px;margin-left:6px;border-radius:10px;` +
+                `background:#1f3a5a;color:#cfe6ff;border:1px solid #2f6fb0;vertical-align:middle;">↩ backup: ${escapeHtml(label)}</span>`;
+        } else if (!meta.querySelector('.wont-place-badge')) {
+            const live = getLiveEnginePlanWithBackup(r_id);
+            if (live.viaBackup) {
+                // Preview: main preset abstained, but the backup preset would bet this race.
+                const label = BET_PRESETS[live.backupId]?.label || 'backup';
+                const title = `Your main bet type doesn't fit this race. The backup preset "${label}" will be ` +
+                              `used here when you run Auto Bet Day. (Preview — not committed yet.)`;
+                html = ` <span class="engine-backup-badge" title="${escapeHtml(title)}" ` +
+                    `style="display:inline-block;font-size:0.72em;font-weight:700;padding:1px 7px;margin-left:6px;border-radius:10px;` +
+                    `background:#1f3a5a;color:#cfe6ff;border:1px solid #2f6fb0;vertical-align:middle;">↩ backup: ${escapeHtml(label)} (preview)</span>`;
+            } else if (live.plan.count === 0 && ENGINE_ABSTAIN_PILL[live.plan.shape]) {
+                const title = `The auto-pick engine has no suggestion here (${ENGINE_ABSTAIN_PILL[live.plan.shape]}). ` +
+                              `Consider a different bet type or a manual/custom bet for this race.`;
+                html = ` <span class="engine-abstain-badge" title="${escapeHtml(title)}" ` +
+                    `style="display:inline-block;font-size:0.72em;font-weight:700;padding:1px 7px;margin-left:6px;border-radius:10px;` +
+                    `background:#5a4a1a;color:#ffe9b0;border:1px solid #c9a227;vertical-align:middle;">⚙ engine: no pick</span>`;
+            }
+        }
+        if (html) {
+            if (existing) existing.outerHTML = html; else meta.insertAdjacentHTML('beforeend', html);
+        } else if (existing) {
+            existing.remove();
+        }
+      } catch (e) {
+        console.warn('updateEngineAbstainBadges: skipped race', r_id, e);
+      }
+    });
+}
+
 function updateAutoBetHighlighting() {
     document.querySelectorAll('.mark-btn.auto-bet-preview').forEach(btn => btn.classList.remove('auto-bet-preview'));
-    updateWontPlaceBadges();   // always — independent of the highlight toggle
+    updateWontPlaceBadges();      // always — independent of the highlight toggle
+    updateEngineAbstainBadges();  // always — the operator wants to see abstains regardless of the toggle
 
     if (!isAutoBetHighlightingEnabled()) return;
 
@@ -4541,9 +4687,13 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
                 ${tuneBtnHtml}
                 ${devBetBtnHtml}
 
-                <button class="btn-autopick-safe auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20" ${isLocked ? 'disabled' : ''}>🛡️ Safe Bet</button>
-                <button class="btn-autopick auto-group-${r_id}" style="${autoStyle}; margin-left: 8px;" onclick="autoPick(event, '${r_id}', null)" title="Use Sidebar Slider" ${isLocked ? 'disabled' : ''}>🎲 Auto</button>
-                <button class="btn-autopick-lucky auto-group-${r_id}" style="${autoStyle}" onclick="autoPick(event, '${r_id}', 75)" title="Force Risk to 75" ${isLocked ? 'disabled' : ''}>🍀 Lucky</button>
+                <span class="autopick-group auto-group-${r_id}" style="${autoStyle}">
+                    <button class="btn-autopick auto-group-${r_id}" onclick="autoPick(event, '${r_id}', null)" title="Auto-pick using the sidebar risk slider — hover for Safe / Lucky" ${isLocked ? 'disabled' : ''}>🎲 Auto ▾</button>
+                    <span class="autopick-flyout">
+                        <button class="btn-autopick-safe auto-group-${r_id}" onclick="autoPick(event, '${r_id}', 20)" title="Force Risk to 20 (safer, fewer longshots)" ${isLocked ? 'disabled' : ''}>🛡️ Safe Bet</button>
+                        <button class="btn-autopick-lucky auto-group-${r_id}" onclick="autoPick(event, '${r_id}', 75)" title="Force Risk to 75 (longshot upside)" ${isLocked ? 'disabled' : ''}>🍀 Lucky</button>
+                    </span>
+                </span>
                 <button id="btn-clear-${r_id}" class="btn-clear-bets" style="${clearStyle}" onclick="clearRaceBets(event, '${r_id}')" title="Clear all marks in this race" ${isLocked ? 'disabled' : ''}>🧹 Clear Bets</button>
                 <button id="btn-lock-${r_id}" class="btn-lock-bets${lockClass}" onclick="toggleRaceLock(event, '${r_id}')" title="${isLocked ? 'Unlock to allow mark changes' : 'Lock to prevent any mark changes in this race'}">${lockLabel}</button>
 
@@ -5260,7 +5410,9 @@ async function saveMarksToServer() {
             activeSymbols: Array.isArray(meta.activeSymbols) ? meta.activeSymbols.map(symbol => String(symbol || '').trim()).filter(Boolean) : [],
             betProfile: normalizeBetProfile(meta.betProfile),
             // Per-race bet COMPOSITION override (Voting tab). Preserve only valid shapes.
-            ...(normalizeComposition(meta.betComposition) ? { betComposition: normalizeComposition(meta.betComposition) } : {})
+            ...(normalizeComposition(meta.betComposition) ? { betComposition: normalizeComposition(meta.betComposition) } : {}),
+            // Phase 34: tag marking an override as auto-created by Auto Bet Day's backup-preset rescue.
+            ...(meta.betCompositionAutoBackup === true ? { betCompositionAutoBackup: true } : {})
         }])
     );
 
@@ -7779,6 +7931,11 @@ async function autoBetActiveDay() {
         let skippedManual = 0;
         let abstained = 0;
         let errored = 0;
+        let rescued = 0;
+        // Phase 34: races the day preset can't fit get re-bet with the backup preset (if set). Only
+        // these "bet type doesn't fit" abstains are rescued — NOT genuinely-unbettable ones (tiny
+        // field / no odds yet), which stay skipped.
+        const backupPreset = getAbstainBackupPreset();
 
         eligibleRaceIds.forEach(r_id => {
             if (isRaceLocked(r_id)) {
@@ -7795,7 +7952,17 @@ async function autoBetActiveDay() {
             // Isolate each race: a throw on ONE race must not abort the whole day's sweep
             // (that was the "Auto Bet Day set zero marks" regression — one bad race nuked all).
             try {
-                const result = applyAutoPickSelectionsToRace(r_id, null);
+                // Self-correct: drop any PRIOR auto-backup rescue so this race re-decides from the
+                // main preset first (a clear favorite may have emerged since the last run).
+                clearAutoBackupOverride(r_id);
+                let result = applyAutoPickSelectionsToRace(r_id, null);
+                // Backup rescue: the main preset doesn't FIT this race → re-bet with the backup.
+                if (result.count === 0 && backupPreset !== 'none' && ENGINE_PRESET_FIT_ABSTAINS.has(result.shape)) {
+                    setAutoBackupOverride(r_id, backupPreset);
+                    const r2 = applyAutoPickSelectionsToRace(r_id, null);
+                    if (r2.count > 0) { result = r2; rescued += 1; }
+                    else { clearAutoBackupOverride(r_id); } // backup also abstains → leave unbet
+                }
                 if (result.changed) {
                     changedRaceIds.push(r_id);
                 }
@@ -10332,6 +10499,7 @@ async function showSettingsModal() {
     document.getElementById('setting-umamusumeMode').checked = localStorage.getItem(UMM_STORAGE_KEY) === '1';
     document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
     document.getElementById('setting-votingMarkMode').value = getVotingMarkMode();
+    document.getElementById('setting-abstainBackupPreset').value = getAbstainBackupPreset();
     { const os = document.getElementById('setting-oreproDefaultStake'); if (os) os.value = getOreProDefaultStake(); }
     document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     document.getElementById('setting-tvModeSplitPercent').value = Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent))
@@ -10518,6 +10686,7 @@ async function updateSidebarSettings() {
         showConsole: document.getElementById('setting-showConsole').checked,
         highlightAutoBets: document.getElementById('setting-highlightAutoBets').checked,
         votingMarkMode: (document.getElementById('setting-votingMarkMode').value === 'TRADITIONAL_ROLES') ? 'TRADITIONAL_ROLES' : 'BOX_OPTIMIZATION',
+        abstainBackupPreset: (() => { const v = document.getElementById('setting-abstainBackupPreset')?.value; return (v && BET_PRESETS[v]) ? v : 'none'; })(),
         oreproDefaultStake: (() => { const v = parseInt(document.getElementById('setting-oreproDefaultStake')?.value, 10); return Number.isFinite(v) && v > 0 ? v : 10000; })(),
         tvModeSplitPercent: parseClampedPercent('setting-tvModeSplitPercent', Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent)) ? Number(appConfig.ui?.tvModeSplitPercent) : 50),
         tvModePanelsFlipped: document.getElementById('setting-tvModePanelsFlipped').checked,

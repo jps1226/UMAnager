@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260613-14">
+    <link rel="stylesheet" href="/static/style.css?v=20260619-1">
 </head>
 <body>
 
@@ -436,6 +436,17 @@
                             </select>
                         </label>
                         <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
+                            <span title="When Auto Bet Day skips a race because the chosen bet type doesn't fit it (e.g. Nagashi with no clear axis horse), bet that race with this preset instead. 'None' leaves those races unbet.">↩ Abstain Backup Preset</span>
+                            <select id="setting-abstainBackupPreset" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:170px;">
+                                <option value="none">None (leave unbet)</option>
+                                <option value="balanced">Balanced</option>
+                                <option value="quinella_wide">Quinella + Wide</option>
+                                <option value="wide_safe">Wide-safe + Win</option>
+                                <option value="trio_chase">Trio chase</option>
+                                <option value="win_place">Win + Place</option>
+                            </select>
+                        </label>
+                        <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
                             <span title="Total ¥ bet per race. The chosen bet structure (set per-day in the toolbar, or per-race on the Voting tab) splits this across its combos. Matches your OrePro template total (¥10,000).">💴 Stake per Race ¥</span>
                             <input type="number" id="setting-oreproDefaultStake" min="100" max="1000000" step="100" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:110px;">
                         </label>
@@ -657,6 +668,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260613-11"></script>
+<script src="/static/script.js?v=20260619-6"></script>
 </body>
 </html>
