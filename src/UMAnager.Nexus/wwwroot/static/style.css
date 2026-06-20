@@ -1,5 +1,10 @@
         /* --- LAYOUT & DARK MODE --- */
-        body { font-family: sans-serif; background-color: #0e1117; color: #fafafa; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
+        /* Root tinted so any sliver the zoomed page doesn't cover blends into the dark theme. */
+        html { background-color: #0e1117; }
+        /* UI-scale: Chromium's `zoom` doesn't re-expand 100vh, so at <100% the page left an empty band
+           at the bottom. Divide the height by the zoom factor (--ui-zoom, set by applyUiScale) so the
+           scaled body fills the viewport exactly. Defaults to 1 → plain 100vh when no scaling applied. */
+        body { font-family: sans-serif; background-color: #0e1117; color: #fafafa; margin: 0; padding: 0; display: flex; height: calc(100vh / var(--ui-zoom, 1)); overflow: hidden; }
 
 .global-close-server-btn {
     position: static;

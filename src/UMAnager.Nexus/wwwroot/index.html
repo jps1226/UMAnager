@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260619-1">
+    <link rel="stylesheet" href="/static/style.css?v=20260619-2">
 </head>
 <body>
 
@@ -454,6 +454,13 @@
                             <span>📺 TV Mode Split %</span>
                             <input type="number" id="setting-tvModeSplitPercent" min="20" max="80" step="1" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:90px;">
                         </label>
+                        <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
+                            <span title="Shrinks or enlarges the whole dashboard. Fixes 'everything's too big' under Windows display scaling (e.g. 125%). Auto-detects a default for this screen; drag to taste — it previews live.">🔎 UI Scale</span>
+                            <span style="display:flex; align-items:center; gap:8px;">
+                                <input type="range" id="setting-uiScalePercent" min="50" max="130" step="5" oninput="onUiScaleInput(this.value)" onchange="updateSidebarSettings()" style="width:120px;">
+                                <span id="setting-uiScalePercent-val" style="min-width:38px; text-align:right; font-size:12px;">100%</span>
+                            </span>
+                        </label>
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-tvModePanelsFlipped" onchange="updateSidebarSettings()">
                             <span>📺 TV Mode Start Flipped</span>
@@ -668,6 +675,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260619-7"></script>
+<script src="/static/script.js?v=20260619-9"></script>
 </body>
 </html>

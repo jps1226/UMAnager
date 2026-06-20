@@ -10504,6 +10504,7 @@ async function showSettingsModal() {
     document.getElementById('setting-votingMarkMode').value = getVotingMarkMode();
     document.getElementById('setting-abstainBackupPreset').value = getAbstainBackupPreset();
     { const os = document.getElementById('setting-oreproDefaultStake'); if (os) os.value = getOreProDefaultStake(); }
+    { const us = document.getElementById('setting-uiScalePercent'); if (us) { const p = getUiScalePercent(); us.value = p; const l = document.getElementById('setting-uiScalePercent-val'); if (l) l.textContent = p + '%'; } }
     document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     document.getElementById('setting-tvModeSplitPercent').value = Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent))
         ? Number(appConfig.ui?.tvModeSplitPercent)
@@ -10692,6 +10693,7 @@ async function updateSidebarSettings() {
         abstainBackupPreset: (() => { const v = document.getElementById('setting-abstainBackupPreset')?.value; return (v && BET_PRESETS[v]) ? v : 'none'; })(),
         oreproDefaultStake: (() => { const v = parseInt(document.getElementById('setting-oreproDefaultStake')?.value, 10); return Number.isFinite(v) && v > 0 ? v : 10000; })(),
         tvModeSplitPercent: parseClampedPercent('setting-tvModeSplitPercent', Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent)) ? Number(appConfig.ui?.tvModeSplitPercent) : 50),
+        uiScalePercent: (() => { const v = parseInt(document.getElementById('setting-uiScalePercent')?.value, 10); return Number.isFinite(v) ? Math.max(50, Math.min(130, v)) : 100; })(),
         tvModePanelsFlipped: document.getElementById('setting-tvModePanelsFlipped').checked,
         formulaWeights: {
             oddsCap:            parseFWInput('fw-oddsCap',            100),
@@ -10854,7 +10856,42 @@ async function toggleRaceColumnVisibility(colKey, visible) {
     if (!isMobileViewport()) rerenderAllRaceTables();
 }
 
+// ── UI scale (Windows display-scaling compensation) ──────────────────────────
+// "Everything's too big" at 125% OS scaling = the page renders larger. A CSS `zoom` on the root
+// shrinks the whole UI uniformly AND reflows it (so responsive breakpoints get more room — unlike
+// transform:scale). Auto-seeded from devicePixelRatio: a FRACTIONAL dpr (e.g. 1.25, 1.5) means OS
+// scaling on a standard-density panel → counter-scale; ≈1 or true-HiDPI (≥2 = real sharpness) stays
+// at 100%. Always overridable + persisted (appConfig.ui.uiScalePercent).
+function detectSuggestedUiScale() {
+    const dpr = window.devicePixelRatio || 1;
+    if (dpr > 1.05 && dpr < 1.95) return Math.max(70, Math.min(100, Math.round(100 / dpr / 5) * 5));
+    return 100;
+}
+function getUiScalePercent() {
+    const v = parseInt(appConfig.ui?.uiScalePercent, 10);
+    if (Number.isFinite(v) && v >= 50 && v <= 130) return v;
+    return detectSuggestedUiScale();
+}
+// Apply both `zoom` (shrinks + reflows) and `--ui-zoom` (lets the body height re-expand to fill the
+// viewport — see the body rule in style.css; without it a <100% zoom leaves an empty band at the bottom).
+function setRootZoom(z) {
+    const el = document.documentElement;
+    el.style.zoom = z.toString();
+    el.style.setProperty('--ui-zoom', z.toString());
+}
+function applyUiScale() {
+    try { setRootZoom(getUiScalePercent() / 100); } catch (_) {}
+}
+// Live preview while dragging the slider (no save); updateSidebarSettings persists on change.
+function onUiScaleInput(val) {
+    const pct = Math.max(50, Math.min(130, parseInt(val, 10) || 100));
+    setRootZoom(pct / 100);
+    const lbl = document.getElementById('setting-uiScalePercent-val');
+    if (lbl) lbl.textContent = pct + '%';
+}
+
 function applySidebarSettings() {
+    applyUiScale();   // keep the whole-page scale in sync on init + every settings apply
     const tabs = appConfig.sidebarTabs || {};
     const apply = (elemId, key, defaultOpen) => {
         const el = document.getElementById(elemId);
