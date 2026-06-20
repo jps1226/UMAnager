@@ -2284,11 +2284,32 @@ function patchResultsLive(payload) {
     }
     // Re-render the ticker immediately from the patched data — no API wait.
     renderResultsTicker();
-    // Deferred full reload to pull in payout data (results_json) and race metadata.
-    if (!_resultsReloadScheduled) {
-        _resultsReloadScheduled = true;
-        setTimeout(() => { _resultsReloadScheduled = false; loadRaces(); }, 4000);
-    }
+    // Payout (HR) records land in a SEPARATE, later batch than the finish records, and the backend
+    // pushes ResultsUpdated only for the finish batch — NOT the payout batch (see NexusPipeServer:
+    // BroadcastResultsAsync is gated on RA-derived raceIds). So a single fixed deferred reload often
+    // fires before payouts exist, leaving the win/net pill (and the win chime) to wait for the 60s
+    // fallback poll — the "chimes but the display doesn't update till the next tick" bug. Poll the
+    // recap with backoff until this race's win resolves so the win display lands within seconds.
+    scheduleResultsSettleReload(payload.raceId);
+}
+
+// Keep refreshing races + recap after a results push until this race's win is in (payouts landed)
+// or the attempt budget (~46s) is spent; the 60s fallback poll covers anything later. Single-flight
+// via _resultsReloadScheduled. Each loadRaces re-renders + re-evaluates the chime gate, so the win
+// chime/flash fires the moment payouts resolve — not a minute later.
+function scheduleResultsSettleReload(raceId) {
+    if (_resultsReloadScheduled) return;
+    _resultsReloadScheduled = true;
+    const delays = [3000, 6000, 12000, 25000];
+    let i = 0;
+    const step = async () => {
+        try { await loadRaces(); } catch (_) { /* keep retrying on transient errors */ }
+        const rc = recapByRace[String(raceId || '').trim()];
+        const winResolved = !!(rc && Array.isArray(rc.HitLabels) && rc.HitLabels.length > 0);
+        if (winResolved || i >= delays.length) { _resultsReloadScheduled = false; return; }
+        setTimeout(step, delays[i++]);
+    };
+    setTimeout(step, delays[i++]);
 }
 
 async function bootLiveHub() {

@@ -278,7 +278,10 @@ const DEFAULT_PRESET = 'balanced';
 // Final count = clamp( min + round(risk·(max−min)) + shapeNudge, min, max ), then clamped to field size.
 // See getEngineMarkPlanForRace for how the three inputs (preset band / risk position / shape nudge) stack.
 const PRESET_PLANS = {
-    win_place:     { id: 'win_place',     min: 1, max: 2, tilt: -15, requireAxis: false },
+    // Win+Place is honmei-ONLY (both 単勝 and 複勝 bet just the ◎), so any 2nd mark is never bet —
+    // pin the band to exactly 1 so the marks match the bet and no phantom ◯ appears. (tilt is moot at
+    // count 1 — there are no supporting marks to lean — kept for documentation only.)
+    win_place:     { id: 'win_place',     min: 1, max: 1, tilt: -15, requireAxis: false },
     balanced:      { id: 'balanced',      min: 3, max: 4, tilt:   0, requireAxis: false },
     quinella_wide: { id: 'quinella_wide', min: 3, max: 4, tilt:  -8, requireAxis: false },
     trio_chase:    { id: 'trio_chase',    min: 4, max: 5, tilt: +15, requireAxis: false },
