@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
 const scriptPath = path.join(repoRoot, 'src', 'UMAnager.Nexus', 'wwwroot', 'static', 'script.js');
-export const fixturePath = path.join(here, 'fixtures', 'races_raw.json');
+export const fixturesDir = path.join(here, 'fixtures');
+export const fixturePath = path.join(fixturesDir, 'races_raw.json');
 
 // ── formatting / stats helpers shared by both sweeps ──
 export const fmt = n => '¥' + Math.round(n).toLocaleString('en-US');
@@ -65,6 +66,10 @@ export function loadEngine() {
     presetId: (comp) => compositionPresetId(comp),
     buildLines: (comp, runners) => buildLinesFromComposition(comp, runners),
     scoreLine: (line, t3, t3set, payouts) => scoreBetLine(line, t3, t3set, payouts),
+    // For replaying the live "🧪 Auto — engine picks per race" mode: the shape→preset map +
+    // the small-field token composition, straight from the engine so they can't drift.
+    shapeToPreset: () => SHAPE_TO_PRESET,
+    smallTokenComp: () => smallFieldTokenComposition(),
   };
 })();
 `;
@@ -84,8 +89,8 @@ export function loadEngine() {
 
 // Read the fixture, build the engine-input globals + per-race settlement data for the given
 // JST dates, push the globals into the engine, and return the per-race list + counts.
-export function loadWeekend(BT, dates) {
-  const raw = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+export function loadWeekend(BT, dates, fixtureFile = fixturePath) {
+  const raw = JSON.parse(fs.readFileSync(fixtureFile, 'utf8'));
   const byDate = raw.past_races_by_date || {};
   const entriesByRace = {}, infoByRace = {}, classByRace = {};
   const races = [];

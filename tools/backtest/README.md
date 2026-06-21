@@ -21,7 +21,19 @@ node tools/backtest/risk-sweep.mjs 2026-06-20,2026-06-21 balanced
 
 # Per-race detail (marks → tickets → settlement) for the first 3 races, to eyeball correctness:
 BT_DEBUG=1 node tools/backtest/risk-sweep.mjs 2026-06-20 balanced
+
+# Which bet TYPE pays — preset recovery at a fixed risk (default 30):
+node tools/backtest/preset-sweep.mjs 2026-06-20,2026-06-21 30
+
+# Many weekends at once → per-weekend verdict on the risk + preset hypotheses (reads fixtures/history.json):
+node tools/backtest/backfill-report.mjs
+
+# Faithfulness check — replay a day in the live Auto-per-race mode vs the known reconciled actual:
+node tools/backtest/validate-actual.mjs 2026-06-21 30
 ```
+
+`history.json` is a merged multi-weekend snapshot: fetch each day with `curl .../api/races?date=YYYY-MM-DD`
+and merge their `past_races_by_date` into one file (gitignored, like all fixtures).
 
 - **args:** `[dates,comma,sep] [presetId]` — preset is held fixed so RISK is the only variable.
   Valid presets: `win_place`, `balanced`, `quinella_wide`, `trio_chase`, `nagashi_chase`, `wide_safe`.
