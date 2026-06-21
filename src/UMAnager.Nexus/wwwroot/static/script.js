@@ -2876,7 +2876,9 @@ function normalizeMarksPayload(payload) {
                     riskLabel: strategySnapshot.riskLabel || null,
                     formulaWeights: strategySnapshot.formulaWeights && typeof strategySnapshot.formulaWeights === 'object' && !Array.isArray(strategySnapshot.formulaWeights)
                         ? strategySnapshot.formulaWeights
-                        : {}
+                        : {},
+                    engineShape: typeof strategySnapshot.engineShape === 'string' ? strategySnapshot.engineShape : null,
+                    engineCount: Number.isFinite(Number(strategySnapshot.engineCount)) ? Number(strategySnapshot.engineCount) : null
                 },
                 manualAdjustments: Number.isFinite(Number(meta.manualAdjustments)) ? Number(meta.manualAdjustments) : 0,
                 lockStateAtSave: typeof meta.lockStateAtSave === 'boolean' ? meta.lockStateAtSave : null,
@@ -2953,7 +2955,16 @@ function touchRaceMeta(r_id, options = {}) {
         strategySnapshot: {
             riskSlider: riskSlider,
             riskLabel: getRiskLabel(riskSlider),
-            formulaWeights: getFormulaWeightsSnapshot()
+            formulaWeights: getFormulaWeightsSnapshot(),
+            // Phase 29 v2 field SHAPE + mark count the engine chose for this race (for week-over-week
+            // tuning — lets the recap break P&L down by shape, not just bet type). Preserve a prior
+            // auto-pick value when a later manual touch doesn't re-supply it.
+            engineShape: (typeof options.engineShape === 'string' && options.engineShape)
+                ? options.engineShape
+                : (existing.strategySnapshot?.engineShape || null),
+            engineCount: Number.isFinite(Number(options.engineCount))
+                ? Number(options.engineCount)
+                : (Number.isFinite(Number(existing.strategySnapshot?.engineCount)) ? Number(existing.strategySnapshot.engineCount) : null)
         },
         manualAdjustments: Math.max(0, currentManualAdjustments + manualAdjustmentsDelta),
         lockStateAtSave: isRaceLocked(r_id),
@@ -5564,7 +5575,9 @@ async function saveMarksToServer() {
                 riskLabel: meta.strategySnapshot?.riskLabel || null,
                 formulaWeights: meta.strategySnapshot?.formulaWeights && typeof meta.strategySnapshot.formulaWeights === 'object' && !Array.isArray(meta.strategySnapshot.formulaWeights)
                     ? meta.strategySnapshot.formulaWeights
-                    : {}
+                    : {},
+                engineShape: typeof meta.strategySnapshot?.engineShape === 'string' ? meta.strategySnapshot.engineShape : null,
+                engineCount: Number.isFinite(Number(meta.strategySnapshot?.engineCount)) ? Number(meta.strategySnapshot.engineCount) : null
             },
             manualAdjustments: Number.isFinite(Number(meta.manualAdjustments)) ? Number(meta.manualAdjustments) : 0,
             lockStateAtSave: typeof meta.lockStateAtSave === 'boolean' ? meta.lockStateAtSave : null,

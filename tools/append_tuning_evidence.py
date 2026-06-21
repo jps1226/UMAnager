@@ -53,6 +53,24 @@ def fetch_card(date):
         print(f"  (card fetch failed — retro skipped: {e})", file=sys.stderr)
         return None
 
+def fetch_shapes():
+    """raceId -> engine field SHAPE from the marks blob (strategySnapshot.engineShape).
+    Captured per race at auto-pick time; absent for hand-marked races / blobs saved before
+    the shape-capture frontend shipped. Returns {} if the Nexus isn't reachable."""
+    try:
+        with urllib.request.urlopen(f"{API_BASE}/api/marks", timeout=30) as r:
+            blob = json.loads(r.read().decode("utf-8-sig"))
+        out = {}
+        for rid, meta in (blob.get("raceMeta") or {}).items():
+            snap = (meta or {}).get("strategySnapshot") or {}
+            shape = snap.get("engineShape")
+            if shape:
+                out[rid] = shape
+        return out
+    except Exception as e:
+        print(f"  (marks-blob fetch failed — ByShape skipped: {e})", file=sys.stderr)
+        return {}
+
 def rank_in_field(winner_id, field, key, higher_better=True):
     have = [(e["Horse_ID"], num(e.get(key))) for e in field if num(e.get(key)) is not None]
     have.sort(key=lambda t: t[1], reverse=higher_better)
@@ -89,7 +107,7 @@ def upset_retro(card):
             freak += 1
     return {"catch": catch, "semi": semi, "freak": freak, "catch_tracks": catch_tracks}
 
-def build_block(recap, card):
+def build_block(recap, card, shapes):
     date = recap["Date"]
     s = recap.get("Summary", {})
     staked = s.get("TotalStakedYen", 0)
@@ -126,6 +144,27 @@ def build_block(recap, card):
     risks = sorted({r.get("RiskUsed") for r in races if r.get("RiskUsed") is not None})
     risk_str = "/".join(str(int(x)) for x in risks) if risks else "?"
 
+    # ByShape P&L — the tuning lens for SHAPE_TO_PRESET. Joins each placed race's net to the engine's
+    # field-shape classification (from the marks blob). Absent until the shape-capture frontend has run
+    # an auto-pick, so older/hand-marked days show "(no shape data)".
+    shp = defaultdict(lambda: [0, 0, 0, 0])  # races, staked, won, hits
+    for r in races:
+        sh = shapes.get(r.get("RaceId"))
+        if not sh or r.get("Staked") is None:
+            continue
+        shp[sh][0] += 1
+        shp[sh][1] += r.get("Staked") or 0
+        shp[sh][2] += r.get("Won") or 0
+        if (r.get("Won") or 0) > 0:
+            shp[sh][3] += 1
+    if shp:
+        byshape_str = " · ".join(
+            f"{sh} ¥{wn-st:,} ({hits}/{n})" for sh, (n, st, wn, hits) in
+            sorted(shp.items(), key=lambda kv: kv[1][2]-kv[1][1])
+        )
+    else:
+        byshape_str = "_(no shape data captured for this day — frontend captures from the next auto-pick onward)_"
+
     retro = upset_retro(card)
     if retro:
         tracks = ", ".join(sorted(set(retro["catch_tracks"]))) if retro["catch_tracks"] else "—"
@@ -141,6 +180,7 @@ def build_block(recap, card):
         f"- **Market chaos:** upsets (winner FavRank≥4) **{ups}/{total_races}** · "
         f"chalk-fails (fav1 out of top-3) **{chk}/{total_races}**.\n"
         f"- **ByType (worst-first):** {bt_str}.\n"
+        f"- **ByShape (worst-first):** {byshape_str}.\n"
         f"- **Surface:** {surf_str}.\n"
         f"- **Upset retro:** {retro_str}.\n"
         f"- **Read / which hypotheses it moves:** _(fill in — does this corroborate H1/H2/H3 or contradict?)_\n"
@@ -159,7 +199,8 @@ def main():
     date = recap["Date"]
 
     card = fetch_card(date)
-    block = build_block(recap, card)
+    shapes = fetch_shapes()
+    block = build_block(recap, card, shapes)
 
     if args.dry_run:
         print("----- DRY RUN: block that WOULD be inserted -----\n")
