@@ -7,7 +7,7 @@
 //          odds-history series, and the voting-tab bet-estimate.
 // KEY DEPENDENCIES: AppDbContext, SettingsService, SirePerformanceService,
 //          JockeyTrainerStatsService, IMemoryCache.
-// CAUTION: The /api/races ETag is data-keyed "races-v8-…" — BUMP vN on any response-shape
+// CAUTION: The /api/races ETag is data-keyed "races-v10-…" — BUMP vN on any response-shape
 //          change or browsers serve a stale 304 body. SortTime is JST-wall-clock-in-UTC.
 // LAST DOCUMENTED: 2026-06-02
 // ============================================================
@@ -150,7 +150,7 @@ public sealed class RacesController : ControllerBase
             // Caching the computed ETag string avoids all 5 ETag-related DB round-trips
             // on every request. The 30 s TTL is well below the 5-minute live-odds floor.
             // Date-filtered calls skip the shared cache entirely (occasional, on-demand).
-            const string EtagCacheKey = "races-etag-v9";
+            const string EtagCacheKey = "races-etag-v10";
             string? fastEtag = null;
             if (!dateFiltered && _cache.TryGetValue<string>(EtagCacheKey, out fastEtag))
             {
@@ -218,7 +218,7 @@ public sealed class RacesController : ControllerBase
                         .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                         .FirstOrDefaultAsync();
                     var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                    etag = $"\"races-v9-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                    etag = $"\"races-v10-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                     _cache.Set(EtagCacheKey, etag,
                         new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
                 }
@@ -523,6 +523,10 @@ public sealed class RacesController : ControllerBase
                             Prev_Odds = e.PrevOdds?.ToString("F1") ?? "",
                             Fav = e.FavRank?.ToString() ?? "",
                             Finish = e.FinishPos?.ToString() ?? "",
+                            // SE 異常区分 1/2/3 (取消/除外) → horse removed from betting; the frontend
+                            // bet-line synthesizer (buildRaceBetLines) shrinks the ticket. Only set
+                            // once results settle; false pre-race. (中止 code 4 is NOT a scratch.)
+                            Scratched = e.Scratched,
                             Jockey      = jStat?.NameEn ?? jStat?.NameJa ?? e.JockeyName ?? "",
                             Jockey_Code = e.JockeyCode ?? "",
                             Jockey_Starts = jStat?.Starts,

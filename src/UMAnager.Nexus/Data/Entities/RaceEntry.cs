@@ -16,6 +16,9 @@ public class RaceEntry
     public decimal? PrevOdds { get; set; }    // Win odds from the previous fetch cycle (for ↑↓ delta indicator)
     public int? FavRank { get; set; }          // Favorite rank (1-18, where 1 is favorite)
     public int? FinishPos { get; set; }        // Finishing position (0 = withdrew/disqualified)
+    public bool Scratched { get; set; }        // SE 異常区分 ∈ {1 出走取消, 2 発走除外, 3 競走除外} = removed from betting/refunded.
+                                               // 中止 (code 4) does NOT set this — that bet stands and loses. Only populates
+                                               // once results settle (DataKubun 3-7); blank on the confirmed card / live window.
     public string? PerformanceJson { get; set; } // Finish time, margins, etc. (JSONB)
     public short DataStatus { get; set; }        // JRA-VAN データ区分 (offset 3, len 1)
     public DateOnly? LastModified { get; set; }  // データ作成年月日 (offset 4, len 8, YYYYMMDD)

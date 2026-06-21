@@ -119,6 +119,10 @@ using (var scope = app.Services.CreateScope())
         await db.Database.ExecuteSqlRawAsync(@"
             ALTER TABLE race_entries ADD COLUMN IF NOT EXISTS ""JockeyCode""  VARCHAR(5);
             ALTER TABLE race_entries ADD COLUMN IF NOT EXISTS ""TrainerCode"" VARCHAR(5);
+            -- Scratched: SE 異常区分 codes 1/2/3 (取消/除外) = horse removed from betting. Additive,
+            -- idempotent; same raw-SQL pattern as the columns above (no curly braces here — the SQL is
+            -- passed through string.Format, which would treat them as format items and throw).
+            ALTER TABLE race_entries ADD COLUMN IF NOT EXISTS ""Scratched"" BOOLEAN NOT NULL DEFAULT FALSE;
             CREATE INDEX IF NOT EXISTS ix_race_entries_jockey  ON race_entries (""JockeyCode"")  WHERE ""JockeyCode""  IS NOT NULL;
             CREATE INDEX IF NOT EXISTS ix_race_entries_trainer ON race_entries (""TrainerCode"") WHERE ""TrainerCode"" IS NOT NULL;
 

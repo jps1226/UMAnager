@@ -70,6 +70,24 @@ public sealed class OreProController : ControllerBase
         });
     }
 
+    public sealed class CookieCheckRequest
+    {
+        public string? race_id { get; set; }
+    }
+
+    /// <summary>
+    /// Pre-flight "is the OrePro cookie actually logged in?" probe (no bets placed). Apply Day
+    /// Votes calls this before placing anything so a dead cookie stops at zero bets; the Settings
+    /// "Test OrePro Session" button uses it too. Pass race_id (the loaded card's first race) for
+    /// the reliable shutuba-based check; omit it for a best-effort race-list probe.
+    /// </summary>
+    [HttpPost("cookie-check")]
+    public async Task<IActionResult> CookieCheck([FromBody] CookieCheckRequest? body, CancellationToken ct)
+    {
+        var result = await _apply.CheckCookieAsync(body?.race_id, ct);
+        return Content(result.GetRawText(), "application/json");
+    }
+
     [HttpPost("votes/apply")]
     public async Task<IActionResult> Apply([FromBody] JsonElement payload, CancellationToken ct)
     {

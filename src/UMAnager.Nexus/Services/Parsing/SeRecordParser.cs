@@ -107,6 +107,15 @@ public static class SeRecordParser
                 finishPos = fp;
             }
 
+            // 異常区分コード (IJyoCD / AbnormalDiv): 332 (1 byte). Oracle 2026-06-02.
+            //   0=Normal · 1=出走取消 · 2=発走除外 · 3=競走除外 → REMOVED from betting (refunded /
+            //   ticket shrunk) · 4=競走中止 (raced, did not finish — bet STANDS) · 5-7=DQ variants.
+            // Only codes 1/2/3 are scratches that shrink the ticket; 4-7 the horse was in the bet.
+            // NOTE: this field is NOT populated on the confirmed card (DataKubun=2) — it only fills
+            // once results settle (DataKubun 3-7), so Scratched stays false pre-race / live-window.
+            var abnormalStr = ExtractString(data, 331, 1).Trim();
+            bool scratched = abnormalStr is "1" or "2" or "3";
+
             return new RaceEntry
             {
                 RaceId = raceId,
@@ -121,6 +130,7 @@ public static class SeRecordParser
                 Odds = odds,
                 FavRank = favRank,
                 FinishPos = finishPos,
+                Scratched = scratched,
                 DataStatus = dataStatus,
                 LastModified = lastModified,
                 UpdatedAt = DateTime.UtcNow

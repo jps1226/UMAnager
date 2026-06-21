@@ -349,6 +349,100 @@ public sealed class OreProVoteApplyService
         return doc.RootElement.Clone();
     }
 
+    /// <summary>
+    /// Lightweight "is this OrePro session cookie actually logged in?" probe — no marks placed,
+    /// no cart touched. Apply Day Votes calls this BEFORE the loop so a dead cookie stops at zero
+    /// bets instead of failing every race; the Settings "Test OrePro Session" button uses it too.
+    ///
+    /// When a race_id is supplied (the reliable path — the dashboard always has the loaded card)
+    /// we fetch that race's shutuba and reuse the same HorseList-row marker the apply path trusts.
+    /// With no race we fall back to the bet race-list page; that's best-effort (an empty card on a
+    /// non-race day can read as "not confirmed") so the message says so.
+    /// Returns { status: ok|expired|unconfigured|error, loggedIn, message }.
+    /// </summary>
+    public async Task<JsonElement> CheckCookieAsync(string? rawRaceId, CancellationToken ct)
+    {
+        var cookie = (await _settings.GetStringAsync(SettingsService.Keys.OreProSessionCookie) ?? "").Trim();
+        if (string.IsNullOrEmpty(cookie))
+            return Result("unconfigured", false, "No OrePro session cookie is set. Paste the Cookie header value from a logged-in OrePro session into Settings → OrePro.");
+
+        var userAgent = (await _settings.GetStringAsync(SettingsService.Keys.OreProUserAgent) ?? "").Trim();
+        if (string.IsNullOrEmpty(userAgent)) userAgent = SettingsService.Defaults.OreProUserAgent;
+
+        var cookieJar = new CookieContainer();
+        var oreproDomain = new Uri("https://orepro.netkeiba.com/");
+        foreach (var pair in cookie.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var eq = pair.IndexOf('=');
+            if (eq <= 0 || eq == pair.Length - 1) continue;
+            var name = pair[..eq].Trim();
+            var value = pair[(eq + 1)..].Trim();
+            if (string.IsNullOrEmpty(name)) continue;
+            try
+            {
+                cookieJar.Add(oreproDomain, new Cookie(name, value, "/", ".netkeiba.com"));
+                cookieJar.Add(oreproDomain, new Cookie(name, value, "/", "orepro.netkeiba.com"));
+            }
+            catch { /* names CookieContainer rejects — ignore */ }
+        }
+
+        using var handler = new HttpClientHandler
+        {
+            UseCookies = true,
+            CookieContainer = cookieJar,
+            AutomaticDecompression = DecompressionMethods.All,
+        };
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
+        http.DefaultRequestHeaders.Add("Accept-Language", "ja,en;q=0.8");
+
+        var raceId = (rawRaceId ?? "").Trim();
+        try
+        {
+            if (!string.IsNullOrEmpty(raceId))
+            {
+                var oreproRaceId = raceId.Length == 16 ? raceId[..4] + raceId[8..] : raceId;
+                var url = $"{ShutubaUrl}?race_id={Uri.EscapeDataString(oreproRaceId)}";
+                using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                req.Headers.Referrer = new Uri(BetReferer);
+                using var resp = await http.SendAsync(req, ct);
+                var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+                var charset = (resp.Content.Headers.ContentType?.CharSet ?? "").Trim().Trim('"');
+                Encoding enc;
+                try { enc = string.IsNullOrEmpty(charset) ? Encoding.UTF8 : Encoding.GetEncoding(charset); }
+                catch { enc = Encoding.UTF8; }
+                var html = enc.GetString(bytes);
+
+                return ContainsLoggedInMarker(html)
+                    ? Result("ok", true, "OrePro session is logged in — bets can be placed.")
+                    : Result("expired", false, "OrePro session is NOT logged in (the cookie looks expired). Re-copy the Cookie header from a fresh OrePro login into Settings → OrePro.");
+            }
+
+            // No race supplied — probe the bet race-list page. Logged-in pages link to shutuba
+            // races; the login redirect does not.
+            using var lreq = new HttpRequestMessage(HttpMethod.Get, BetReferer);
+            using var lresp = await http.SendAsync(lreq, ct);
+            var body = await lresp.Content.ReadAsStringAsync(ct);
+            var loggedIn = body.Contains("shutuba.html?race_id=", StringComparison.OrdinalIgnoreCase)
+                           || body.Contains("ログアウト", StringComparison.Ordinal)
+                           || body.Contains("/mydata/", StringComparison.OrdinalIgnoreCase);
+            return loggedIn
+                ? Result("ok", true, "OrePro session is logged in.")
+                : Result("expired", false, "Could not confirm an OrePro login from the race-list page (cookie may be expired, or no race card is open today). Open a race day and test again, or re-paste the cookie.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "OrePro cookie check failed");
+            return Result("error", false, $"Cookie check failed to reach OrePro: {ex.Message}");
+        }
+    }
+
+    private static JsonElement Result(string status, bool loggedIn, string message)
+    {
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(new { status, loggedIn, message }));
+        return doc.RootElement.Clone();
+    }
+
     // ─── HTML parsing ──────────────────────────────────────────────────────────
 
     private static readonly Regex RowRegex = new(

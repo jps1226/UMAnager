@@ -408,11 +408,23 @@ public sealed class NexusPipeServer : BackgroundService
                                 var svc = scope.ServiceProvider.GetRequiredService<Services.Parsing.DifnRecordParsingService>();
                                 await svc.ParseAllRecordsAsync(CancellationToken.None);
 
-                                if (raceIds.Count > 0)
+                                // RA ∪ HR raceIds: finish positions arrive in the RA batch, payouts in
+                                // the separate HR batch a moment later.
+                                var recapIds = raceIds.Union(hrRaceIds).ToList();
+
+                                // Broadcast ResultsUpdated on EITHER batch — including the HR/payout-only
+                                // batch (when raceIds is empty because RA was already processed). This is
+                                // what makes the TV win/net pill settle the instant payouts land instead of
+                                // waiting for the next 60s poll (the frontend scheduleResultsSettleReload was
+                                // the stop-gap for the old RA-only gate).
+                                if (recapIds.Count > 0)
                                 {
                                     var broadcaster = scope.ServiceProvider.GetRequiredService<LiveBroadcastService>();
-                                    await broadcaster.BroadcastResultsAsync(raceIds, CancellationToken.None);
+                                    await broadcaster.BroadcastResultsAsync(recapIds, CancellationToken.None);
+                                }
 
+                                if (raceIds.Count > 0)
+                                {
                                     // Evaluate marks against the freshly-parsed finishes and ping
                                     // Discord on any newly-won bets. Idempotent — already-notified
                                     // races are tracked in app_state.
@@ -422,10 +434,8 @@ public sealed class NexusPipeServer : BackgroundService
 
                                 // Phase 16: once a JST race-day's results are fully in, fire a
                                 // single Discord recap with hit counts + estimated ¥ won.
-                                // Uses RA ∪ HR raceIds: RA records carry finish positions, HR records
-                                // carry payouts (ResultsJson). Both sets are needed to satisfy the
-                                // ≥80%-finished + all-ResultsJson gate in DayRecapNotifier.
-                                var recapIds = raceIds.Union(hrRaceIds).ToList();
+                                // Both RA (finishes) and HR (payouts/ResultsJson) sets are needed to
+                                // satisfy the ≥80%-finished + all-ResultsJson gate in DayRecapNotifier.
                                 if (recapIds.Count > 0)
                                 {
                                     var dayRecap = scope.ServiceProvider.GetRequiredService<Services.DayRecapNotifier>();

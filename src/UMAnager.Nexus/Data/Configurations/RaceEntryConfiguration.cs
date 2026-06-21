@@ -44,6 +44,9 @@ public class RaceEntryConfiguration : IEntityTypeConfiguration<RaceEntry>
 
         builder.Property(e => e.FinishPos);
 
+        builder.Property(e => e.Scratched)
+            .HasDefaultValue(false);
+
         builder.Property(e => e.PerformanceJson)
             .HasColumnType("jsonb");
 

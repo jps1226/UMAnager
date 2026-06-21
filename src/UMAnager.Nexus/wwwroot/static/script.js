@@ -270,6 +270,34 @@ const BET_PRESETS = {
 };
 const DEFAULT_PRESET = 'balanced';
 
+// Phase 35: a special DAY-preset choice — "let the engine pick the bet type per race from its field
+// shape" (see SHAPE_TO_PRESET). It's not a real BET_PRESETS bundle, so the day composition stores a
+// SENTINEL (presetId = this id; lines are a harmless placeholder so it persists/normalizes). The
+// signal is presetId === AUTO_PER_RACE_ID; resolveBetComposition maps it to the per-race preset.
+const AUTO_PER_RACE_ID = 'auto_per_race';
+function autoPerRaceDayComposition() {
+    return { presetId: AUTO_PER_RACE_ID, lines: BET_PRESETS[DEFAULT_PRESET].lines.map(l => ({ type: l.type, yen: l.yen })) };
+}
+function isAutoPerRaceComposition(comp) { return comp?.presetId === AUTO_PER_RACE_ID; }
+
+// Phase 35: SMALL-FIELD TOKEN. Auto mode normally abstains on fields under MIN_FIELD (too few horses
+// to model). Operator pref (2026-06-20): don't sit those out — throw a small 2-mark bet on the top 2
+// just to have action. It's a tiny Quinella+Wide (馬連+ワイド) on the pair at a token stake. Not a
+// real BET_PRESETS bundle (so it never appears in the day dropdown); identified by presetId.
+const SMALL_FIELD_TOKEN_ID = 'small_token';
+const SMALL_FIELD_TOKEN_STAKE = 2000;  // ¥ total — a token "get something on there" bet
+function smallFieldTokenComposition() {
+    return { presetId: SMALL_FIELD_TOKEN_ID, lines: [
+        { type: 'quinella_box', yen: Math.round(SMALL_FIELD_TOKEN_STAKE / 2) },
+        { type: 'wide_box',     yen: Math.round(SMALL_FIELD_TOKEN_STAKE / 2) },
+    ] };
+}
+function isSmallFieldTokenComposition(comp) { return comp?.presetId === SMALL_FIELD_TOKEN_ID; }
+// Map an auto-chosen preset id → its composition (handles the non-preset small-field token sentinel).
+function compositionForAutoPreset(presetId) {
+    return presetId === SMALL_FIELD_TOKEN_ID ? smallFieldTokenComposition() : compositionFromPreset(presetId);
+}
+
 // Phase 34 — per-preset COUNT BAND + selection TILT (design locked 2026-06-19).
 // The active bet preset sets how MANY marks the engine suggests (a hard min–max band = a fence)
 // and a small ranking lean for the SUPPORTING marks (the ◎ banker never moves):
@@ -325,6 +353,8 @@ function compositionPresetId(comp) {
     return 'custom';
 }
 function compositionLabel(comp) {
+    if (isAutoPerRaceComposition(comp)) return '🧪 Auto (per race)';
+    if (isSmallFieldTokenComposition(comp)) return 'Small-field 2-bet (Q+Wide)';
     const id = compositionPresetId(comp);
     return id === 'custom' ? 'Custom' : (BET_PRESETS[id]?.label || 'Custom');
 }
@@ -381,7 +411,17 @@ function getRaceBetCompositionOverride(rid) {
 // The composition that ACTUALLY applies to a race for live pricing/display:
 //   per-race override → that race's day setting → default preset.
 function resolveBetComposition(rid) {
-    return getRaceBetCompositionOverride(rid) || getDayBetComposition(globalRaceInfo[rid]?.clean_date || '');
+    const override = getRaceBetCompositionOverride(rid);
+    if (override) return override;
+    const dayComp = getDayBetComposition(globalRaceInfo[rid]?.clean_date || '');
+    // Phase 35: the "Auto (per race)" day choice has no fixed lines — resolve it to the bet preset
+    // the engine picks for THIS race's field shape (falls back to the default if there's no read yet,
+    // e.g. pre-odds). Everything downstream (pricing, preview, placement, freeze) flows through here.
+    if (isAutoPerRaceComposition(dayComp)) {
+        const pid = autoBetTypePresetForRace(rid);
+        return pid ? compositionForAutoPreset(pid) : compositionFromPreset(DEFAULT_PRESET);
+    }
+    return dayComp;
 }
 
 // ── Day bet composer (main toolbar) ──────────────────────────────────────────
@@ -410,6 +450,7 @@ function initDayBetStructureSelector() {
     if (!sel || sel.dataset.populated === '1') return;
     sel.innerHTML = Object.entries(BET_PRESETS)
         .map(([k, v]) => `<option value="${k}">${escapeHtml(v.label)}</option>`).join('')
+        + `<option value="${AUTO_PER_RACE_ID}">🧪 Auto — engine picks per race</option>`
         + `<option value="custom">Custom…</option>`;
     sel.dataset.populated = '1';
 }
@@ -477,7 +518,7 @@ function syncDayBetStructureSelector() {
     const sel = document.getElementById('day-bet-structure');
     if (!sel) return;
     const comp = getActiveDayComposition();
-    sel.value = compositionPresetId(comp);
+    sel.value = isAutoPerRaceComposition(comp) ? AUTO_PER_RACE_ID : compositionPresetId(comp);
     renderDayComposerPanel();
 }
 
@@ -487,6 +528,14 @@ function renderDayComposerPanel() {
     const el = document.getElementById('day-bet-structure-desc');
     if (!el) return;
     const comp = getActiveDayComposition();
+    // Auto (per race) has no fixed lines to edit — explain what it does instead of the line composer.
+    if (isAutoPerRaceComposition(comp)) {
+        el.innerHTML = `<div class="day-bet-summary" style="line-height:1.4;">🧪 <b>Engine picks the bet type for each race</b> from its field shape — `
+            + `lone favorite → Win+Place · two clear → Quinella+Wide · clear ◎ + open pack → Nagashi · `
+            + `three/packed → Trio chase · flat → Wide-safe. Your hand-marked/locked races and any per-race override always win.</div>`;
+        el.style.display = '';
+        return;
+    }
     const summary = comp.lines.map(l => `${BET_LINE_TYPES[l.type]?.short || l.type} ¥${l.yen.toLocaleString()}`).join('  +  ');
     const toggle = `<a class="composer-toggle" onclick="toggleDayComposer()">${dayComposerOpen ? '▾ hide lines' : '▸ edit lines'}</a>`;
     let html = `<div class="day-bet-summary">${escapeHtml(summary)} ${toggle}</div>`;
@@ -501,7 +550,10 @@ function toggleDayComposer() { dayComposerOpen = !dayComposerOpen; renderDayComp
 async function onDayBetStructureChange(presetId) {
     const date = currentActiveDate;
     if (!date) return;
-    let comp = presetId === 'custom' ? { ...getActiveDayComposition(), presetId: 'custom' } : compositionFromPreset(presetId);
+    let comp;
+    if (presetId === AUTO_PER_RACE_ID)   comp = autoPerRaceDayComposition();
+    else if (presetId === 'custom')      comp = { ...getActiveDayComposition(), presetId: 'custom' };
+    else                                 comp = compositionFromPreset(presetId);
     await saveDayBetComposition(date, comp);
     renderDayComposerPanel();
     repriceDayRaces(date);
@@ -536,7 +588,7 @@ function refreshDayBetStructure() {
     if (!date) return;
     loadDayBetComposition(date).then(loaded => {
         syncDayBetStructureSelector();
-        if (compositionPresetId(loaded) !== DEFAULT_PRESET || loaded.presetId === 'custom') repriceDayRaces(date);
+        if (compositionPresetId(loaded) !== DEFAULT_PRESET || loaded.presetId === 'custom' || isAutoPerRaceComposition(loaded)) repriceDayRaces(date);
     });
 }
 
@@ -555,7 +607,9 @@ function buildRaceBetOverrideHtml(rid, timeline) {
              + `<a class="race-bet-override-link" onclick="openRaceBetOverride('${safeRid}')" title="Override the day's bet for this race only (currently: ${escapeHtml(dayLabel)})">+ bet override</a>`
              + `</div>`;
     }
-    const comp = override || getDayBetComposition(globalRaceInfo[rid]?.clean_date || '');
+    // Pre-fill an opened (not-yet-saved) override from the RESOLVED comp so an "Auto" day pre-fills
+    // with the race's shape-chosen preset (real lines), not the auto sentinel.
+    const comp = override || resolveBetComposition(rid);
     const badge = override ? `<span class="race-bet-override-badge">override</span>` : '';
     const reset = override
         ? `<a class="race-bet-override-clear" onclick="clearRaceBetOverride('${safeRid}')" title="Drop the override; follow the day default">✕ use day default</a>`
@@ -624,7 +678,7 @@ function getAbstainBackupPreset() {
 }
 function isAutoBackupOverride(rid) { return globalRaceMeta[rid]?.betCompositionAutoBackup === true; }
 function setAutoBackupOverride(rid, presetId) {
-    globalRaceMeta[rid] = { ...(globalRaceMeta[rid] || {}), betComposition: compositionFromPreset(presetId), betCompositionAutoBackup: true };
+    globalRaceMeta[rid] = { ...(globalRaceMeta[rid] || {}), betComposition: compositionForAutoPreset(presetId), betCompositionAutoBackup: true };
 }
 function clearAutoBackupOverride(rid) {
     const m = globalRaceMeta[rid];
@@ -2451,6 +2505,17 @@ function setSort(r_id, col) {
 // Generates the inner rows (Pulled out of loadRaces to be reusable)
 function buildTableBody(r_id, entries) {
     let rowsHtml = "";
+    // Engine-disagreement annotation: ONLY on races YOU hand-marked (raceHasUserMarks) so an
+    // auto-picked race never shows "engine disagrees with itself". Compares your marks against the
+    // engine's mark-blind top-4 power ranking (◎〇▲△); a small ⚙ chip flags each row that differs.
+    let showEngineDiff = false;
+    const engineMarkByHorse = {};
+    try {
+        if ((appConfig.ui?.showEngineDisagreement ?? true) && raceHasUserMarks(r_id)) {
+            showEngineDiff = true;
+            getUnconditionalAutoBetRankingsForRace(r_id).forEach(p => { engineMarkByHorse[p.h_id] = p.symbol; });
+        }
+    } catch (_) { showEngineDiff = false; }
     entries.forEach(row => {
         const h_id = String(row.Horse_ID).split('.')[0];
         const key = `${r_id}_${h_id}`;
@@ -2515,13 +2580,30 @@ function buildTableBody(r_id, entries) {
         
         // NEW: Added id="row-${r_id}-${h_id}" to the <tr>
         const cellHtmlByCol = {
-            Shirushi: `<td style="min-width: 170px;">
-                ${createMarkBtn(r_id, h_id, '◎', key)}
+            Shirushi: (() => {
+                const btns = `${createMarkBtn(r_id, h_id, '◎', key)}
                 ${createMarkBtn(r_id, h_id, '〇', key)}
                 ${createMarkBtn(r_id, h_id, '▲', key)}
                 ${createMarkBtn(r_id, h_id, '△', key)}
-                ${createMarkBtn(r_id, h_id, 'X', key)}
-            </td>`,
+                ${createMarkBtn(r_id, h_id, 'X', key)}`;
+                let diffChip = '';
+                if (showEngineDiff && globalMarks[key] !== 'X') {
+                    const you = globalMarks[key] || '';
+                    const eng = engineMarkByHorse[h_id] || '';
+                    if (you !== eng && (you || eng)) {
+                        const engTxt = eng || '–';
+                        const title = (you && eng)
+                            ? `You marked ${you} here; the engine would mark this horse ${eng}.`
+                            : (eng
+                                ? `The engine would mark this horse ${eng} — you haven't marked it.`
+                                : `You marked ${you} here; the engine wouldn't mark this horse.`);
+                        diffChip = ` <span class="engine-diff-chip" title="${escapeHtml(title)}" `
+                            + `style="display:inline-block;font-size:0.7em;font-weight:700;margin-left:4px;padding:0 5px;border-radius:8px;`
+                            + `background:#3a3320;color:#ffe9b0;border:1px solid #8a7430;vertical-align:middle;white-space:nowrap;">⚙ ${escapeHtml(engTxt)}</span>`;
+                    }
+                }
+                return `<td style="min-width: 170px;">${btns}${diffChip}</td>`;
+            })(),
             BK: (() => {
                 const bkNum = parseInt(row.BK, 10);
                 const bkCls = (Number.isFinite(bkNum) && bkNum >= 1 && bkNum <= 8) ? `bk-color-${bkNum}` : '';
@@ -3903,8 +3985,22 @@ function getEngineMarkPlanForRace(r_id, opts = {}) {
         };
     }).sort((a, b) => b.power - a.power);
 
-    // Abstention: tiny field — too much variance to bet into.
-    if (fieldSize < T.MIN_FIELD) return empty('small-field');
+    // Abstention: tiny field — too much variance to bet into. EXCEPTION (operator pref): when the
+    // resolved bet type is the small-field TOKEN (set by the Auto per-race chooser), don't sit it out —
+    // throw a minimal 2-mark bet on the top 2 by power, provided there are ≥2 runners and odds to rank
+    // them. Otherwise abstain as before.
+    if (fieldSize < T.MIN_FIELD) {
+        let smallComp = opts.compositionOverride;
+        if (smallComp === undefined) { try { smallComp = resolveBetComposition(r_id); } catch (_) { smallComp = null; } }
+        const smallHasOdds = scored.some(e => e.odds !== null);
+        if (isSmallFieldTokenComposition(smallComp) && fieldSize >= 2 && smallHasOdds) {
+            const syms = ['◎', '〇'];
+            const assignments = scored.slice(0, 2).map((e, i) => ({ h_id: e.h_id, symbol: syms[i] }));
+            return { count: 2, assignments, reason: 'small-field-token', shape: 'small-field-token',
+                     detail: { smallField: true, fieldSize } };
+        }
+        return empty('small-field');
+    }
 
     // ── Shape read from the top-6 power gaps ─────────────────────────────────
     const K = Math.min(6, scored.length);
@@ -4016,11 +4112,54 @@ function getEngineMarkPlanForRace(r_id, opts = {}) {
 // abstain-backup preset rescues only these — shared by the live preview and the Auto Bet Day sweep.
 const ENGINE_PRESET_FIT_ABSTAINS = new Set(['nagashi-no-axis', 'below-preset-floor']);
 
+// ── Phase 35: per-race bet-type auto-selection ────────────────────────────────
+// Chosen as a DAY preset ("🧪 Auto — engine picks per race" in the day dropdown). When active it
+// REPLACES the day-wide preset: each race's bet TYPE is chosen from its field SHAPE, then the engine
+// sizes the marks for that preset. Reuses the abstain-backup's tagged-override machinery
+// (setAutoBackupOverride) so it self-corrects each sweep and never clobbers a manual override or a
+// locked race. Manual/locked are skipped upstream.
+const SHAPE_TO_PRESET = {
+    'lone-favorite': 'win_place',     // one dominant horse → back the one
+    'two-clear':     'quinella_wide', // two clear of the rest → the pair
+    'standout+pack': 'nagashi_chase', // clear ◎, open chasers → axis + spread
+    'tight-top3':    'trio_chase',    // three clustered on top → trio box + wide net
+    'tight-pack':    'trio_chase',    // packed, no clean break → chase the cluster
+    'wide-open':     'wide_safe',     // flat / no read → the safest net
+};
+// On when the race's DAY preset is the "Auto (per race)" choice (per-date, from the day composition).
+function isAutoBetTypePerRace(rid) {
+    const date = (rid && globalRaceInfo[rid]?.clean_date) || currentActiveDate || '';
+    return isAutoPerRaceComposition(getDayBetComposition(date));
+}
+// The presetId the per-race engine would choose for this race, or null (mode off / no usable read).
+// Reads the field SHAPE via a neutral probe (balanced never preset-abstains on the six field shapes)
+// so the choice doesn't depend on whichever day preset is active; genuine skips (tiny field / no
+// odds / empty card) leave shape un-mapped → null, so those races stay unbet as before.
+function autoBetTypePresetForRace(r_id) {
+    if (!isAutoBetTypePerRace(r_id)) return null;
+    // A MANUAL per-race bet override always wins — never replace the operator's explicit choice.
+    // (Engine-created overrides carry the betCompositionAutoBackup tag; those are re-decided freely.)
+    if (getRaceBetCompositionOverride(r_id) && !isAutoBackupOverride(r_id)) return null;
+    const probe = getEngineMarkPlanForRace(r_id, { compositionOverride: compositionFromPreset('balanced') });
+    // Small field: don't sit it out — throw the token 2-mark Quinella+Wide on the top 2 (operator pref).
+    // The engine plan still enforces ≥2 runners + odds; if it can't form, it abstains and the sweep skips.
+    if (probe.shape === 'small-field') return SMALL_FIELD_TOKEN_ID;
+    return SHAPE_TO_PRESET[probe.shape] || null;
+}
+
 // Live preview of the engine plan WITH the abstain-backup preset applied transiently (no committed
 // per-race override). If the active preset abstains because the bet type doesn't fit, and a backup
 // preset is set + would produce a pick, returns the BACKUP plan flagged viaBackup. Lets the live
 // highlight overlay + abstain pill SHOW the backup before the operator runs Auto Bet Day.
 function getLiveEnginePlanWithBackup(r_id) {
+    // Phase 35: experimental per-race mode REPLACES the day preset — plan with the shape-chosen
+    // preset so the highlight overlay + pill preview the bet type each race will actually get.
+    const perRaceId = autoBetTypePresetForRace(r_id);
+    if (perRaceId) {
+        const pplan = getEngineMarkPlanForRace(r_id, { compositionOverride: compositionForAutoPreset(perRaceId) });
+        if (pplan.count > 0) return { plan: pplan, viaPerRace: true, perRaceId };
+        return { plan: pplan, viaBackup: false };  // genuine skip → no preview pick
+    }
     const plan = getEngineMarkPlanForRace(r_id);
     if (plan.count > 0) return { plan, viaBackup: false };
     const backup = getAbstainBackupPreset();
@@ -4253,16 +4392,35 @@ function updateEngineAbstainBadges() {
         const existing = meta.querySelector('.engine-abstain-badge, .engine-backup-badge');
         let html = '';
         if (isAutoBackupOverride(r_id)) {
-            // Rescued by Auto Bet Day: the main bet type didn't fit, so it was bet with the backup.
             const label = compositionLabel(getRaceBetCompositionOverride(r_id));
-            const title = `Auto Bet Day rescued this race: your main bet type didn't fit, so it was bet ` +
-                          `with "${label}" instead. Clear the per-race bet override to undo.`;
-            html = ` <span class="engine-backup-badge" title="${escapeHtml(title)}" ` +
-                `style="display:inline-block;font-size:0.72em;font-weight:700;padding:1px 7px;margin-left:6px;border-radius:10px;` +
-                `background:#1f3a5a;color:#cfe6ff;border:1px solid #2f6fb0;vertical-align:middle;">↩ backup: ${escapeHtml(label)}</span>`;
+            if (isAutoBetTypePerRace(r_id)) {
+                // Phase 35: this race's bet type was auto-chosen from its field shape (per-race mode).
+                const title = `Auto bet-type mode chose "${label}" for this race from its field shape. ` +
+                              `Clear the per-race bet override to undo.`;
+                html = ` <span class="engine-backup-badge" title="${escapeHtml(title)}" ` +
+                    `style="display:inline-block;font-size:0.72em;font-weight:700;padding:1px 7px;margin-left:6px;border-radius:10px;` +
+                    `background:#14361f;color:#b9f0c9;border:1px solid #2f8f57;vertical-align:middle;">🧪 auto: ${escapeHtml(label)}</span>`;
+            } else {
+                // Rescued by Auto Bet Day: the main bet type didn't fit, so it was bet with the backup.
+                const title = `Auto Bet Day rescued this race: your main bet type didn't fit, so it was bet ` +
+                              `with "${label}" instead. Clear the per-race bet override to undo.`;
+                html = ` <span class="engine-backup-badge" title="${escapeHtml(title)}" ` +
+                    `style="display:inline-block;font-size:0.72em;font-weight:700;padding:1px 7px;margin-left:6px;border-radius:10px;` +
+                    `background:#1f3a5a;color:#cfe6ff;border:1px solid #2f6fb0;vertical-align:middle;">↩ backup: ${escapeHtml(label)}</span>`;
+            }
         } else if (!meta.querySelector('.wont-place-badge')) {
             const live = getLiveEnginePlanWithBackup(r_id);
-            if (live.viaBackup) {
+            if (live.viaPerRace) {
+                // Phase 35 preview: per-race mode WILL bet this race as the shape-chosen type on the next run.
+                const label = live.perRaceId === SMALL_FIELD_TOKEN_ID
+                    ? 'Small-field 2-bet (Q+Wide)'
+                    : (BET_PRESETS[live.perRaceId]?.label || 'auto');
+                const title = `Auto bet-type mode will bet this race as "${label}" (chosen from its field shape) ` +
+                              `when you run Auto Bet Day. (Preview — not committed yet.)`;
+                html = ` <span class="engine-backup-badge" title="${escapeHtml(title)}" ` +
+                    `style="display:inline-block;font-size:0.72em;font-weight:700;padding:1px 7px;margin-left:6px;border-radius:10px;` +
+                    `background:#14361f;color:#b9f0c9;border:1px solid #2f8f57;vertical-align:middle;">🧪 auto: ${escapeHtml(label)} (preview)</span>`;
+            } else if (live.viaBackup) {
                 // Preview: main preset abstained, but the backup preset would bet this race.
                 const label = BET_PRESETS[live.backupId]?.label || 'backup';
                 const title = `Your main bet type doesn't fit this race. The backup preset "${label}" will be ` +
@@ -6379,11 +6537,58 @@ function nCk(n, k) { // combinations
 // so amounts are real ¥100 OrePro units. A line is dropped if the mark count can't form it
 // (e.g. trio with 2 marks) or it's underfunded (< ¥100/combo). Each built line keeps a
 // `_specIndex` back-pointer so the composer can show its 点数/¥ readout. Returns { lines, staked }.
+// OrePro-faithful pricing for the DEFAULT easy-mode template (単勝◎ + 馬連BOX + 3連複BOX, 50/30/20).
+// OrePro auto-fires this when marks are sent, and it prices it differently from our generic uniform-
+// spend redistributor: the WIN line is a fixed anchor (the remainder), and when the 3連複 can't form
+// (n=2) its budget cascades to the 馬連 (→ 50/50), NOT proportionally onto the 単勝. This MIRRORS
+// TemplateBetEvaluator.BuildLines(Default) exactly, so the lines we FREEZE at apply match what OrePro
+// actually placed — keeping the recap reconciled to the yen. (T2-1: JS used to diverge here, pricing
+// a 2-mark default as 6300/3700; C# already priced it 5000/5000 to match OrePro. JS now agrees.)
+function buildOreProDefaultLines(comp, runners, honmei, hasHonmei) {
+    const round100 = x => Math.max(100, Math.round((Number(x) || 0) / 100) * 100);
+    const n = (runners || []).length;
+    const yenOf = (type) => { const l = (comp?.lines || []).find(x => x.type === type); return l ? Math.max(0, parseInt(l.yen, 10) || 0) : 0; };
+    const total = (comp?.lines || []).reduce((s, l) => s + Math.max(0, parseInt(l.yen, 10) || 0), 0);
+    if (total <= 0) return { lines: [], staked: 0 };
+    const quinNom = yenOf('quinella_box');
+    const trioNom = yenOf('trio_box');
+    const hasTrio = n >= 3 && trioNom > 0;
+
+    const out = [];
+    // Box lines priced from their shares (n=2: the 馬連 absorbs the dropped 3連複 budget); the 単勝
+    // then takes the remainder so the placed total lands EXACTLY on the intended ¥ (mirrors C#).
+    if (n >= 2 && quinNom > 0) {
+        const c = nCk(n, 2);
+        const lineTotal = quinNom + (hasTrio ? 0 : trioNom);
+        const per = c > 0 ? round100(lineTotal / c) : 0;
+        if (per >= 100) out.push({ ticket: BET_LINE_TYPES.quinella_box.ticket, method: BET_LINE_TYPES.quinella_box.method, label: BET_LINE_TYPES.quinella_box.jpLabel, horses: runners.slice(), comboCount: c, stakePerCombo: per, _specIndex: 1 });
+    }
+    if (hasTrio) {
+        const c = nCk(n, 3);
+        const per = c > 0 ? round100(trioNom / c) : 0;
+        if (per >= 100) out.push({ ticket: BET_LINE_TYPES.trio_box.ticket, method: BET_LINE_TYPES.trio_box.method, label: BET_LINE_TYPES.trio_box.jpLabel, horses: runners.slice(), comboCount: c, stakePerCombo: per, _specIndex: 2 });
+    }
+    if (hasHonmei) {
+        const others = out.reduce((s, l) => s + l.stakePerCombo * l.comboCount, 0);
+        const winPer = total - others; // fixed anchor = exact remainder
+        if (winPer >= 100) out.unshift({ ticket: BET_LINE_TYPES.win.ticket, method: BET_LINE_TYPES.win.method, label: BET_LINE_TYPES.win.jpLabel, horses: [honmei], comboCount: 1, stakePerCombo: winPer, _specIndex: 0 });
+    }
+    const staked = out.reduce((s, l) => s + l.stakePerCombo * l.comboCount, 0);
+    return { lines: out, staked };
+}
+
 function buildLinesFromComposition(comp, runners) {
     const floor100 = x => Math.floor((Number(x) || 0) / 100) * 100;
     const n = (runners || []).length;
     const honmei = runners.find(r => r.symbol === '◎') || runners[0] || null;
     const hasHonmei = !!(honmei && honmei.pp);
+
+    // The OrePro easy-mode DEFAULT prices via its own faithful allocator (mirrors C#); every other
+    // composition is a CUSTOM bet we place verbatim, so the generic uniform-spend redistribution below
+    // is correct for those (OrePro places exactly the lines we send). Only the default needs mirroring.
+    if (compositionPresetId(comp) === DEFAULT_PRESET) {
+        return buildOreProDefaultLines(comp, runners, honmei, hasHonmei);
+    }
 
     // UNIFORM-SPEND model (operator pref 2026-06-12): a composition always bets its FULL intended
     // total (Σ line ¥, e.g. ¥10,000) regardless of how many marks the race has. Lines that can't
@@ -6453,10 +6658,10 @@ function buildRaceBetLines(race) {
     // ticket's 点数 and stake — e.g. a 4-mark 3連複 box with one 除外 collapses to a single
     // combo (¥400 → ¥100, as seen on Kyoto R9 2026-05-31). Drop them so the synthesized
     // ticket matches what actually fires. Reads the authoritative entry.Scratched flag
-    // (backend-set from the SE 異常区分 code, removal codes 取消=1/除外=2 only). The field is
-    // absent until the backend ships it → this is a no-op today, no regression.
-    // NOTE: 中止 (raced but stopped, code 3) is NOT a scratch — that ticket stands and loses
-    // with full combos — so the backend must leave Scratched=false for it.
+    // (backend-set from the SE 異常区分 code; removal codes 取消=1 / 除外=2 / 競走除外=3 per the
+    // JRA-VAN spec). Only populates once results settle, so this is a no-op pre-race.
+    // NOTE: 中止 (raced but stopped) is code 4, NOT a scratch — that ticket stands and loses with
+    // full combos — so the backend leaves Scratched=false for it.
     const scratchedHorseIds = new Set(
         (Array.isArray(race?.entries) ? race.entries : [])
             .filter(row => row?.Scratched === true)
@@ -6786,6 +6991,34 @@ function buildDayTotalNetHtml(date) {
         <span class="voting-day-total-detail">won ¥${Math.round(won).toLocaleString()} − spent ¥${Math.round(spent).toLocaleString()}</span>
         <span class="voting-day-total-detail">Hit ${hits}/${scored} (${hitPct}%)</span>
     `;
+}
+
+// Voting tab — bet-type breakdown. Tallies how many of the day's marked races resolve to each bet
+// preset (the per-race type in Auto mode, or the day preset otherwise) so the operator can see the
+// spread at a glance — especially useful under 🧪 Auto where every race can be a different type.
+function buildBetTypeBreakdownHtml(date) {
+    const races = globalRacesByDate[date] || [];
+    if (!races.length) return '';
+    const counts = {};
+    let total = 0, placed = 0;
+    races.forEach(race => {
+        const rid = String(race?.info?.race_id || '').trim();
+        if (!rid || countRaceMarks(rid) === 0) return;
+        let label = 'Custom';
+        try { label = compositionLabel(resolveBetComposition(rid)); } catch (_) {}
+        counts[label] = (counts[label] || 0) + 1;
+        total += 1;
+        if (globalOreProApplyState?.[rid]?.submitted) placed += 1;
+    });
+    if (!total) return '';
+    const chips = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([label, n]) =>
+        `<span style="display:inline-flex;align-items:center;gap:5px;background:#1b2230;border:1px solid #2a3850;`
+        + `border-radius:12px;padding:2px 10px;font-size:12px;color:#cdd9e8;white-space:nowrap;">`
+        + `<b style="color:#7fd1a0;">${n}×</b> ${escapeHtml(label)}</span>`
+    ).join('');
+    return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 2px;">`
+        + `<span style="font-size:12px;color:#9fb2c8;font-weight:600;">Bet types — ${total} marked`
+        + `${placed ? `, ${placed} placed` : ''}:</span>${chips}</div>`;
 }
 
 function buildRaceWinBadgesHtml(race) {
@@ -7935,6 +8168,7 @@ async function autoBetActiveDay() {
         let abstained = 0;
         let errored = 0;
         let rescued = 0;
+        let typed = 0; // Phase 35: races whose bet type was auto-chosen per-race (experimental mode)
         // Phase 34: races the day preset can't fit get re-bet with the backup preset (if set). Only
         // these "bet type doesn't fit" abstains are rescued — NOT genuinely-unbettable ones (tiny
         // field / no odds yet), which stay skipped.
@@ -7955,12 +8189,21 @@ async function autoBetActiveDay() {
             // Isolate each race: a throw on ONE race must not abort the whole day's sweep
             // (that was the "Auto Bet Day set zero marks" regression — one bad race nuked all).
             try {
-                // Self-correct: drop any PRIOR auto-backup rescue so this race re-decides from the
-                // main preset first (a clear favorite may have emerged since the last run).
+                // Self-correct: drop any PRIOR auto override so this race re-decides fresh each run
+                // (a clear favorite may have emerged since the last sweep).
                 clearAutoBackupOverride(r_id);
+                // Phase 35: experimental per-race bet-type mode REPLACES the day preset — stamp the
+                // shape-chosen preset BEFORE applying, so both the marks and the OrePro apply path
+                // use that race's own bet type. Genuine skips (tiny field / no odds) → no preset.
+                const perRaceId = autoBetTypePresetForRace(r_id);
+                if (perRaceId) setAutoBackupOverride(r_id, perRaceId);
                 let result = applyAutoPickSelectionsToRace(r_id, null);
-                // Backup rescue: the main preset doesn't FIT this race → re-bet with the backup.
-                if (result.count === 0 && backupPreset !== 'none' && ENGINE_PRESET_FIT_ABSTAINS.has(result.shape)) {
+                if (perRaceId) {
+                    if (result.count > 0) { typed += 1; }
+                    else { clearAutoBackupOverride(r_id); } // genuine skip → don't leave a stale tag
+                } else if (result.count === 0 && backupPreset !== 'none' && ENGINE_PRESET_FIT_ABSTAINS.has(result.shape)) {
+                    // Legacy abstain-backup rescue (per-race mode OFF): the day preset doesn't FIT
+                    // this race → re-bet with the backup preset.
                     setAutoBackupOverride(r_id, backupPreset);
                     const r2 = applyAutoPickSelectionsToRace(r_id, null);
                     if (r2.count > 0) { result = r2; rescued += 1; }
@@ -8002,13 +8245,14 @@ async function autoBetActiveDay() {
         const lockNote = skippedLocked ? ` Skipped ${skippedLocked} locked race(s).` : '';
         const manualNote = skippedManual ? ` Left ${skippedManual} hand-marked race(s) untouched.` : '';
         const abstainNote = abstained ? ` Engine abstained on ${abstained} race(s) (no good bet at Risk ${riskVal}).` : '';
+        const typedNote = typed ? ` 🧪 Auto-chose the bet type per race on ${typed} race(s).` : '';
         const errorNote = errored ? ` ⚠ ${errored} race(s) errored (see console).` : '';
         if (!changedRaceIds.length) {
-            setOreProSessionStatus(`Auto-pick finished but produced no new marks for ${date}.${abstainNote}${manualNote}${lockNote}${errorNote}`, 'warn');
+            setOreProSessionStatus(`Auto-pick finished but produced no new marks for ${date}.${abstainNote}${typedNote}${manualNote}${lockNote}${errorNote}`, 'warn');
             return;
         }
         setOreProSessionStatus(
-            `Auto-picked ${changedRaceIds.length} race(s) for ${date} at Risk ${riskVal}. Click Apply Votes to send them to OrePro.${abstainNote}${manualNote}${lockNote}${errorNote}`,
+            `Auto-picked ${changedRaceIds.length} race(s) for ${date} at Risk ${riskVal}. Click Apply Votes to send them to OrePro.${abstainNote}${typedNote}${manualNote}${lockNote}${errorNote}`,
             'info'
         );
     } finally {
@@ -8323,8 +8567,91 @@ async function placeCustomBetNoSubmit(event, raceId) {
 function looksLikeExpiredOreProSession(result, data) {
     const status = String(result?.status || data?.status || '').trim().toLowerCase();
     if (status === 'expired') return true; // explicit server signal (when backend hardening ships)
-    const msg = String(result?.message || data?.message || '').toLowerCase();
-    return msg.includes('hasloginform=true') || msg.includes('session expired') || msg.includes('cookie has expired');
+    // Scan EVERY field that can carry OrePro's "you're not logged in" signal so the bulk run STOPS on
+    // the first expired-session failure instead of grinding the rest (the 2026-06-21 partial-day bug).
+    // The custom-bet path returns the raw add/cart bodies (addResponse/cartRaw) — a dead cookie shows
+    // up there as {"status":"NG","reason":"not login"} or a login redirect; the shutuba step returns an
+    // "is likely expired" message; the marks path uses hasLoginForm. Catch them all.
+    const haystack = [
+        result?.message, result?.reason, data?.message, data?.reason,
+        data?.addResponse, data?.cartRaw, data?.body,
+    ].map(s => String(s || '').toLowerCase()).join(' || ');
+    return haystack.includes('hasloginform=true')
+        || haystack.includes('session expired')
+        || haystack.includes('cookie has expired')
+        || haystack.includes('is likely expired')
+        || haystack.includes('not login');
+}
+
+// Phase 37 C — full-day DRY-RUN PREVIEW (mandatory final gate before Apply Day Votes).
+// Lists every eligible race's exact tickets — bet type, each line's 点数 / per-combo ¥ / line total,
+// the marks, per-race stake, and the day total — all computed from buildRaceBetLines(), the SAME
+// pricing the placement path uses, so the preview can't diverge from what actually gets placed.
+// Returns a Promise<bool>: true = operator confirmed (place), false = cancelled (nothing sent).
+function showDayApplyPreview(eligibleRaceIds, date) {
+    return new Promise(resolve => {
+        let dayTotal = 0;
+        const sections = eligibleRaceIds.map(r_id => {
+            const race = findRaceObjById(r_id);
+            const plan = race ? buildRaceBetLines(race) : { runners: [], lines: [], staked: 0 };
+            dayTotal += plan.staked || 0;
+            const label = race ? `${trackName(race.info.place)} R${race.info.race_number}` : r_id;
+            let compLabel = ''; try { compLabel = compositionLabel(resolveBetComposition(r_id)); } catch (_) {}
+            let autoTag = '';
+            if (isAutoBackupOverride(r_id)) {
+                autoTag = isAutoBetTypePerRace(r_id)
+                    ? ` <span style="font-size:0.82em;color:#b9f0c9;">🧪 auto</span>`
+                    : ` <span style="font-size:0.82em;color:#cfe6ff;">↩ backup</span>`;
+            }
+            const marksStr = (plan.runners || []).map(rn => `${rn.symbol || ''}${rn.pp || '?'}`).join('  ');
+            const lineRows = (plan.lines || []).map(l => {
+                const m = l.method === 'box' ? ' BOX' : (String(l.method || '').startsWith('nagashi') ? ' ながし' : '');
+                const lineTotal = (l.stakePerCombo || 0) * (l.comboCount || 0);
+                return `<tr>
+                    <td style="padding:1px 6px;">${escapeHtml((l.label || l.ticket) + m)}</td>
+                    <td style="padding:1px 6px;text-align:right;color:#9fb2c8;">${l.comboCount}点</td>
+                    <td style="padding:1px 6px;text-align:right;color:#9fb2c8;">×¥${(l.stakePerCombo || 0).toLocaleString()}</td>
+                    <td style="padding:1px 6px;text-align:right;font-weight:600;">¥${lineTotal.toLocaleString()}</td>
+                </tr>`;
+            }).join('');
+            return `<div style="border:1px solid #243044;border-radius:8px;padding:8px 10px;margin-bottom:8px;background:#141a24;">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;">
+                    <div><b>${escapeHtml(label)}</b> <span style="color:#9fb2c8;font-size:0.85em;">· ${plan.runners.length} marks · ${escapeHtml(compLabel)}</span>${autoTag}</div>
+                    <div style="font-weight:700;">¥${(plan.staked || 0).toLocaleString()}</div>
+                </div>
+                <div style="color:#cdd9e8;font-size:0.85em;margin:3px 0 5px;letter-spacing:0.5px;">${escapeHtml(marksStr || '—')}</div>
+                <table style="width:100%;border-collapse:collapse;font-size:0.85em;">${lineRows}</table>
+            </div>`;
+        }).join('');
+
+        const overlay = document.createElement('div');
+        overlay.id = 'day-apply-preview';
+        overlay.className = 'modal-overlay';
+        const cleanup = (val) => { try { overlay.remove(); } catch (_) {} resolve(val); };
+        overlay.onclick = (ev) => { if (ev.target === overlay) cleanup(false); };
+        overlay.innerHTML = `
+            <div class="modal-content" style="max-width:680px;width:92%;display:flex;flex-direction:column;max-height:88vh;">
+                <div class="modal-header">
+                    <h3 class="modal-title">📋 Day bet preview — ${escapeHtml(date)}</h3>
+                    <div class="modal-header-actions"><button class="close-btn" id="day-preview-x">✖</button></div>
+                </div>
+                <div style="padding:2px 16px 6px;color:#9fb2c8;font-size:13px;">
+                    ${eligibleRaceIds.length} race(s) will be applied + submitted to OrePro. Review every ticket, then confirm — this is the last stop before anything is placed.
+                </div>
+                <div style="overflow:auto;padding:6px 16px;">${sections}</div>
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-top:1px solid #243044;">
+                    <div style="font-size:15px;font-weight:700;">Day total: ¥${dayTotal.toLocaleString()}</div>
+                    <div style="display:flex;gap:8px;">
+                        <button id="day-preview-cancel" style="padding:7px 14px;border-radius:6px;border:1px solid #3a4a60;background:#1b2230;color:#cdd9e8;cursor:pointer;">Cancel</button>
+                        <button id="day-preview-go" style="padding:7px 14px;border-radius:6px;border:1px solid #2f8f57;background:#176b3a;color:#eafff0;font-weight:700;cursor:pointer;">📤 Place ${eligibleRaceIds.length} race(s)</button>
+                    </div>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        document.getElementById('day-preview-go').onclick = () => cleanup(true);
+        document.getElementById('day-preview-x').onclick = () => cleanup(false);
+        document.getElementById('day-preview-cancel').onclick = () => cleanup(false);
+    });
 }
 
 async function applyAllDayVotesToOrePro() {
@@ -8400,12 +8727,14 @@ async function applyAllDayVotesToOrePro() {
         if (!first) return;
     }
 
-    // Second confirm: final sanity check before anything hits OrePro.
-    const second = window.confirm(
-        `📤 About to APPLY + SUBMIT ${eligible.length} race(s) to OrePro for ${date}.\n\n` +
-        `Each race will be staged and committed one by one. This is final — proceed?`
-    );
-    if (!second) return;
+    // Final gate: the full-day DRY-RUN PREVIEW (mandatory). Shows every ticket that will be placed,
+    // priced by buildRaceBetLines — the same code the placement path uses — so what you see is what
+    // gets sent. Confirm here = place + submit; cancel = nothing hits OrePro.
+    const proceed = await showDayApplyPreview(eligible, date);
+    if (!proceed) {
+        setOreProSessionStatus('Day apply cancelled from the preview — nothing was sent to OrePro.', 'info');
+        return;
+    }
 
     const btn = document.getElementById('btn-orepro-apply-day');
     const prevLabel = btn?.textContent || '📤 Apply Day Votes';
@@ -8421,6 +8750,25 @@ async function applyAllDayVotesToOrePro() {
                 'warn'
             );
             return;
+        }
+
+        // Pre-flight: confirm the cookie is actually LOGGED IN before placing anything, so a dead
+        // cookie stops the whole run at zero bets (vs. failing every race one-by-one). Checked
+        // against the day's first race shutuba — the reliable signal. (Per-race guardrail #7 still
+        // catches a mid-run expiry.)
+        if (btn) btn.textContent = '⏳ Checking cookie...';
+        setOreProSessionStatus('Checking OrePro login before placing...', 'info');
+        try {
+            const pre = await checkOreProCookieLoggedIn(eligible[0]);
+            if (!pre.loggedIn) {
+                setOreProSessionStatus(`Stopped before placing any bets — ${pre.message}`, 'warn');
+                window.alert(`⚠️ OrePro cookie check failed — NOTHING was placed.\n\n${pre.message}`);
+                return;
+            }
+        } catch (e) {
+            // Probe couldn't reach OrePro — don't hard-block on a transient network blip; the
+            // per-race path still stops on the first real "not login".
+            console.warn('[OrePro] pre-flight cookie check errored (continuing):', e);
         }
 
         let okCount = 0;
@@ -8955,6 +9303,13 @@ function renderLiveViewPanel() {
             dayTotalEl.style.display = 'none';
             dayTotalEl.innerHTML = '';
         }
+    }
+
+    const breakdownEl = document.getElementById('voting-bet-breakdown');
+    if (breakdownEl) {
+        const breakdownHtml = buildBetTypeBreakdownHtml(date);
+        breakdownEl.innerHTML = breakdownHtml;
+        breakdownEl.style.display = breakdownHtml ? 'block' : 'none';
     }
 
     refreshBetEstimatesForDate(date);
@@ -10503,6 +10858,7 @@ async function showSettingsModal() {
     document.getElementById('setting-highlightAutoBets').checked = isAutoBetHighlightingEnabled();
     document.getElementById('setting-votingMarkMode').value = getVotingMarkMode();
     document.getElementById('setting-abstainBackupPreset').value = getAbstainBackupPreset();
+    { const t = document.getElementById('setting-showEngineDisagreement'); if (t) t.checked = (appConfig.ui?.showEngineDisagreement ?? true); }
     { const os = document.getElementById('setting-oreproDefaultStake'); if (os) os.value = getOreProDefaultStake(); }
     { const us = document.getElementById('setting-uiScalePercent'); if (us) { const p = getUiScalePercent(); us.value = p; const l = document.getElementById('setting-uiScalePercent-val'); if (l) l.textContent = p + '%'; } }
     document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
@@ -10691,6 +11047,7 @@ async function updateSidebarSettings() {
         highlightAutoBets: document.getElementById('setting-highlightAutoBets').checked,
         votingMarkMode: (document.getElementById('setting-votingMarkMode').value === 'TRADITIONAL_ROLES') ? 'TRADITIONAL_ROLES' : 'BOX_OPTIMIZATION',
         abstainBackupPreset: (() => { const v = document.getElementById('setting-abstainBackupPreset')?.value; return (v && BET_PRESETS[v]) ? v : 'none'; })(),
+        showEngineDisagreement: document.getElementById('setting-showEngineDisagreement') ? !!document.getElementById('setting-showEngineDisagreement').checked : true,
         oreproDefaultStake: (() => { const v = parseInt(document.getElementById('setting-oreproDefaultStake')?.value, 10); return Number.isFinite(v) && v > 0 ? v : 10000; })(),
         tvModeSplitPercent: parseClampedPercent('setting-tvModeSplitPercent', Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent)) ? Number(appConfig.ui?.tvModeSplitPercent) : 50),
         uiScalePercent: (() => { const v = parseInt(document.getElementById('setting-uiScalePercent')?.value, 10); return Number.isFinite(v) ? Math.max(50, Math.min(130, v)) : 100; })(),
@@ -11249,17 +11606,35 @@ async function testOreProCookie() {
     const ua     = (document.getElementById('setting-orepro-user-agent')     || {}).value || '';
     await saveOrchestratorSetting('orepro_session_cookie', cookie);
     if (ua) await saveOrchestratorSetting('orepro_user_agent', ua);
+    // Real login probe (not just "is a cookie configured"). Pass the loaded day's first race so
+    // the backend can check against a real shutuba page — the reliable signal.
     try {
-        const res = await fetch('/api/orepro/companion/window', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'open' })
-        });
-        const data = await res.json();
-        alert(`${data.status}: ${data.message}`);
+        const data = await checkOreProCookieLoggedIn(firstRaceIdForActiveDay());
+        alert(`${data.loggedIn ? '✅ Logged in' : '⚠️ ' + data.status}: ${data.message}`);
     } catch (e) {
         alert(`OrePro probe failed: ${e.message}`);
     }
+}
+
+// Pre-flight cookie probe shared by the Settings button and Apply Day Votes. Returns the
+// backend { status, loggedIn, message } object (throws only on a network/parse failure).
+async function checkOreProCookieLoggedIn(raceId) {
+    const res = await fetch('/api/orepro/cookie-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ race_id: String(raceId || '') })
+    });
+    return await res.json();
+}
+
+function firstRaceIdForActiveDay() {
+    const date = String(currentActiveDate || '').trim();
+    const races = Array.isArray(globalRacesByDate?.[date]) ? globalRacesByDate[date] : [];
+    for (const r of races) {
+        const id = String(r?.info?.race_id || '').trim();
+        if (id) return id;
+    }
+    return '';
 }
 
 async function saveBetStake(leg, value) {

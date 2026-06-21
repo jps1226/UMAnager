@@ -321,6 +321,7 @@
             </div>
         </div>
         <div id="voting-day-total" class="voting-day-total" style="display:none;"></div>
+        <div id="voting-bet-breakdown" class="voting-bet-breakdown" style="display:none;"></div>
         <div id="voting-recap-panel" class="voting-recap-panel" style="display:none;"></div>
         <div id="voting-races-main" class="voting-races-main"></div>
     </div>
@@ -428,6 +429,10 @@
                             <input type="checkbox" id="setting-highlightAutoBets" onchange="updateSidebarSettings()">
                             <span>💡 Highlight Auto-Bets</span>
                         </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-showEngineDisagreement" onchange="updateSidebarSettings()">
+                            <span title="On races you hand-mark, show a small ⚙ chip next to any horse where your mark differs from the engine's own top-4 ranking — e.g. you marked ◎ but the engine rates it ▲, or the engine likes a horse you skipped. Only appears on races you marked yourself, never on auto-picked ones.">⚖ Show engine disagreement</span>
+                        </label>
                         <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
                             <span>🎯 Voting Mark Mode</span>
                             <select id="setting-votingMarkMode" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:170px;">
@@ -436,7 +441,7 @@
                             </select>
                         </label>
                         <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
-                            <span title="When Auto Bet Day skips a race because the chosen bet type doesn't fit it (e.g. Nagashi with no clear axis horse), bet that race with this preset instead. 'None' leaves those races unbet.">↩ Abstain Backup Preset</span>
+                            <span title="When Auto Bet Day skips a race because the chosen bet type doesn't fit it (e.g. Nagashi with no clear axis horse), bet that race with this preset instead. 'None' leaves those races unbet. (Ignored when the day preset is '🧪 Auto — engine picks per race'.)">↩ Abstain Backup Preset</span>
                             <select id="setting-abstainBackupPreset" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:170px;">
                                 <option value="none">None (leave unbet)</option>
                                 <option value="balanced">Balanced</option>
@@ -675,6 +680,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260619-9"></script>
+<script src="/static/script.js?v=20260621-1"></script>
 </body>
 </html>
