@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { statsAsOf } from './point-in-time.mjs';
+import { statsAsOf, jtAEAsOf, sireFitAsOf } from './point-in-time.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
@@ -122,10 +122,14 @@ export function loadWeekend(BT, dates, fixtureFile = fixturePath, opts = {}) {
           row.Record = s.record;
           row.Surface_Win_Pct = s.surfaceWinPct; row.Surface_Starts = s.surfaceStarts;
           row.Dist_Win_Pct = s.distWinPct; row.Dist_Starts = s.distStarts;
-          // Can't reconstruct these as-of-date cheaply → drop the leaky signal (honest > leaky).
-          row.Sire_Fit = null; row.Sire_Place_Fit = null;
+          // Step 1.5: rebuild jockey/trainer A/E + sire-fit point-in-time (mounts/progeny strictly
+          // before the race; A/E baseline rebuilt from the same window). These were nulled in Step 1.
+          row.Jockey_AE = jtAEAsOf(row.Jockey_Code, ymd, 'jockey');
+          row.Trainer_AE = jtAEAsOf(row.Trainer_Code, ymd, 'trainer');
+          const sf = sireFitAsOf(row.Sire_ID, ymd, race.info.surface, race.info.distance);
+          row.Sire_Fit = sf.sireFit; row.Sire_Place_Fit = sf.sirePlaceFit; row.Sire_Starts = sf.sireStarts;
+          // Own-record place splits aren't read by the scorer (win-pct only) → leave null.
           row.Surface_Place_Pct = null; row.Dist_Place_Pct = null;
-          row.Jockey_AE = null; row.Trainer_AE = null;
         }
       }
       entriesByRace[rid] = entries;

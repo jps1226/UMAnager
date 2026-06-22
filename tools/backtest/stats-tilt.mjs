@@ -1,12 +1,12 @@
 // ============================================================
-// ⚠⚠ RESULTS INVALID — LOOK-AHEAD LEAKAGE (found 2026-06-21). DO NOT ACT ON THIS TOOL'S OUTPUT. ⚠⚠
-// The historical /api/races payload computes a horse's Record, Surface_Win_Pct, Dist_Win_Pct (and
-// Sire_Fit / Jockey_AE / Trainer_AE) as-of-NOW, not as-of-each-race-date — so for past races those
-// "stats" already include the race's own result + all later races. Tilting toward stats therefore
-// tilts toward fields that encode the outcome, which is why net "improves" without bound (×5 > ×2).
-// The +¥millions result is HINDSIGHT, not an edge. (NB: the LIVE app is fine — for an upcoming race
-// there is no future data, so as-of-now == as-of-race-date. This is a backtest-only contamination.)
-// Re-enable only after the replay feeds POINT-IN-TIME stats (gated strictly before each race date).
+// ✅ HONEST UNDER BT_PIT=1 (since 2026-06-22, Step 1.5). Run as: BT_PIT=1 node stats-tilt.mjs
+// History: this tool once "proved" a +¥millions stats edge that was pure LOOK-AHEAD LEAKAGE — the
+// historical /api/races computes Record/Surface/Dist/Sire_Fit/Jockey_AE/Trainer_AE as-of-NOW, so past
+// races were fed stats encoding their own outcome. That is FIXED in the backtest: with BT_PIT=1 the
+// harness rebuilds every one of those fields point-in-time (own-record in point-in-time.mjs Step 1;
+// jockey/trainer A/E + sire-fit Step 1.5), strictly before each race. Without BT_PIT=1 the leak returns —
+// always run this with BT_PIT=1. (The LIVE app was always fine: an upcoming race has no future data.)
+// Honest verdict (11 weekends): tilting toward stats does NOT beat the market — flat-to-worse past ~1.25×.
 // ============================================================
 // Counterfactual backtest — STATS-TILT TEST (the payoff test).
 //

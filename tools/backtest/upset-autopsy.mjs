@@ -1,10 +1,10 @@
 // ============================================================
-// ⚠ RESULTS CONTAMINATED — LOOK-AHEAD LEAKAGE (found 2026-06-21). Treat the "catchable %" as inflated.
-// The stats grade (BT.merit = form+breeding) leans on Surface_Win_Pct / Dist_Win_Pct / Record /
-// Sire_Fit, which the historical /api/races computes as-of-NOW — so a winner looks "stats-strong"
-// partly BECAUSE its own win is baked into those numbers. The ~52% "catchable" is therefore too high.
-// Form_Score/Last3 IS date-gated (clean). Trustworthy only after the replay uses point-in-time stats.
-// (The live app is unaffected — see stats-tilt.mjs header.)
+// ✅ HONEST UNDER BT_PIT=1 (since 2026-06-22, Step 1.5). Run as: BT_PIT=1 node upset-autopsy.mjs
+// The stats grade (BT.merit = form+breeding) leans on Surface_Win_Pct / Dist_Win_Pct / Record / Sire_Fit,
+// which the historical /api/races computes as-of-NOW. With BT_PIT=1 the harness rebuilds them all
+// point-in-time (strictly before each race), so a winner no longer looks "stats-strong" because its own
+// win is baked in. The earlier leak-inflated ~52% "catchable" corrected to ~31% catchable / ~38% freak.
+// WITHOUT BT_PIT=1 the leak returns — always run with BT_PIT=1. (The live app was always unaffected.)
 // ============================================================
 // Counterfactual backtest — UPSET AUTOPSY.
 //

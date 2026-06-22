@@ -39,6 +39,33 @@ node tools/backtest/upset-autopsy.mjs
 `history.json` is a merged multi-weekend snapshot: fetch each day with `curl .../api/races?date=YYYY-MM-DD`
 and merge their `past_races_by_date` into one file (gitignored, like all fixtures).
 
+### Point-in-time stats (`BT_PIT=1`) + the `finish_history.json` export
+
+The historical `/api/races` payload computes a horse's `Record` / `Surface_Win_Pct` / `Dist_Win_Pct` /
+`Sire_Fit` / `Jockey_AE` / `Trainer_AE` **as-of-NOW**, so replaying a past race leaks its own outcome.
+`BT_PIT=1` makes the harness rebuild every one of those fields **point-in-time** (strictly before each
+race) via `point-in-time.mjs` — own-record splits (Step 1) + jockey/trainer A/E and sire-fit (Step 1.5).
+**Always run the analysis tools with `BT_PIT=1`.** (The live app is unaffected: an upcoming race has no
+future data, so as-of-now == as-of-race-date.)
+
+This needs `fixtures/finish_history.json` — one row per finished start, with the fields the
+reconstructions read (date keyed off the **RaceId prefix** to match how the backtest keys race dates).
+Regenerate it from the read-only DB:
+
+```sh
+PGPASSWORD='<pw>' psql -h localhost -U postgres -d umanager -t -A -o tools/backtest/fixtures/finish_history.json -c "
+SELECT json_agg(json_build_object(
+  'h',   re.\"HorseId\",
+  'ymd', substring(re.\"RaceId\",1,8),   -- RaceId prefix, NOT RaceDate (they can differ by a day)
+  's',   r.\"Surface\", 'd', r.\"Distance\", 'f', re.\"FinishPos\",
+  'fav', re.\"FavRank\",                  -- for the A/E P(win|favRank) baseline
+  'j',   re.\"JockeyCode\", 't', re.\"TrainerCode\", 'sire', h.\"SireId\"))
+FROM race_entries re
+JOIN races  r ON r.\"RaceId\"  = re.\"RaceId\"
+LEFT JOIN horses h ON h.\"HorseId\" = re.\"HorseId\"   -- LEFT: keep finishes for horses we lack master rows for
+WHERE re.\"FinishPos\" IS NOT NULL AND re.\"FinishPos\" > 0;"
+```
+
 - **args:** `[dates,comma,sep] [presetId]` — preset is held fixed so RISK is the only variable.
   Valid presets: `win_place`, `balanced`, `quinella_wide`, `trio_chase`, `nagashi_chase`, `wide_safe`.
 - The fixture (`fixtures/races_raw.json`) carries each race's entries (odds + form), finishing
