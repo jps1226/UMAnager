@@ -79,6 +79,7 @@ builder.Services.AddScoped<DifnRecordParsingService>();
 builder.Services.AddScoped<BreedingHorseBackfillService>();
 builder.Services.AddScoped<HnNameBackfillService>();
 builder.Services.AddScoped<SurfaceBackfillService>();
+builder.Services.AddScoped<GoingBackfillService>();
 builder.Services.AddScoped<RaceClassBackfillService>();
 builder.Services.AddScoped<JockeyTrainerIngestService>();
 builder.Services.AddScoped<SeCodeBackfillService>();
@@ -101,10 +102,17 @@ using (var scope = app.Services.CreateScope())
         using var db = await factory.CreateDbContextAsync();
         await db.Database.ExecuteSqlRawAsync(
             "ALTER TABLE races ADD COLUMN IF NOT EXISTS \"RaceClass\" VARCHAR(16)");
+        // Track condition + weather (Oracle 2026-06-22, RA bytes 888/889/890) — the cold engine's first
+        // Group-B factor. Additive/idempotent; populated by GoingBackfillService. No curly braces (the
+        // SQL goes through string.Format).
+        await db.Database.ExecuteSqlRawAsync(
+            "ALTER TABLE races ADD COLUMN IF NOT EXISTS \"Weather\" SMALLINT; " +
+            "ALTER TABLE races ADD COLUMN IF NOT EXISTS \"TurfGoing\" SMALLINT; " +
+            "ALTER TABLE races ADD COLUMN IF NOT EXISTS \"DirtGoing\" SMALLINT;");
     }
     catch (Exception ex)
     {
-        app.Logger.LogError(ex, "[Startup] races.RaceClass column ensure failed (non-fatal).");
+        app.Logger.LogError(ex, "[Startup] races.RaceClass/going column ensure failed (non-fatal).");
     }
 }
 

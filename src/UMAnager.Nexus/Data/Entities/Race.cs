@@ -13,6 +13,12 @@ public class Race
     public DateTime? SortTime { get; set; }   // Combined date + scheduled race time
     public string? ResultsJson { get; set; }  // Payoffs and finish positions (JSONB)
     public string? OddsJson { get; set; }     // Phase 11 forward: O2/O5 quinella+trio odds (JSONB)
+    // Track condition + weather (Oracle 2026-06-22, RA bytes 888/889/890). Null until populated
+    // post-race (DataKubun 3+) — see GoingBackfillService. Codes: going 1=良/2=稍重/3=重/4=不良;
+    // weather 1=晴/2=曇/3=雨/4=小雨/5=雪/6=小雪. 0 (not-yet-set) is stored as NULL.
+    public short? Weather { get; set; }       // 天候コード (offset 888)
+    public short? TurfGoing { get; set; }     // 芝馬場状態コード (offset 889)
+    public short? DirtGoing { get; set; }     // ダート馬場状態コード (offset 890)
     public short DataStatus { get; set; }       // JRA-VAN データ区分 (offset 3, len 1)
     public DateOnly? LastModified { get; set; } // データ作成年月日 (offset 4, len 8, YYYYMMDD)
     public bool HistoryRefreshed { get; set; } = false;

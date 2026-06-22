@@ -89,6 +89,14 @@ public static class RaRecordParser
                 else if (first == '5') surface = "jump";
             }
 
+            // Track condition + weather (Oracle 2026-06-22): Weather 天候コード @888, Turf going
+            // 芝馬場状態 @889, Dirt going ダート馬場状態 @890 — each 1 byte. These are blank ('0' /
+            // space) in the pre-race card (DataKubun 1/2) and only populate post-race (DataKubun 3+).
+            // 0 (not yet set) → null.
+            var weather   = ParseSmallCode(data, 887);
+            var turfGoing = ParseSmallCode(data, 888);
+            var dirtGoing = ParseSmallCode(data, 889);
+
             // Start Time: 874-877 (4 bytes, HHMM format)
             var startTimeStr = ExtractString(data, 873, 4).Trim();
             var sortTime = CombineDateAndTime(raceDate, startTimeStr);
@@ -103,6 +111,9 @@ public static class RaRecordParser
                 Distance = distance,
                 Surface = surface,
                 RaceClass = raceClass,
+                Weather = weather,
+                TurfGoing = turfGoing,
+                DirtGoing = dirtGoing,
                 DataStatus = dataStatus,
                 LastModified = lastModified,
                 SortTime = sortTime,
@@ -130,6 +141,15 @@ public static class RaRecordParser
             "000"          => null,    // unset slot — treat as unknown, not "other"
             _              => "other"
         };
+    }
+
+    // A single-byte numeric code (going/weather): '0' or blank → null (not set), else the digit.
+    private static short? ParseSmallCode(ReadOnlySpan<byte> data, int startIndex)
+    {
+        if (startIndex + 1 > data.Length) return null;
+        var s = ExtractString(data, startIndex, 1).Trim();
+        if (string.IsNullOrEmpty(s) || s == "0") return null;
+        return short.TryParse(s, out var v) && v > 0 ? v : (short?)null;
     }
 
     private static string ExtractString(ReadOnlySpan<byte> data, int startIndex, int length)

@@ -29,6 +29,7 @@ public sealed class JvLinkController : ControllerBase
     private readonly BreedingHorseBackfillService _breedingBackfill;
     private readonly HnNameBackfillService _hnNameBackfill;
     private readonly SurfaceBackfillService _surfaceBackfill;
+    private readonly GoingBackfillService _goingBackfill;
     private readonly RaceClassBackfillService _raceClassBackfill;
     private readonly JockeyTrainerIngestService _jtIngest;
     private readonly SeCodeBackfillService _seBackfill;
@@ -47,6 +48,7 @@ public sealed class JvLinkController : ControllerBase
         BreedingHorseBackfillService breedingBackfill,
         HnNameBackfillService hnNameBackfill,
         SurfaceBackfillService surfaceBackfill,
+        GoingBackfillService goingBackfill,
         RaceClassBackfillService raceClassBackfill,
         JockeyTrainerIngestService jtIngest,
         SeCodeBackfillService seBackfill,
@@ -64,6 +66,7 @@ public sealed class JvLinkController : ControllerBase
         _breedingBackfill = breedingBackfill;
         _hnNameBackfill   = hnNameBackfill;
         _surfaceBackfill  = surfaceBackfill;
+        _goingBackfill    = goingBackfill;
         _raceClassBackfill = raceClassBackfill;
         _jtIngest         = jtIngest;
         _seBackfill       = seBackfill;
@@ -313,6 +316,22 @@ public sealed class JvLinkController : ControllerBase
             // /api/races call returns non-null Sire_Fit values.
             await _sirePerf.RefreshAsync(ct);
             return Ok(new { status = "surface backfill complete", scanned, updated });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    // Backfill races.Weather/TurfGoing/DirtGoing from raw_staging RA records (Oracle 2026-06-22,
+    // bytes 888/889/890) — the cold "value" engine's first Group-B factor. Re-runnable after each ingest.
+    [HttpPost("backfill-going")]
+    public async Task<IActionResult> BackfillGoing(CancellationToken ct)
+    {
+        try
+        {
+            var (scanned, updated) = await _goingBackfill.BackfillAsync(ct);
+            return Ok(new { status = "going backfill complete", scanned, updated });
         }
         catch (Exception ex)
         {
