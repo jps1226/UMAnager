@@ -1,12 +1,20 @@
 # KEIBrain 🧠🐎 — machine-learning roadmap (MOCK-UP)
 
-> **Status: PLAN ONLY. Nothing here is built or trained yet.** This folder is a design mock-up for the
-> next evolution of the cold "value" engine (TODO §0 / CLAUDE.md North Star): instead of testing race
-> factors one at a time by hand, train a model to weigh many factors *and their combinations* at once —
-> but graded by the same brutal honesty as everything else (point-in-time, net-of-takeout, walk-forward).
+> **Status (s52): Phases 0-2 BUILT + run. Verdict so far: no broad edge; confirms the longshot thesis;
+> NOT productionized.** This started as a design mock-up for the next evolution of the cold "value" engine
+> (TODO §0 / CLAUDE.md North Star): instead of testing race factors one at a time by hand, train a model
+> to weigh many factors *and their combinations* at once — graded by the same brutal honesty as everything
+> else (point-in-time, net-of-takeout, walk-forward).
 >
 > Read this with the session-51/52 findings in mind: **we proved the market is efficient at picking
 > winners.** KEIBrain does NOT get a pass on that. Its only job is to find *mispricing*, not winners.
+>
+> **What's built:** `build_features.mjs` (Phase 0 — 64k point-in-time feature rows), `train_stage1.py`
+> (Phase 1 — calibrated odds-blind place model), `money_test.py` (Phase 2 — longshot money test). Result
+> logged as **H11** in `tuning_hypotheses.md`: model is well-calibrated and independently rediscovered our
+> hand-found factors (layoff/pace), but does NOT beat the market broadly and does NOT clearly beat the
+> H7/H8 hand rules — so it stays an offline tool, Phase 4 (feeding the app) remains gated. `pipeline.py` is
+> the original annotated skeleton (kept for the Phase 3/4 shape we haven't built).
 
 ---
 
@@ -211,4 +219,38 @@ edge exists*, not to find a jackpot.
   not standalone rules.
 - Evidence lands in `tuning_hypotheses.md` like every other hypothesis, under a new KEIBrain section.
 
-See `pipeline.py` in this folder for an annotated skeleton of the intended flow (also not implemented).
+See `pipeline.py` in this folder for an annotated skeleton of the Phase 3/4 flow not yet built.
+
+---
+
+## 12. What this is / when to run it (operational role — read before "running it weekly")
+
+**KEIBrain is an OFFLINE lab tool, not a part of the live app and NOT an auto-tuner.** It does not place
+bets, does not change any engine setting, and is not wired into Nexus/Sidecar. It reads data exports and
+prints findings. Same category as `tools/backtest/` — a measuring instrument.
+
+**It is a judge that re-judges, not a dial you spin.** You *may* re-run it as new weekends accumulate, but
+only to ask *"do the candidate edges (H7/H8, the model's longshot sort) STILL hold on more data?"* — never
+to retrain-and-tweak until the numbers look good. That latter habit is the overfitting trap the whole
+project exists to avoid. **Re-run to confirm, not to chase performance.** Most re-runs should change nothing.
+
+**Weekly loop (if/when run):**
+1. A weekend settles → regenerate `tools/backtest/fixtures/finish_history.json` (currently a manual DB
+   export — see dev_log s51 for the query; a one-command refresh script is a TODO).
+2. `node KEIBrain/build_features.mjs` → rebuild the feature table.
+3. `python KEIBrain/money_test.py` (and `train_stage1.py`) → re-read the verdict; re-run the hand-rule
+   `tools/backtest/*-recovery.mjs` alongside.
+4. Log the result in `tuning_hypotheses.md`. Adopt a change ONLY if it holds across **≥3 weekends**.
+
+**It does not need to run weekly.** It already answered its first question. Re-running is optional, for
+watching whether the edge survives as the bench grows.
+
+**Graduation (Phase 4) is gated:** only if the model's longshot sense proves consistent across many
+weekends AND beats the H7/H8 hand rules does it feed the app — and even then OFFLINE (it exports per-horse
+place probabilities the app reads as a 🧠 chip; no live Python in Nexus). Not there yet.
+
+> **Relationship to the LIVE betting engine:** that engine (the marks/auto-pick scorer in `script.js` +
+> the RISK slider / presets / `SHAPE_TO_PRESET`) follows the SAME discipline — see `tuning_hypotheses.md`.
+> The weekly recap pipeline *feeds it evidence* every weekend, but its knobs are changed RARELY and only on
+> multi-weekend evidence, never weekly. Neither engine is auto-tuned. KEIBrain just studies; the live engine
+> bets.
