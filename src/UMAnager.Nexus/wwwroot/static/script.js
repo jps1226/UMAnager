@@ -302,26 +302,23 @@ function compositionForAutoPreset(presetId) {
 // An ALTERNATIVE TO THE RISK SLIDER, not a bet preset. The backtest bench proved we have no pick-side
 // edge over the market — so Discipline mode stops trying to out-pick it. When ON it:
 //   (1) OVERRIDES the slider with a market-trusting low risk (back the crowd's top choices), and
-//   (2) OVERRIDES the day preset by auto-choosing a SAFE, place-biased bet type per race.
-// Those are the two robust levers the bench found: place recovers > win, and longshots/exotics bleed.
+//   (2) OVERRIDES the day preset with a single PLACE (複勝) bet on the ◎ — the highest-recovery safe
+//       bet the bench found (~83% vs ~73% for win+place/wide bundles; the win leg was the drag).
 // Honest goal: LOSE LEAST, not profit — the ~20-25% takeout wall stands until better data (Group-B).
-const DISCIPLINE_RISK = 10;   // pinned slider value when on — Ultra-Safe / trust the market
+const DISCIPLINE_RISK = 10;            // pinned slider value when on — Ultra-Safe / trust the market
+const DISCIPLINE_PLACE_STAKE = 10000;  // ¥ on the single 複勝 line (the per-race budget the presets use)
 function isDisciplineMode() { return !!(typeof appConfig === 'object' && appConfig && appConfig.ui && appConfig.ui.disciplineMode); }
-// Place-biased shape → bet type. Only the two safest presets (win+place, wide-safe); never the
-// exotic/longshot bleeders (trio/nagashi). Mirrors SHAPE_TO_PRESET but for capital preservation.
-const DISCIPLINE_SHAPE_TO_PRESET = {
-    'lone-favorite': 'win_place',   // place the standout
-    'two-clear':     'wide_safe',   // wide net on the clear pair (a place-style bet)
-    'standout+pack': 'win_place',   // place the standout — skip the nagashi exotic
-    'tight-top3':    'wide_safe',   // wide on the top cluster, not a trio box
-    'tight-pack':    'wide_safe',
-    'wide-open':     'win_place',   // safest single action when there's no read
-};
-// The SAFE preset id Discipline mode picks for a race's shape (small field → the token Q+Wide).
-function disciplineBetTypePresetForRace(r_id) {
+// Pure PLACE on the ◎. presetId is special (not in BET_PRESETS) so it never shows in the day dropdown
+// and gets its own min/max=1 plan (no phantom 2nd mark — place only ever bets the ◎).
+function disciplinePlaceComposition() {
+    return { presetId: 'discipline_place', lines: [{ type: 'place', yen: DISCIPLINE_PLACE_STAKE }] };
+}
+function isDisciplinePlaceComposition(comp) { return !!comp && comp.presetId === 'discipline_place'; }
+// The composition Discipline mode applies to a race: pure place on the ◎, or — on a field too small to
+// model — the established token Q+Wide (operator pref) rather than abstaining.
+function disciplineComposition(r_id) {
     const probe = getEngineMarkPlanForRace(r_id, { compositionOverride: compositionFromPreset('balanced') });
-    if (probe.shape === 'small-field') return SMALL_FIELD_TOKEN_ID;
-    return DISCIPLINE_SHAPE_TO_PRESET[probe.shape] || 'win_place';
+    return probe.shape === 'small-field' ? smallFieldTokenComposition() : disciplinePlaceComposition();
 }
 
 // Phase 34 — per-preset COUNT BAND + selection TILT (design locked 2026-06-19).
@@ -341,9 +338,14 @@ const PRESET_PLANS = {
     trio_chase:    { id: 'trio_chase',    min: 4, max: 5, tilt: +15, requireAxis: false },
     nagashi_chase: { id: 'nagashi_chase', min: 5, max: 6, tilt: +15, requireAxis: true  },
     wide_safe:     { id: 'wide_safe',     min: 2, max: 4, tilt:  -8, requireAxis: false },
+    // Discipline mode — pure 複勝 on the ◎; pin to exactly 1 mark so no phantom 〇 appears (place only
+    // ever bets the ◎). Not a BET_PRESETS bundle; keyed by the composition's presetId.
+    discipline_place: { id: 'discipline_place', min: 1, max: 1, tilt: 0, requireAxis: false },
 };
 // A custom/edited composition (no exact preset match) → neutral band derived from its contract floor.
 function presetPlanForComposition(comp) {
+    // Special non-BET_PRESETS compositions (e.g. Discipline's pure-place) carry their plan id on presetId.
+    if (comp && comp.presetId && PRESET_PLANS[comp.presetId]) return PRESET_PLANS[comp.presetId];
     const id = compositionPresetId(comp);
     if (PRESET_PLANS[id]) return PRESET_PLANS[id];
     let floor = 2;
@@ -380,6 +382,7 @@ function compositionPresetId(comp) {
 }
 function compositionLabel(comp) {
     if (isAutoPerRaceComposition(comp)) return '🧪 Auto (per race)';
+    if (isDisciplinePlaceComposition(comp)) return '🧊 Discipline (Place ◎)';
     if (isSmallFieldTokenComposition(comp)) return 'Small-field 2-bet (Q+Wide)';
     const id = compositionPresetId(comp);
     return id === 'custom' ? 'Custom' : (BET_PRESETS[id]?.label || 'Custom');
@@ -439,10 +442,10 @@ function getRaceBetCompositionOverride(rid) {
 function resolveBetComposition(rid) {
     const override = getRaceBetCompositionOverride(rid);
     if (override) return override;
-    // Discipline mode (cold engine) overrides the day preset: pick a SAFE, place-biased bet type for
-    // THIS race's field shape. Everything downstream (pricing/preview/placement/freeze) flows through here.
+    // Discipline mode (cold engine) overrides the day preset with a single PLACE bet on the ◎ (or the
+    // token on a tiny field). Everything downstream (pricing/preview/placement/freeze) flows through here.
     if (isDisciplineMode()) {
-        return compositionForAutoPreset(disciplineBetTypePresetForRace(rid) || 'win_place');
+        return disciplineComposition(rid);
     }
     const dayComp = getDayBetComposition(globalRaceInfo[rid]?.clean_date || '');
     // Phase 35: the "Auto (per race)" day choice has no fixed lines — resolve it to the bet preset
