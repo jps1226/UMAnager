@@ -107,6 +107,24 @@ export function statsAsOf(horseId, raceYmd, raceSurface, raceDistance) {
   return { record, surfaceWinPct, surfaceStarts, distWinPct, distStarts };
 }
 
+// ── Group-B factor #1: point-in-time wet-track record ─────────────────────────
+// A horse's place% on WET going (3=重/4=不良) vs its overall place%, from runs strictly before the
+// race. "wetEdge" (wet − overall) > 0 ⇒ the horse runs BETTER in the wet than its general form. Needs
+// the richer finish_history (carries `going` per run). Used by going-edge.mjs to test if the market
+// underprices wet form.
+export function wetRecordAsOf(horseId, raceYmd) {
+  const all = index().byHorse.get(String(horseId).split('.')[0]) || [];
+  const prior = all.filter(r => r.ymd < raceYmd);
+  const wet = prior.filter(r => r.going != null && r.going >= 3);
+  const placePct = arr => arr.length ? Math.round(1000 * arr.filter(r => r.f >= 1 && r.f <= 3).length / arr.length) / 10 : null;
+  return {
+    overallStarts: prior.length,
+    overallPlacePct: placePct(prior),
+    wetStarts: wet.length,
+    wetPlacePct: placePct(wet),
+  };
+}
+
 // ── Step 1.5: point-in-time jockey/trainer A/E ────────────────────────────────
 // Mirrors JockeyTrainerStatsService exactly, but anchored to the race date instead of CURRENT_DATE:
 //   window      = runs in [raceYmd - windowDays, raceYmd)  (strictly before the race)
