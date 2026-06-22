@@ -9562,14 +9562,19 @@ function renderHorseProfile(data) {
     content.innerHTML = html;
 }
 
-// Group-B: track going chip (1=良 firm … 4=不良 heavy) for a horse-history row.
+// Group-B: track going chip — English label + tooltip (JRA codes 1=良 firm … 4=不良 heavy).
 function horseGoingChip(code) {
-    const m = { 1: ['良', '#1dd1a1'], 2: ['稍', '#ffd24a'], 3: ['重', '#ff9f43'], 4: ['不', '#ff6b6b'] };
+    const m = {
+        1: ['Firm',  '#1dd1a1', 'Firm (良) — dry, fast ground'],
+        2: ['Good',  '#ffd24a', 'Good (稍重) — slightly soft / a bit of give'],
+        3: ['Soft',  '#ff9f43', 'Soft (重) — wet, holding ground'],
+        4: ['Heavy', '#ff6b6b', 'Heavy (不良) — very wet, testing ground'],
+    };
     const x = m[code];
-    if (!x) return '<span class="hh-going-empty">—</span>';
-    return `<span class="hh-going" style="color:${x[1]};border-color:${x[1]}66;background:${x[1]}1a;">${x[0]}</span>`;
+    if (!x) return '<span class="hh-going-empty" title="Track going not recorded (e.g. an upcoming race — going is published on race day)">—</span>';
+    return `<span class="hh-going" style="color:${x[1]};border-color:${x[1]}66;background:${x[1]}1a;" title="Track going — ${x[2]}">${x[0]}</span>`;
 }
-// Group-B: the horse's run line — closing 3F (s) + corner passing positions (e.g. "34.6 · 6-4").
+// Group-B: the horse's run line — closing 3F (s) + corner passing positions, with an explainer tooltip.
 function horseRunLine(perf) {
     let p = perf;
     if (typeof perf === 'string') { try { p = JSON.parse(perf); } catch { return '—'; } }
@@ -9577,7 +9582,11 @@ function horseRunLine(perf) {
     const l3 = (p.l3f != null && Number.isFinite(+p.l3f)) ? (p.l3f / 10).toFixed(1) : null;
     const corners = Array.isArray(p.corners) ? p.corners.filter(c => c != null) : [];
     if (!l3 && !corners.length) return '—';
-    return `${l3 ? `<b class="hh-l3f">${l3}</b>` : ''}${corners.length ? `<span class="hh-corners">${corners.join('-')}</span>` : ''}`;
+    const tip = [
+        l3 ? `Closing kick: last-3-furlong (final 600m) time ${l3}s — a lower number is a faster finishing burst` : '',
+        corners.length ? `Running position at each corner (early → late): ${corners.join(' → ')} — 1 = leading the field, so low = front-runner, high = closer` : '',
+    ].filter(Boolean).join('\n').replace(/"/g, '&quot;');
+    return `<span title="${tip}">${l3 ? `<b class="hh-l3f">${l3}</b>` : ''}${corners.length ? `<span class="hh-corners">${corners.join('-')}</span>` : ''}</span>`;
 }
 
 function buildHorseHistoryHtml(history) {
@@ -9624,9 +9633,9 @@ function buildHorseHistoryHtml(history) {
       <table class="horse-history-table">
         <thead>
           <tr>
-            <th>Date</th><th>Track</th><th>Dist</th><th title="Track going (良/稍/重/不良)">馬場</th><th>Class</th>
+            <th>Date</th><th>Track</th><th>Dist</th><th title="Track going — how firm or wet the ground was (Firm → Good → Soft → Heavy)">Going</th><th>Class</th>
             <th title="Field size">Field</th><th>Fin</th><th>Odds</th><th>Fav</th><th>Jockey</th>
-            <th title="Closing 3-furlong time (s) · corner passing positions">Run</th>
+            <th title="The horse's run: closing last-3-furlong time (s) + its position at each corner (1 = leading)">Run</th>
           </tr>
         </thead>
         <tbody id="horse-history-tbody">${rows}</tbody>
