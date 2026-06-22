@@ -147,6 +147,7 @@ public sealed class HorsesController : ControllerBase
                 re.Odds,
                 re.FavRank,
                 re.JockeyName,
+                re.PerformanceJson,
                 r.RaceDate,
                 r.SortTime,
                 r.TrackCode,
@@ -154,7 +155,10 @@ public sealed class HorsesController : ControllerBase
                 r.Surface,
                 r.RaceClass,
                 r.NameJa,
-                r.RaceNumber
+                r.RaceNumber,
+                r.TurfGoing,
+                r.DirtGoing,
+                r.Weather
             }
         ).ToListAsync(ct);
 
@@ -434,7 +438,12 @@ public sealed class HorsesController : ControllerBase
             fav_rank    = e.FavRank,
             jockey      = e.JockeyName ?? "",
             field_size  = fieldSizes.TryGetValue(e.RaceId, out var fs) ? fs : 0,
-            is_upcoming = e.SortTime.HasValue && e.SortTime.Value > jstNow
+            is_upcoming = e.SortTime.HasValue && e.SortTime.Value > jstNow,
+            // Group-B run data: track going (this race's surface) + weather, and the horse's run line
+            // (corner positions + last-3F) from PerformanceJson — the frontend parses + renders these.
+            going       = e.Surface == "turf" ? e.TurfGoing : e.Surface == "dirt" ? e.DirtGoing : null,
+            weather     = e.Weather,
+            performance = e.PerformanceJson
         }).ToList();
 
         // ── Assemble response ─────────────────────────────────────────────────

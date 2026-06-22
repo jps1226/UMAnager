@@ -3033,6 +3033,12 @@ td.bk-color-8 { background: #dc809a !important; color: #000 !important; font-wei
 .hh-class { color: #aaa; font-size: 11px; max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
 .hh-finish-cell { text-align: center; }
 .hh-finish { display: inline-block; font-weight: 700; padding: 1px 5px; border-radius: 3px; min-width: 20px; text-align: center; }
+.hh-going-cell { text-align: center; }
+.hh-going { display: inline-block; font-weight: 700; font-size: 11px; padding: 0 5px; border-radius: 3px; border: 1px solid; line-height: 16px; }
+.hh-going-empty { color: #555; }
+.hh-run { color: #aaa; font-variant-numeric: tabular-nums; }
+.hh-run .hh-l3f { color: #6cc6ff; font-weight: 700; }
+.hh-run .hh-corners { color: #888; margin-left: 5px; font-size: 11px; }
 .hh-finish-1 { background: #d4af37; color: #000; }
 .hh-finish-2 { background: #a8a9ad; color: #000; }
 .hh-finish-3 { background: #cd7f32; color: #fff; }

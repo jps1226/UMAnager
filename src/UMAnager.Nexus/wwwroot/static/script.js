@@ -9562,6 +9562,24 @@ function renderHorseProfile(data) {
     content.innerHTML = html;
 }
 
+// Group-B: track going chip (1=良 firm … 4=不良 heavy) for a horse-history row.
+function horseGoingChip(code) {
+    const m = { 1: ['良', '#1dd1a1'], 2: ['稍', '#ffd24a'], 3: ['重', '#ff9f43'], 4: ['不', '#ff6b6b'] };
+    const x = m[code];
+    if (!x) return '<span class="hh-going-empty">—</span>';
+    return `<span class="hh-going" style="color:${x[1]};border-color:${x[1]}66;background:${x[1]}1a;">${x[0]}</span>`;
+}
+// Group-B: the horse's run line — closing 3F (s) + corner passing positions (e.g. "34.6 · 6-4").
+function horseRunLine(perf) {
+    let p = perf;
+    if (typeof perf === 'string') { try { p = JSON.parse(perf); } catch { return '—'; } }
+    if (!p || typeof p !== 'object') return '—';
+    const l3 = (p.l3f != null && Number.isFinite(+p.l3f)) ? (p.l3f / 10).toFixed(1) : null;
+    const corners = Array.isArray(p.corners) ? p.corners.filter(c => c != null) : [];
+    if (!l3 && !corners.length) return '—';
+    return `${l3 ? `<b class="hh-l3f">${l3}</b>` : ''}${corners.length ? `<span class="hh-corners">${corners.join('-')}</span>` : ''}`;
+}
+
 function buildHorseHistoryHtml(history) {
     if (!history.length) return '<div class="horse-section"><div class="horse-section-title">Race History</div><p class="horse-empty-msg">No race history found.</p></div>';
 
@@ -9582,12 +9600,14 @@ function buildHorseHistoryHtml(history) {
             <td class="hh-date">${escapeHtml(e.race_date)}</td>
             <td class="hh-track">${escapeHtml(e.track_name)}R${e.race_number || '?'}</td>
             <td class="hh-dist">${surfIcon}${e.distance || '—'}m</td>
+            <td class="hh-going-cell">${horseGoingChip(e.going)}</td>
             <td class="hh-class">${escapeHtml(classLabel)}</td>
             <td class="hh-field">${e.field_size || '—'}f</td>
             <td class="hh-finish-cell">${finStr}</td>
             <td class="hh-odds">${escapeHtml(oddsStr)}</td>
             <td class="hh-fav">${escapeHtml(favStr)}</td>
             <td class="hh-jockey">${escapeHtml(e.jockey)}</td>
+            <td class="hh-run">${e.is_upcoming ? '—' : horseRunLine(e.performance)}</td>
         </tr>`;
     }
 
@@ -9604,8 +9624,9 @@ function buildHorseHistoryHtml(history) {
       <table class="horse-history-table">
         <thead>
           <tr>
-            <th>Date</th><th>Track</th><th>Dist</th><th>Class</th>
+            <th>Date</th><th>Track</th><th>Dist</th><th title="Track going (良/稍/重/不良)">馬場</th><th>Class</th>
             <th title="Field size">Field</th><th>Fin</th><th>Odds</th><th>Fav</th><th>Jockey</th>
+            <th title="Closing 3-furlong time (s) · corner passing positions">Run</th>
           </tr>
         </thead>
         <tbody id="horse-history-tbody">${rows}</tbody>
