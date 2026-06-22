@@ -42,6 +42,11 @@ recap_data.json
 run-recap.ps1
 import_days/
 
+# KEIBrain — generated feature tables / model artifacts (regenerate via build_features.mjs)
+KEIBrain/data/
+KEIBrain/*.parquet
+KEIBrain/*.pkl
+
 # OS
 .DS_Store
 Thumbs.db
