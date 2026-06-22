@@ -1,4 +1,11 @@
 // ============================================================
+// ⚠ RESULTS CONTAMINATED — LOOK-AHEAD LEAKAGE (found 2026-06-21). Treat the "catchable %" as inflated.
+// The stats grade (BT.merit = form+breeding) leans on Surface_Win_Pct / Dist_Win_Pct / Record /
+// Sire_Fit, which the historical /api/races computes as-of-NOW — so a winner looks "stats-strong"
+// partly BECAUSE its own win is baked into those numbers. The ~52% "catchable" is therefore too high.
+// Form_Score/Last3 IS date-gated (clean). Trustworthy only after the replay uses point-in-time stats.
+// (The live app is unaffected — see stats-tilt.mjs header.)
+// ============================================================
 // Counterfactual backtest — UPSET AUTOPSY.
 //
 // Answers the strategic question: when a surprise horse wins (a race we likely lost), was it a
