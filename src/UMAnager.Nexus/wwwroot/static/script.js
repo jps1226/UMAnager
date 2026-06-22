@@ -4469,6 +4469,65 @@ const ENGINE_ABSTAIN_PILL = {
     'below-preset-floor': 'the engine wants fewer marks than this bet type needs',
     'small-field':        'field too small to model confidently',
 };
+// ── Cold-engine "value" PREVIEW (s52) — INFORMATIONAL ONLY, never bets or marks anything. ──
+// Surfaces the backtest-derived longshot edges (tuning_hypotheses.md H7/H8) on each race header so
+// the operator can eyeball them live during the ≥3-weekend confirmation window. Point-in-time inputs
+// come from the s52 backend fields Days_Since_Last / Last_Surface / Last_Distance (ETag races-v11);
+// on an older payload these are undefined and the whole thing silently no-ops. Two rules:
+//   💧 VALUE (candidate back): a longshot (odds rank ≥9) returning FRESH (61–120 days off) that is NOT
+//      switching onto dirt → the place overlay (H7, cleaned by H8).
+//   🚫 TRAP (candidate fade): any horse switching ONTO dirt at mid/long odds (rank ≥4) → the market
+//      underrates the surface switch; these crater (H8).
+const COLD_FRESH_LO = 61, COLD_FRESH_HI = 120;
+function coldValueFlagsForRace(r_id) {
+    const entries = globalRaceEntries[r_id] || [];
+    const todaySurface = String(globalRaceInfo[r_id]?.surface || '').toLowerCase();
+    const out = { value: [], trap: [] };
+    for (const e of entries) {
+        if (e.Scratched === true) continue;
+        const fav = parseInt(e.Fav, 10);
+        if (!Number.isFinite(fav)) continue;
+        const days = (e.Days_Since_Last == null) ? null : parseInt(e.Days_Since_Last, 10);
+        const lastSurface = String(e.Last_Surface || '').toLowerCase();
+        const toDirt = lastSurface && lastSurface !== 'jump' && todaySurface === 'dirt' && lastSurface !== 'dirt';
+        const pp = e.PP, name = e.Horse || `#${pp}`;
+        if (toDirt && fav >= 4) out.trap.push({ pp, name });
+        if (fav >= 9 && days != null && days >= COLD_FRESH_LO && days <= COLD_FRESH_HI && !toDirt)
+            out.value.push({ pp, name, days });
+    }
+    return out;
+}
+
+function updateColdValuePreview() {
+    const off = (appConfig.ui?.coldValuePreview === false);
+    Object.keys(globalRaceEntries).forEach(r_id => {
+      try {
+        const meta = document.getElementById(`header-meta-${r_id}`);
+        if (!meta) return;
+        const existing = meta.querySelector('.cold-value-badge');
+        let html = '';
+        if (!off) {
+            const f = coldValueFlagsForRace(r_id);
+            if (f.value.length || f.trap.length) {
+                const parts = [];
+                if (f.value.length) parts.push('💧 ' + f.value.map(v => `#${v.pp} ${escapeHtml(v.name)} (${v.days}d)`).join(', '));
+                if (f.trap.length) parts.push('🚫dirt ' + f.trap.map(v => `#${v.pp}`).join(','));
+                const title = 'Cold-value PREVIEW — informational only, bets nothing. 💧 = fresh-longshot place ' +
+                    'candidate (61–120 days off, long odds, not switching to dirt — H7). 🚫dirt = switching onto ' +
+                    'dirt at mid/long odds, a fade (H8). Watch live; edge NOT confirmed yet (needs ≥3 weekends).';
+                html = ` <span class="cold-value-badge" title="${escapeHtml(title)}" style="display:inline-block;` +
+                    `font-size:0.72em;font-weight:700;padding:1px 7px;margin-left:6px;border-radius:10px;` +
+                    `background:#10303a;color:#aee9ff;border:1px solid #2f86a8;vertical-align:middle;">${parts.join('  ')}</span>`;
+            }
+        }
+        if (html) { if (existing) existing.outerHTML = html; else meta.insertAdjacentHTML('beforeend', html); }
+        else if (existing) existing.remove();
+      } catch (e) {
+        console.warn('updateColdValuePreview: skipped race', r_id, e);
+      }
+    });
+}
+
 function updateEngineAbstainBadges() {
     Object.keys(globalRaceEntries).forEach(r_id => {
       try {
@@ -4536,6 +4595,7 @@ function updateAutoBetHighlighting() {
     document.querySelectorAll('.mark-btn.auto-bet-preview').forEach(btn => btn.classList.remove('auto-bet-preview'));
     updateWontPlaceBadges();      // always — independent of the highlight toggle
     updateEngineAbstainBadges();  // always — the operator wants to see abstains regardless of the toggle
+    updateColdValuePreview();     // s52: informational cold-value flags (H7/H8), bets nothing
 
     if (!isAutoBetHighlightingEnabled()) return;
 

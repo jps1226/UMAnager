@@ -7,7 +7,7 @@
 //          odds-history series, and the voting-tab bet-estimate.
 // KEY DEPENDENCIES: AppDbContext, SettingsService, SirePerformanceService,
 //          JockeyTrainerStatsService, IMemoryCache.
-// CAUTION: The /api/races ETag is data-keyed "races-v10-…" — BUMP vN on any response-shape
+// CAUTION: The /api/races ETag is data-keyed "races-v11-…" — BUMP vN on any response-shape
 //          change or browsers serve a stale 304 body. SortTime is JST-wall-clock-in-UTC.
 // LAST DOCUMENTED: 2026-06-02
 // ============================================================
@@ -218,7 +218,7 @@ public sealed class RacesController : ControllerBase
                         .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                         .FirstOrDefaultAsync();
                     var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                    etag = $"\"races-v10-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                    etag = $"\"races-v11-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                     _cache.Set(EtagCacheKey, etag,
                         new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
                 }
@@ -332,6 +332,19 @@ public sealed class RacesController : ControllerBase
                           .ToList()
                 );
 
+            // s52: each horse's prior runs (date + surface + distance), most-recent first, for the
+            // cold-engine "fresh longshot / surface-switch" PREVIEW overlay. Built from the same
+            // finished-entry history above. Per entry we take the most recent run strictly BEFORE the
+            // viewed race (mirrors ComputeLast3's date gate) → days-since-last + last surface/distance.
+            var priorRunsByHorse = horseFinishHistory
+                .GroupBy(x => x.HorseId!)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderByDescending(x => x.RaceDate)
+                          .Select(x => (x.RaceDate, Surface: x.Surface ?? "", x.Distance))
+                          .ToList()
+                );
+
             // Race class is now stored on the races table (Oracle Q20: JyokenCD slot 5
             // parsed from RA bytes at ingest time). No per-request computation needed —
             // just emit race.RaceClass straight into the API payload below.
@@ -421,6 +434,23 @@ public sealed class RacesController : ControllerBase
                         horseLookup.TryGetValue(e.HorseId ?? "", out var horse);
                         finishesByHorse.TryGetValue(e.HorseId ?? "", out var hist);
                         var (last3Str, formScore, last3Fields) = ComputeLast3(hist, race.RaceDate);
+
+                        // s52: layoff + last-start surface/distance for the preview overlay. Most
+                        // recent prior run strictly before this race's date (null/"" when debut).
+                        int? daysSinceLast = null;
+                        string lastSurface = "";
+                        int? lastDistance = null;
+                        if (priorRunsByHorse.TryGetValue(e.HorseId ?? "", out var priorRuns))
+                        {
+                            foreach (var pr in priorRuns) // already desc by date → first match = most recent
+                            {
+                                if (pr.RaceDate >= race.RaceDate) continue;
+                                daysSinceLast = (int)(race.RaceDate - pr.RaceDate).TotalDays;
+                                lastSurface = pr.Surface;
+                                lastDistance = pr.Distance;
+                                break;
+                            }
+                        }
 
                         // Phase 9: sire-fit % for THIS race's (surface, bucket). null when
                         // the sire's sample in the bucket is below MinSireStarts.
@@ -522,6 +552,10 @@ public sealed class RacesController : ControllerBase
                             Odds = e.Odds?.ToString("F1") ?? "",
                             Prev_Odds = e.PrevOdds?.ToString("F1") ?? "",
                             Fav = e.FavRank?.ToString() ?? "",
+                            // s52: cold-engine preview inputs (layoff + last-start surface/distance).
+                            Days_Since_Last = daysSinceLast,
+                            Last_Surface = lastSurface,
+                            Last_Distance = lastDistance,
                             Finish = e.FinishPos?.ToString() ?? "",
                             // SE 異常区分 1/2/3 (取消/除外) → horse removed from betting; the frontend
                             // bet-line synthesizer (buildRaceBetLines) shrinks the ticket. Only set
