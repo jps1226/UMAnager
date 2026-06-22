@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { statsAsOf } from './point-in-time.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
@@ -74,6 +75,9 @@ export function loadEngine() {
     // (the engine's own form + pedigree merit, with the market/odds term factored OUT).
     entries: (rid) => globalRaceEntries[rid] || [],
     merit: (row) => { const e = explainPowerScore(row, 30); return e.form.subtotal + e.pedigree.subtotal; },
+    // For the stats-tilt test: override the live formula weights (the real Settings lever) so we can
+    // replay with the picker trusting form/breeding more vs odds. getFormulaWeights reads this.
+    setFormulaWeights: (w) => { appConfig.ui = appConfig.ui || {}; appConfig.ui.formulaWeights = w; },
   };
 })();
 `;
@@ -93,7 +97,11 @@ export function loadEngine() {
 
 // Read the fixture, build the engine-input globals + per-race settlement data for the given
 // JST dates, push the globals into the engine, and return the per-race list + counts.
-export function loadWeekend(BT, dates, fixtureFile = fixturePath) {
+// opts.pointInTime (default = env BT_PIT==='1'): rebuild each horse's Record/Surface/Distance stats from
+// its runs BEFORE the race and NULL the un-reconstructable leaky fields (sire-fit / jockey & trainer A/E),
+// so the replay can't see the future. Form_Score/Last3 stay (already date-gated). See point-in-time.mjs.
+export function loadWeekend(BT, dates, fixtureFile = fixturePath, opts = {}) {
+  const pit = opts.pointInTime ?? (process.env.BT_PIT === '1');
   const raw = JSON.parse(fs.readFileSync(fixtureFile, 'utf8'));
   const byDate = raw.past_races_by_date || {};
   const entriesByRace = {}, infoByRace = {}, classByRace = {};
@@ -107,6 +115,19 @@ export function loadWeekend(BT, dates, fixtureFile = fixturePath) {
       // Scratched horses (取消/除外) aren't bettable — drop them so the engine never picks one.
       const entries = (race.entries || []).filter(e => e.Scratched !== true);
       entries.forEach((row, idx) => { row._raceId = rid; row.original_index = idx; });
+      if (pit) {
+        const ymd = String(rid).slice(0, 8);
+        for (const row of entries) {
+          const s = statsAsOf(row.Horse_ID, ymd, race.info.surface, race.info.distance);
+          row.Record = s.record;
+          row.Surface_Win_Pct = s.surfaceWinPct; row.Surface_Starts = s.surfaceStarts;
+          row.Dist_Win_Pct = s.distWinPct; row.Dist_Starts = s.distStarts;
+          // Can't reconstruct these as-of-date cheaply → drop the leaky signal (honest > leaky).
+          row.Sire_Fit = null; row.Sire_Place_Fit = null;
+          row.Surface_Place_Pct = null; row.Dist_Place_Pct = null;
+          row.Jockey_AE = null; row.Trainer_AE = null;
+        }
+      }
       entriesByRace[rid] = entries;
       infoByRace[rid] = { ...race.info, _timeline: 'past' };
       classByRace[rid] = BT.raceClassFlags(race.info.race_class);
