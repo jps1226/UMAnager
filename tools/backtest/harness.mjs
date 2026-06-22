@@ -70,6 +70,10 @@ export function loadEngine() {
     // the small-field token composition, straight from the engine so they can't drift.
     shapeToPreset: () => SHAPE_TO_PRESET,
     smallTokenComp: () => smallFieldTokenComposition(),
+    // For the upset autopsy: the cleaned entry rows for a race, and a horse's STATS-ONLY grade
+    // (the engine's own form + pedigree merit, with the market/odds term factored OUT).
+    entries: (rid) => globalRaceEntries[rid] || [],
+    merit: (row) => { const e = explainPowerScore(row, 30); return e.form.subtotal + e.pedigree.subtotal; },
   };
 })();
 `;

@@ -30,6 +30,10 @@ node tools/backtest/backfill-report.mjs
 
 # Faithfulness check — replay a day in the live Auto-per-race mode vs the known reconciled actual:
 node tools/backtest/validate-actual.mjs 2026-06-21 30
+
+# Upset autopsy — of the races we lost to a surprise winner, how many were CATCHABLE (strong on
+# stats, market missed it) vs genuine FREAKS (weak on everything)? Reads fixtures/history.json:
+node tools/backtest/upset-autopsy.mjs
 ```
 
 `history.json` is a merged multi-weekend snapshot: fetch each day with `curl .../api/races?date=YYYY-MM-DD`
