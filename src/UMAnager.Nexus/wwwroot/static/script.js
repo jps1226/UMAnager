@@ -2665,7 +2665,8 @@ function buildTableBody(r_id, entries) {
             Horse: (() => {
                 const voteCount = votedCountExcludingRace(h_id, r_id);
                 const votedBadge = voteCount > 0 ? ` <span class="voted-badge" title="You backed this horse in ${voteCount} earlier race${voteCount !== 1 ? 's' : ''} this season (not counting this one)">Voted ${voteCount}×</span>` : '';
-                return `<td style="font-weight: bold;">${horseStr}${votedBadge} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></td>`;
+                const coldPill = coldValuePillForRow(r_id, row);
+                return `<td style="font-weight: bold;">${horseStr}${votedBadge}${coldPill} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></td>`;
             })(),
             Record: `<td>${row.Record || ""}</td>`,
             Last3: (() => {
@@ -4479,53 +4480,32 @@ const ENGINE_ABSTAIN_PILL = {
 //   🚫 TRAP (candidate fade): any horse switching ONTO dirt at mid/long odds (rank ≥4) → the market
 //      underrates the surface switch; these crater (H8).
 const COLD_FRESH_LO = 61, COLD_FRESH_HI = 120;
-function coldValueFlagsForRace(r_id) {
-    const entries = globalRaceEntries[r_id] || [];
+// s52: per-horse cold-value PREVIEW pill (H7/H8) — INFORMATIONAL ONLY, bets/marks nothing. Returns the
+// inline pill HTML for one runner (or '' when no flag / toggled off / older payload missing the fields).
+// Built straight into the row (see buildTableBody's Horse cell) so it survives every re-render/reprice.
+//   💧 fresh — a longshot (rank ≥9) back from a 61–120 day break, NOT switching to dirt → place candidate (H7).
+//   🚫 dirt  — switching ONTO dirt at mid/long odds (rank ≥4) → a fade; the market underrates it (H8).
+function coldValuePillForRow(r_id, row) {
+    if (appConfig.ui?.coldValuePreview === false) return '';
+    const fav = parseInt(row.Fav, 10);
+    if (!Number.isFinite(fav)) return '';
     const todaySurface = String(globalRaceInfo[r_id]?.surface || '').toLowerCase();
-    const out = { value: [], trap: [] };
-    for (const e of entries) {
-        if (e.Scratched === true) continue;
-        const fav = parseInt(e.Fav, 10);
-        if (!Number.isFinite(fav)) continue;
-        const days = (e.Days_Since_Last == null) ? null : parseInt(e.Days_Since_Last, 10);
-        const lastSurface = String(e.Last_Surface || '').toLowerCase();
-        const toDirt = lastSurface && lastSurface !== 'jump' && todaySurface === 'dirt' && lastSurface !== 'dirt';
-        const pp = e.PP, name = e.Horse || `#${pp}`;
-        if (toDirt && fav >= 4) out.trap.push({ pp, name });
-        if (fav >= 9 && days != null && days >= COLD_FRESH_LO && days <= COLD_FRESH_HI && !toDirt)
-            out.value.push({ pp, name, days });
+    const lastSurface = String(row.Last_Surface || '').toLowerCase();
+    const days = (row.Days_Since_Last == null || row.Days_Since_Last === '') ? null : parseInt(row.Days_Since_Last, 10);
+    const toDirt = lastSurface && lastSurface !== 'jump' && todaySurface === 'dirt' && lastSurface !== 'dirt';
+    const base = 'display:inline-block;font-size:0.7em;font-weight:700;margin-left:5px;padding:0 6px;' +
+                 'border-radius:8px;vertical-align:middle;white-space:nowrap;';
+    if (toDirt && fav >= 4) {
+        const title = 'Cold-value PREVIEW (informational — bets nothing): switching ONTO dirt at mid/long odds — ' +
+            'a fade. The market underrates the surface switch and these crater (H8). Edge NOT confirmed yet.';
+        return ` <span class="cold-value-pill" title="${escapeHtml(title)}" style="${base}background:#3a1e1e;color:#ffc9c9;border:1px solid #a84444;">🚫 dirt</span>`;
     }
-    return out;
-}
-
-function updateColdValuePreview() {
-    const off = (appConfig.ui?.coldValuePreview === false);
-    Object.keys(globalRaceEntries).forEach(r_id => {
-      try {
-        const meta = document.getElementById(`header-meta-${r_id}`);
-        if (!meta) return;
-        const existing = meta.querySelector('.cold-value-badge');
-        let html = '';
-        if (!off) {
-            const f = coldValueFlagsForRace(r_id);
-            if (f.value.length || f.trap.length) {
-                const parts = [];
-                if (f.value.length) parts.push('💧 ' + f.value.map(v => `#${v.pp} ${escapeHtml(v.name)} (${v.days}d)`).join(', '));
-                if (f.trap.length) parts.push('🚫dirt ' + f.trap.map(v => `#${v.pp}`).join(','));
-                const title = 'Cold-value PREVIEW — informational only, bets nothing. 💧 = fresh-longshot place ' +
-                    'candidate (61–120 days off, long odds, not switching to dirt — H7). 🚫dirt = switching onto ' +
-                    'dirt at mid/long odds, a fade (H8). Watch live; edge NOT confirmed yet (needs ≥3 weekends).';
-                html = ` <span class="cold-value-badge" title="${escapeHtml(title)}" style="display:inline-block;` +
-                    `font-size:0.72em;font-weight:700;padding:1px 7px;margin-left:6px;border-radius:10px;` +
-                    `background:#10303a;color:#aee9ff;border:1px solid #2f86a8;vertical-align:middle;">${parts.join('  ')}</span>`;
-            }
-        }
-        if (html) { if (existing) existing.outerHTML = html; else meta.insertAdjacentHTML('beforeend', html); }
-        else if (existing) existing.remove();
-      } catch (e) {
-        console.warn('updateColdValuePreview: skipped race', r_id, e);
-      }
-    });
+    if (fav >= 9 && days != null && days >= COLD_FRESH_LO && days <= COLD_FRESH_HI && !toDirt) {
+        const title = `Cold-value PREVIEW (informational — bets nothing): fresh longshot — back from a ${days}-day ` +
+            'break at long odds, not switching to dirt. Candidate PLACE overlay (H7). Watch live; NOT confirmed yet.';
+        return ` <span class="cold-value-pill" title="${escapeHtml(title)}" style="${base}background:#10303a;color:#aee9ff;border:1px solid #2f86a8;">💧 fresh ${days}d</span>`;
+    }
+    return '';
 }
 
 function updateEngineAbstainBadges() {
@@ -4595,7 +4575,6 @@ function updateAutoBetHighlighting() {
     document.querySelectorAll('.mark-btn.auto-bet-preview').forEach(btn => btn.classList.remove('auto-bet-preview'));
     updateWontPlaceBadges();      // always — independent of the highlight toggle
     updateEngineAbstainBadges();  // always — the operator wants to see abstains regardless of the toggle
-    updateColdValuePreview();     // s52: informational cold-value flags (H7/H8), bets nothing
 
     if (!isAutoBetHighlightingEnabled()) return;
 
