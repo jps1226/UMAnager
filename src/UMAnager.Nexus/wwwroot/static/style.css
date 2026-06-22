@@ -168,6 +168,8 @@
         .top-bar-risk input[type=range] { width: 100%; cursor: pointer; accent-color: #ff9f43; }
         .top-bar-risk-scale { display: flex; justify-content: space-between; font-size: 9px; color: #555; font-weight: bold; letter-spacing: 0.3px; margin-top: 1px; }
         .pre-odds-notice { font-size: 9px; color: #c8860a; text-align: center; margin-top: 3px; letter-spacing: 0.02em; opacity: 0.85; }
+        .discipline-toggle { display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 10px; font-weight: bold; color: #0abde3; letter-spacing: 0.02em; margin-top: 4px; cursor: pointer; user-select: none; }
+        .discipline-toggle input { cursor: pointer; margin: 0; accent-color: #0abde3; }
 
         /* Windows display-scaling (125%/150%) & smaller laptops: instead of letting the top-bar wrap
            to two rows, COMPACT it — shrink the oversized clock/stat type, padding and gaps so the whole

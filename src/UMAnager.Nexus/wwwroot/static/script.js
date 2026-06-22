@@ -298,6 +298,32 @@ function compositionForAutoPreset(presetId) {
     return presetId === SMALL_FIELD_TOKEN_ID ? smallFieldTokenComposition() : compositionFromPreset(presetId);
 }
 
+// ── DISCIPLINE MODE (cold engine, §0 Step 2) ─────────────────────────────────
+// An ALTERNATIVE TO THE RISK SLIDER, not a bet preset. The backtest bench proved we have no pick-side
+// edge over the market — so Discipline mode stops trying to out-pick it. When ON it:
+//   (1) OVERRIDES the slider with a market-trusting low risk (back the crowd's top choices), and
+//   (2) OVERRIDES the day preset by auto-choosing a SAFE, place-biased bet type per race.
+// Those are the two robust levers the bench found: place recovers > win, and longshots/exotics bleed.
+// Honest goal: LOSE LEAST, not profit — the ~20-25% takeout wall stands until better data (Group-B).
+const DISCIPLINE_RISK = 10;   // pinned slider value when on — Ultra-Safe / trust the market
+function isDisciplineMode() { return !!(typeof appConfig === 'object' && appConfig && appConfig.ui && appConfig.ui.disciplineMode); }
+// Place-biased shape → bet type. Only the two safest presets (win+place, wide-safe); never the
+// exotic/longshot bleeders (trio/nagashi). Mirrors SHAPE_TO_PRESET but for capital preservation.
+const DISCIPLINE_SHAPE_TO_PRESET = {
+    'lone-favorite': 'win_place',   // place the standout
+    'two-clear':     'wide_safe',   // wide net on the clear pair (a place-style bet)
+    'standout+pack': 'win_place',   // place the standout — skip the nagashi exotic
+    'tight-top3':    'wide_safe',   // wide on the top cluster, not a trio box
+    'tight-pack':    'wide_safe',
+    'wide-open':     'win_place',   // safest single action when there's no read
+};
+// The SAFE preset id Discipline mode picks for a race's shape (small field → the token Q+Wide).
+function disciplineBetTypePresetForRace(r_id) {
+    const probe = getEngineMarkPlanForRace(r_id, { compositionOverride: compositionFromPreset('balanced') });
+    if (probe.shape === 'small-field') return SMALL_FIELD_TOKEN_ID;
+    return DISCIPLINE_SHAPE_TO_PRESET[probe.shape] || 'win_place';
+}
+
 // Phase 34 — per-preset COUNT BAND + selection TILT (design locked 2026-06-19).
 // The active bet preset sets how MANY marks the engine suggests (a hard min–max band = a fence)
 // and a small ranking lean for the SUPPORTING marks (the ◎ banker never moves):
@@ -413,6 +439,11 @@ function getRaceBetCompositionOverride(rid) {
 function resolveBetComposition(rid) {
     const override = getRaceBetCompositionOverride(rid);
     if (override) return override;
+    // Discipline mode (cold engine) overrides the day preset: pick a SAFE, place-biased bet type for
+    // THIS race's field shape. Everything downstream (pricing/preview/placement/freeze) flows through here.
+    if (isDisciplineMode()) {
+        return compositionForAutoPreset(disciplineBetTypePresetForRace(rid) || 'win_place');
+    }
     const dayComp = getDayBetComposition(globalRaceInfo[rid]?.clean_date || '');
     // Phase 35: the "Auto (per race)" day choice has no fixed lines — resolve it to the bet preset
     // the engine picks for THIS race's field shape (falls back to the default if there's no read yet,
@@ -1770,6 +1801,8 @@ async function init() {
     const savedRisk = appConfig.ui?.riskSlider || 50;
     document.getElementById('risk-slider').value = savedRisk;
     updateRiskLabel(savedRisk);
+    // Restore Discipline mode (the slider override). Reflects into the toggle + disables the slider.
+    updateDisciplineUi();
     
     // NEW: Apply sidebar settings
     applySidebarSettings();
@@ -2796,6 +2829,38 @@ function updateRiskLabel(val) {
     updatePreOddsNotice();
 }
 
+// ── Discipline-mode toggle (the slider override) ─────────────────────────────
+// Reflects state into the slider (disabled) + the MODE label, and refreshes everything a slider
+// move would (badges, highlight overlay, engine picks, quick stats), then persists to config.
+function updateDisciplineUi() {
+    const on = isDisciplineMode();
+    const toggle = document.getElementById('discipline-toggle');
+    const slider = document.getElementById('risk-slider');
+    const label = document.getElementById('risk-label');
+    if (toggle) toggle.checked = on;
+    if (slider) { slider.disabled = on; slider.style.opacity = on ? '0.4' : ''; }
+    if (on) {
+        if (label) { label.innerText = '🧊 Discipline (trust market · place-biased)'; label.style.color = '#0abde3'; }
+        try { syncAutoBetPreviewColor(DISCIPLINE_RISK); } catch (_) {}
+        try { updatePreOddsNotice(); } catch (_) {}
+    } else {
+        updateRiskLabel(slider ? slider.value : 50);
+    }
+}
+function toggleDisciplineMode(on) {
+    if (typeof appConfig !== 'object' || !appConfig) return;
+    appConfig.ui = appConfig.ui || {};
+    appConfig.ui.disciplineMode = !!on;
+    updateDisciplineUi();
+    try { saveConfigToServer(); } catch (_) {}
+    // Re-run the same refreshers the slider's 'input' listeners fire, so picks/preview/stats update live.
+    try { updateAllRiskBadges(); } catch (_) {}
+    try { updateAutoBetHighlighting(); } catch (_) {}
+    try { refreshScoreExplainIfOpen(); } catch (_) {}
+    try { renderEnginePicks(); } catch (_) {}
+    try { updateQuickStats(); } catch (_) {}
+}
+
 function updatePreOddsNotice() {
     const el = document.getElementById('pre-odds-notice');
     if (!el) return;
@@ -2900,6 +2965,7 @@ function normalizeMarksPayload(payload) {
 }
 
 function getCurrentRiskValue() {
+    if (isDisciplineMode()) return DISCIPLINE_RISK;   // recorded snapshots reflect the pinned risk
     const slider = document.getElementById('risk-slider');
     const parsed = Number.parseInt(slider?.value ?? '50', 10);
     return Number.isFinite(parsed) ? parsed : 50;
@@ -3651,10 +3717,15 @@ function refreshScoreExplainIfOpen() {
 }
 
 function getCurrentAutoPickRisk(riskOverride = null) {
+    const hasOverride = riskOverride !== null && riskOverride !== 'null' && riskOverride !== undefined;
+    // Discipline mode replaces the slider entirely — pin to a market-trusting low risk. An explicit
+    // numeric riskOverride still wins (so backtest sweeps / what-if probes can force a value).
+    if (isDisciplineMode() && !hasOverride) return DISCIPLINE_RISK;
+
     let currentRisk = parseInt(document.getElementById('risk-slider')?.value, 10);
     if (isNaN(currentRisk)) currentRisk = 50;
 
-    if (riskOverride !== null && riskOverride !== 'null' && riskOverride !== undefined) {
+    if (hasOverride) {
         const override = parseInt(riskOverride, 10);
         if (!isNaN(override)) currentRisk = override;
     }

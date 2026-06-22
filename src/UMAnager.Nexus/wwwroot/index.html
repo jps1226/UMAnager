@@ -165,6 +165,9 @@
                         <span>SAFE / CHALK</span>
                         <span>CHAOS / VALUE</span>
                     </div>
+                    <label class="discipline-toggle" title="Cold engine: overrides the slider with a market-trusting low risk AND auto-picks a SAFE, place-biased bet type per race. The bench shows we can't out-pick the market — this aims to LOSE LEAST (place &gt; win, no longshots/exotics), not to profit.">
+                        <input type="checkbox" id="discipline-toggle" onchange="toggleDisciplineMode(this.checked)"> 🧊 Discipline mode
+                    </label>
                     <div id="pre-odds-notice" class="pre-odds-notice" style="display:none;"></div>
                     <div id="dev-paint-time" class="dev-only" style="font-size:10px; color:#888; text-align:center; margin-top:3px; letter-spacing:0.03em;"></div>
                 </div>
@@ -680,6 +683,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260621-2"></script>
+<script src="/static/script.js?v=20260622-1"></script>
 </body>
 </html>

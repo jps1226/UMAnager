@@ -78,6 +78,11 @@ export function loadEngine() {
     // For the stats-tilt test: override the live formula weights (the real Settings lever) so we can
     // replay with the picker trusting form/breeding more vs odds. getFormulaWeights reads this.
     setFormulaWeights: (w) => { appConfig.ui = appConfig.ui || {}; appConfig.ui.formulaWeights = w; },
+    // Discipline mode (cold engine) — toggle it + read what it derives, so we can backtest it.
+    setDisciplineMode: (on) => { appConfig.ui = appConfig.ui || {}; appConfig.ui.disciplineMode = !!on; },
+    disciplineRisk: () => getCurrentAutoPickRisk(),
+    resolveComp: (rid) => resolveBetComposition(rid),
+    isDiscipline: () => isDisciplineMode(),
   };
 })();
 `;
