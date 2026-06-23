@@ -9625,11 +9625,68 @@ function horseRunLine(perf) {
         l3 ? `Closing kick: last-3-furlong (final 600m) time ${l3}s — a lower number is a faster finishing burst` : '',
         corners.length ? `Running position at each corner (early → late): ${corners.join(' → ')} — 1 = leading the field, so low = front-runner, high = closer` : '',
     ].filter(Boolean).join('\n').replace(/"/g, '&quot;');
-    return `<span title="${tip}">${l3 ? `<b class="hh-l3f">${l3}</b>` : ''}${corners.length ? `<span class="hh-corners">${corners.join('-')}</span>` : ''}</span>`;
+    // Highlight a standout closing fraction (a fast last-3F is a sign of a strong finishing kick).
+    const fast = l3 && parseFloat(l3) < 34.0;
+    const l3Html = l3 ? `<b class="hh-l3f"${fast ? ' style="color:#8bd450;" title="Fast closing fraction (sub-34s last 3F)"' : ''}>${l3}</b>` : '';
+    return `<span title="${tip}">${l3Html}${corners.length ? `<span class="hh-corners">${corners.join('-')}</span>` : ''}</span>`;
+}
+
+// Jockey kanji → romaji (top riders by mount count). Kanji fallback for the long tail
+// (rare riders), so an unmapped name still shows rather than blanking. Easy to extend.
+const JOCKEY_ROMAJI = {
+    'ルメール': 'Lemaire', 'モレイラ': 'Moreira', 'マーカンド': 'Marquand', 'デムーロ': 'Demuro',
+    '川田将雅': 'Kawada Y.', '武豊': 'Take Y.', '横山武史': 'Yokoyama T.', '横山和生': 'Yokoyama K.',
+    '横山典弘': 'Yokoyama N.', '横山琉人': 'Yokoyama R.', '戸崎圭太': 'Tosaki K.', '松山弘平': 'Matsuyama K.',
+    '岩田望来': 'Iwata M.', '岩田康誠': 'Iwata Y.', '坂井瑠星': 'Sakai R.', '菅原明良': 'Sugawara A.',
+    '鮫島克駿': 'Sameshima K.', '団野大成': 'Danno T.', '津村明秀': 'Tsumura A.', '三浦皇成': 'Miura K.',
+    '西村淳也': 'Nishimura J.', '北村友一': 'Kitamura Y.', '幸英明': 'Ko H.', '和田竜二': 'Wada R.',
+    '池添謙一': 'Ikezoe K.', '福永祐一': 'Fukunaga Y.', '田辺裕信': 'Tanabe H.', '吉田隼人': 'Yoshida H.',
+    '丸山元気': 'Maruyama G.', '大野拓弥': 'Ohno T.', '菱田裕二': 'Hishida Y.', '丹内祐次': 'Tannai Y.',
+    '木幡巧也': 'Kowata T.', '荻野極': 'Ogino K.', '酒井学': 'Sakai M.', '内田博幸': 'Uchida H.',
+    '田口貫太': 'Taguchi K.', '菊沢一樹': 'Kikusawa K.', '斎藤新': 'Saito A.', '松若風馬': 'Matsuwaka F.',
+    '原優介': 'Hara Y.', '小林美駒': 'Kobayashi M.', '今村聖奈': 'Imamura S.', '永島まなみ': 'Nagashima M.',
+    '浜中俊': 'Hamanaka S.', '柴田大知': 'Shibata D.', '秋山真一郎': 'Akiyama S.', '川須栄彦': 'Kawasu H.',
+};
+function romajiJockey(name) {
+    if (!name) return '—';
+    return JOCKEY_ROMAJI[name] || name;   // kanji fallback for unmapped riders
+}
+
+// Surface as a translated pill (Turf / Dirt / Jump), color-coded like the going chips.
+// Bright-on-dark pill (the app is a dark theme — match the going-chip color scheme).
+const HH_PILL = 'display:inline-block;padding:0 5px;border-radius:3px;border:1px solid;font-size:11px;font-weight:600;line-height:16px;';
+function brightPill(cls, color, label, tip) {
+    return `<span class="${cls}" style="${HH_PILL}color:${color};border-color:${color}66;background:${color}1a;" title="${tip}">${label}</span>`;
+}
+function horseSurfacePill(surface) {
+    if (surface === 'turf') return brightPill('hh-surf', '#1dd1a1', 'Turf', 'Turf course');
+    if (surface === 'dirt') return brightPill('hh-surf', '#d9a066', 'Dirt', 'Dirt course');
+    if (surface === 'jump') return brightPill('hh-surf', '#9aa0a6', 'Jump', 'Jump / steeplechase');
+    return '';
+}
+
+// Infer running style (Lead / Press / Close / Deep) from the corner passing positions +
+// field size — early position relative to the field. A handicapping read at a glance.
+function horseRunStyle(perf, fieldSize) {
+    let p = perf;
+    if (typeof perf === 'string') { try { p = JSON.parse(perf); } catch { return ''; } }
+    if (!p || !Array.isArray(p.corners)) return '';
+    const pos = p.corners.map(c => parseInt(c, 10)).filter(n => Number.isFinite(n) && n > 0);
+    if (!pos.length) return '';
+    const early = pos[0];
+    const n = fieldSize > 1 ? fieldSize : Math.max(...pos);
+    const ratio = early / n;
+    let label, color;
+    if (early <= 1) { label = 'Lead'; color = '#ff6b9d'; }
+    else if (ratio <= 0.30) { label = 'Press'; color = '#ffc04a'; }
+    else if (ratio <= 0.66) { label = 'Close'; color = '#6cc6ff'; }
+    else { label = 'Deep'; color = '#ff7b6b'; }
+    const tip = `Running style (from corner positions): ${label} — early position ${early} of ${n} runners`;
+    return brightPill('hh-style', color, label, tip);
 }
 
 function buildHorseHistoryHtml(history) {
-    if (!history.length) return '<div class="horse-section"><div class="horse-section-title">Race History</div><p class="horse-empty-msg">No race history found.</p></div>';
+    if (!history.length) return '<div class="horse-section"><div class="horse-section-title">Form (past performances)</div><p class="horse-empty-msg">No race history found.</p></div>';
 
     const INITIAL = 10;
     const hasMore = history.length > INITIAL;
@@ -9638,24 +9695,27 @@ function buildHorseHistoryHtml(history) {
         const finStr = e.is_upcoming ? '—' : (e.finish != null ? `<span class="hh-finish hh-finish-${e.finish <= 3 ? e.finish : 'other'}">${e.finish}</span>` : '—');
         const oddsStr = e.odds || '—';
         const favStr = e.fav_rank ? `#${e.fav_rank}` : '—';
-        const surfIcon = e.surface === 'turf' ? '🌿' : (e.surface === 'dirt' ? '🟤' : '');
         const classLabel = localizeRaceName(e.race_name) || localizeRaceClass(e.race_class) || e.race_class || '—';
+        const style = e.is_upcoming ? '' : horseRunStyle(e.performance, e.field_size);
+        // Cold-engine teaching cue (H8): a run that SWITCHED onto dirt from a non-dirt last start —
+        // the strongest fade we measured. `next` (history is newest-first) is this run's prior start.
+        const next = history[i + 1];
+        const toDirt = e.surface === 'dirt' && next && next.surface && next.surface !== 'dirt' && next.surface !== 'jump';
         // Click any row → modal showing that whole race in the main-page layout,
         // with the viewed horse highlighted. currentHorseId is the horse being profiled.
-        return `<tr class="hh-row ${e.is_upcoming ? 'hh-upcoming' : ''} ${i >= INITIAL ? 'hh-extra' : ''}"
+        return `<tr class="hh-row ${e.is_upcoming ? 'hh-upcoming' : ''} ${i >= INITIAL ? 'hh-extra' : ''} ${toDirt ? 'hh-flag-dirt' : ''}"
                     onclick="openHorseRaceModal('${e.race_id}','${currentHorseId}','${e.race_date}')"
-                    title="View this race's full field">
+                    title="${toDirt ? 'Cold-engine flag: switched onto dirt from a non-dirt last start (the dirt-switch fade) — ' : ''}View this race's full field">
             <td class="hh-date">${escapeHtml(e.race_date)}</td>
-            <td class="hh-track">${escapeHtml(e.track_name)}R${e.race_number || '?'}</td>
-            <td class="hh-dist">${surfIcon}${e.distance || '—'}m</td>
-            <td class="hh-going-cell">${horseGoingChip(e.going)}</td>
+            <td class="hh-track">${escapeHtml(e.track_name)} · ${e.race_number || '?'}</td>
             <td class="hh-class">${escapeHtml(classLabel)}</td>
-            <td class="hh-field">${e.field_size || '—'}f</td>
-            <td class="hh-finish-cell">${finStr}</td>
+            <td class="hh-course">${e.distance || '—'}m ${horseSurfacePill(e.surface)} ${horseGoingChip(e.going)}</td>
+            <td class="hh-field">${e.field_size || '—'}</td>
             <td class="hh-odds">${escapeHtml(oddsStr)}</td>
             <td class="hh-fav">${escapeHtml(favStr)}</td>
-            <td class="hh-jockey">${escapeHtml(e.jockey)}</td>
-            <td class="hh-run">${e.is_upcoming ? '—' : horseRunLine(e.performance)}</td>
+            <td class="hh-finish-cell">${finStr}</td>
+            <td class="hh-run">${e.is_upcoming ? '—' : horseRunLine(e.performance)} ${style}</td>
+            <td class="hh-jockey">${escapeHtml(romajiJockey(e.jockey))}</td>
         </tr>`;
     }
 
@@ -9668,13 +9728,16 @@ function buildHorseHistoryHtml(history) {
 
     return `
     <div class="horse-section">
-      <div class="horse-section-title">Race History</div>
-      <table class="horse-history-table">
+      <div class="horse-section-title">Form (past performances)</div>
+      <table class="horse-history-table horse-form-grid">
         <thead>
           <tr>
-            <th>Date</th><th>Track</th><th>Dist</th><th title="Track going — how firm or wet the ground was (Firm → Good → Soft → Heavy)">Going</th><th>Class</th>
-            <th title="Field size">Field</th><th>Fin</th><th>Odds</th><th>Fav</th><th>Jockey</th>
-            <th title="The horse's run: closing last-3-furlong time (s) + its position at each corner (1 = leading)">Run</th>
+            <th>Date</th><th>Track · R</th><th>Class</th>
+            <th title="Distance, surface (Turf/Dirt) and going (Firm → Good → Soft → Heavy)">Course</th>
+            <th title="Field size — number of runners">Field</th><th>Odds</th>
+            <th title="Betting favourite rank (#1 = most backed)">Fav</th><th>Fin</th>
+            <th title="The run: closing last-3-furlong time (s) + corner positions (1 = leading), and inferred running style">Run / style</th>
+            <th>Jockey</th>
           </tr>
         </thead>
         <tbody id="horse-history-tbody">${rows}</tbody>

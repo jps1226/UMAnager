@@ -3039,6 +3039,13 @@ td.bk-color-8 { background: #dc809a !important; color: #000 !important; font-wei
 .hh-run { color: #aaa; font-variant-numeric: tabular-nums; }
 .hh-run .hh-l3f { color: #6cc6ff; font-weight: 700; }
 .hh-run .hh-corners { color: #888; margin-left: 5px; font-size: 11px; }
+.hh-course { white-space: nowrap; }
+.hh-course .hh-surf, .hh-course .hh-going { margin-left: 3px; vertical-align: middle; }
+.hh-run .hh-style { margin-left: 6px; vertical-align: middle; }
+.hh-jockey { color: #ccc; }
+/* Cold-engine teaching cue: a run that switched onto dirt (the H8 fade) */
+.horse-history-table tr.hh-flag-dirt td:first-child { box-shadow: inset 3px 0 0 #ff6b6b; }
+.horse-history-table tr.hh-flag-dirt td { background: rgba(255,107,107,0.06); }
 .hh-finish-1 { background: #d4af37; color: #000; }
 .hh-finish-2 { background: #a8a9ad; color: #000; }
 .hh-finish-3 { background: #cd7f32; color: #fff; }
