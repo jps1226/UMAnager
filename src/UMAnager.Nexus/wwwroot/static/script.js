@@ -2638,7 +2638,7 @@ function buildTableBody(r_id, entries) {
                             + `background:#3a3320;color:#ffe9b0;border:1px solid #8a7430;vertical-align:middle;white-space:nowrap;">⚙ ${escapeHtml(engTxt)}</span>`;
                     }
                 }
-                return `<td style="min-width: 170px;">${btns}${diffChip}</td>`;
+                return `<td class="shirushi-cell">${btns}${diffChip}</td>`;
             })(),
             BK: (() => {
                 const bkNum = parseInt(row.BK, 10);
@@ -2664,9 +2664,12 @@ function buildTableBody(r_id, entries) {
             })(),
             Horse: (() => {
                 const voteCount = votedCountExcludingRace(h_id, r_id);
-                const votedBadge = voteCount > 0 ? ` <span class="voted-badge" title="You backed this horse in ${voteCount} earlier race${voteCount !== 1 ? 's' : ''} this season (not counting this one)">Voted ${voteCount}×</span>` : '';
+                const votedBadge = voteCount > 0 ? `<span class="voted-badge" title="You backed this horse in ${voteCount} earlier race${voteCount !== 1 ? 's' : ''} this season (not counting this one)">Voted ${voteCount}×</span>` : '';
                 const coldPill = coldValuePillForRow(r_id, row);
-                return `<td style="font-weight: bold;">${horseStr}${votedBadge}${coldPill} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></td>`;
+                // Name + ⓘ stay on the top line; any chips (cold-value, voted) drop to a line underneath.
+                const chips = `${votedBadge}${coldPill}`.trim();
+                const chipsHtml = chips ? `<div class="horse-chips">${chips}</div>` : '';
+                return `<td class="horse-cell" style="font-weight: bold;"><span class="horse-name-line">${horseStr} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></span>${chipsHtml}</td>`;
             })(),
             Record: `<td>${row.Record || ""}</td>`,
             Last3: (() => {
@@ -2861,6 +2864,7 @@ function toggleDisciplineMode(on) {
     try { updateAllRiskBadges(); } catch (_) {}
     try { updateAutoBetHighlighting(); } catch (_) {}
     try { refreshScoreExplainIfOpen(); } catch (_) {}
+    try { refreshRaceAutopsyIfOpen(); } catch (_) {}
     try { renderEnginePicks(); } catch (_) {}
     try { updateQuickStats(); } catch (_) {}
 }
@@ -3720,6 +3724,309 @@ function refreshScoreExplainIfOpen() {
     renderScoreExplain(row, pop);
 }
 
+// ============================================================
+// POST-RACE "WHY IT WON" AUTOPSY (s54) — the teaching half of the engine.
+// The pre-race ⓘ popover explains why the engine PICKED a horse; this explains,
+// after the race settles, why the actual WINNER beat the field — read on the SAME
+// factors, so picking and winning are judged on one ruler. It grades each result
+// CHALK / CATCHABLE / SEMI / FREAK (mirrors tools/backtest/upset-autopsy.mjs:
+// merit = explainPowerScore form.subtotal + pedigree.subtotal, odds removed), and
+// shows how the engine's own ◎ fared. Frontend-only: reads the settled Finish +
+// the scoring fields already on each row. Honest by design — when a winner is weak
+// on every signal it says FREAK rather than inventing a reason.
+// ============================================================
+let raceAutopsyState = { raceId: null };
+
+const AUTOPSY_BUCKET = {
+    chalk:     { label: 'CHALK', short: 'Chalk', emoji: '✓', color: '#7ed6df',
+                 meaning: 'A top-3 favorite won — the market had this right. If you lost here it was the bet TYPE, not the pick.' },
+    catchable: { label: 'CATCHABLE', short: 'Catchable', emoji: '🎯', color: '#1dd1a1',
+                 meaning: 'An upset, but the winner ranked among the field’s best on form + breeding. A capable horse the crowd underrated — the kind you can learn to spot.' },
+    semi:      { label: 'SEMI-READABLE', short: 'Semi', emoji: '〰', color: '#feca57',
+                 meaning: 'An upset; the winner was middling on the stats. Partly readable, partly variance — hard to call in advance.' },
+    freak:     { label: 'FREAK', short: 'Freak', emoji: '🎲', color: '#ff6b6b',
+                 meaning: 'An upset; the winner was weak on every signal. Unforecastable — the honest response is cheaper, wider bets, not re-picking.' },
+};
+
+function autopsyOrdinal(n) {
+    if (!Number.isFinite(n)) return '—';
+    const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+// A race is autopsy-ready once a real finish order with a 1st exists.
+function raceIsSettledForAutopsy(raceId) {
+    const entries = globalRaceEntries[raceId] || [];
+    return entries.some(e => parseFinishRank(e.Finish) === 1);
+}
+
+function computeRaceAutopsy(raceId) {
+    const entries = globalRaceEntries[raceId] || [];
+    if (!entries.length) return null;
+    const risk = getCurrentAutoPickRisk();
+    const field = entries.length;
+
+    // Per-horse: the engine's own breakdown + odds-removed MERIT (form+pedigree
+    // subtotal) — exactly the grade the offline upset-autopsy uses.
+    const scored = entries.map(e => {
+        const b = explainPowerScore(e, risk);
+        return {
+            e,
+            hid: String(e.Horse_ID).split('.')[0],
+            name: e.Horse || e.Horse_ID || '',
+            merit: (b.form?.subtotal || 0) + (b.pedigree?.subtotal || 0),
+            finish: parseFinishRank(e.Finish),
+            fav: parseInt(e.Fav, 10) || 999,
+            odds: parseFloat(e.Odds),
+            form: parseFloat(e.Form_Score),
+            sire: parseFloat(e.Sire_Fit),
+            surf: parseFloat(e.Surface_Win_Pct),
+        };
+    });
+
+    const winner = scored.find(s => s.finish === 1);
+    if (!winner) return null;
+
+    // Field-rank helper (1 = best).
+    function ranker(extract, higherBetter) {
+        const vals = scored.map(extract).filter(v => v !== null && Number.isFinite(v))
+            .sort((a, c) => higherBetter ? c - a : a - c);
+        return (s) => {
+            const v = extract(s);
+            if (v === null || !Number.isFinite(v)) return null;
+            const idx = vals.findIndex(x => Math.abs(x - v) < 1e-9);
+            return idx >= 0 ? idx + 1 : null;
+        };
+    }
+    const meritRankOf = ranker(s => s.merit, true);
+    const formRankOf  = ranker(s => s.form, true);
+    const sireRankOf  = ranker(s => s.sire, true);
+    const surfRankOf  = ranker(s => s.surf, true);
+    const oddsRankOf  = ranker(s => (Number.isFinite(s.odds) && s.odds > 0 ? s.odds : null), false); // 1 = favorite
+
+    const statsRank = meritRankOf(winner);
+    const isUpset = winner.fav >= 4;
+    let bucket;
+    if (!isUpset) bucket = 'chalk';
+    else if (statsRank !== null && statsRank <= field / 3) bucket = 'catchable';
+    else if (statsRank !== null && statsRank > field * 2 / 3) bucket = 'freak';
+    else bucket = 'semi';
+
+    // The engine's own pre-race plan (mark-blind) + where its picks finished.
+    const plan = getEngineMarkPlanForRace(raceId);
+    const planByHid = {};
+    (plan.assignments || []).forEach(a => { planByHid[String(a.h_id)] = a.symbol; });
+    const anchorAsg = (plan.assignments || []).find(a => a.symbol === '◎');
+    const anchor = anchorAsg ? scored.find(s => s.hid === String(anchorAsg.h_id)) : null;
+    const winnerMark = planByHid[winner.hid] || null;
+
+    const top3 = scored.filter(s => s.finish !== null && s.finish <= 3).sort((a, c) => a.finish - c.finish);
+
+    return {
+        raceId, risk, field, winner, statsRank, isUpset, bucket, winnerMark, anchor, top3,
+        ranks: { merit: statsRank, form: formRankOf(winner), sire: sireRankOf(winner),
+                 surf: surfRankOf(winner), odds: oddsRankOf(winner) },
+    };
+}
+
+// The winner's factor lines, read on the engine's own ruler — "what it had."
+function autopsyWinnerFactors(a) {
+    const w = a.winner, field = a.field, R = a.ranks, out = [];
+    const third = Math.max(1, Math.ceil(field / 3));
+    const sentOf = (rank) => rank === null ? 'neu' : rank <= third ? 'pos' : rank > field - third ? 'neg' : 'neu';
+
+    // Market position — for a WINNER, being a longshot that came through is the value story.
+    if (R.odds !== null) {
+        const o = Number.isFinite(w.odds) ? w.odds.toFixed(1) + '×' : '—';
+        let desc;
+        if (w.fav === 1) desc = `Sent off favorite at ${o} — the market’s pick delivered`;
+        else if (w.fav >= 4) desc = `Longshot at ${o} (market rank ${R.odds}/${field}) — the crowd underrated it`;
+        else desc = `Near-favorite at ${o} (market rank ${R.odds}/${field})`;
+        out.push({ emoji: '💴', label: 'Market', desc, rank: R.odds, sent: w.fav >= 4 ? 'pos' : 'neu' });
+    }
+    // Recent form
+    if (R.form !== null) {
+        const f = w.form;
+        let d;
+        if (!Number.isFinite(f)) d = 'No recent-form figure';
+        else if (f >= 0.65) d = 'Excellent recent form — was rounding into shape';
+        else if (f >= 0.35) d = 'Solid recent form';
+        else if (f >= 0.10) d = 'Mixed recent form — form alone didn’t flag it';
+        else d = 'Weak recent form — not visible in the form lines';
+        out.push({ emoji: '📈', label: 'Recent form', desc: `${d} (rank ${R.form}/${field})`, rank: R.form, sent: sentOf(R.form) });
+    }
+    // Sire fit
+    if (R.sire !== null && Number.isFinite(w.sire)) {
+        const adj = w.sire >= 15 ? 'Strong' : w.sire >= 9 ? 'Decent' : 'Light';
+        out.push({ emoji: '🧬', label: 'Sire fit', desc: `${adj} breeding fit for today (${w.sire.toFixed(1)}%, rank ${R.sire}/${field})`, rank: R.sire, sent: sentOf(R.sire) });
+    }
+    // Surface fit
+    if (R.surf !== null && Number.isFinite(w.surf)) {
+        const adj = w.surf >= 20 ? 'Proven' : w.surf >= 10 ? 'Decent' : 'Light';
+        out.push({ emoji: '🏟️', label: 'Surface fit', desc: `${adj} record on this surface (${w.surf.toFixed(1)}% win, rank ${R.surf}/${field})`, rank: R.surf, sent: sentOf(R.surf) });
+    }
+    // Cold-engine teaching tie-in: did the winner match a watched cold-value angle (H7)?
+    const e = w.e;
+    const days = (e.Days_Since_Last == null || e.Days_Since_Last === '') ? null : parseInt(e.Days_Since_Last, 10);
+    if (w.fav >= 9 && days != null && days >= COLD_FRESH_LO && days <= COLD_FRESH_HI) {
+        out.push({ emoji: '💧', label: 'Cold engine', rank: null, sent: 'pos',
+            desc: `Fresh longshot — won off a ${days}-day break. Matches the H7 “fresh longshot” place-overlay the cold engine is watching.` });
+    }
+    return out;
+}
+
+function autopsyEngineLine(a) {
+    if (!a.anchor) {
+        return a.winnerMark
+            ? `The engine had no clear ◎, but did mark the winner <b>${a.winnerMark}</b>.`
+            : 'The engine abstained on this race (no clear anchor) — nothing to grade against the result.';
+    }
+    const an = a.anchor;
+    if (an.hid === a.winner.hid) {
+        return `The engine’s ◎ <b>${escapeHtml(an.name)}</b> <span class="ra-good">WON</span> — the pre-race read held up.`;
+    }
+    const fin = an.finish !== null ? autopsyOrdinal(an.finish) : 'unplaced';
+    let tail;
+    if (a.winnerMark) {
+        tail = `It still flagged the winner (<b>${a.winnerMark}</b>), just not on top.`;
+    } else if (an.fav <= 2 && a.winner.fav >= 4) {
+        tail = 'It anchored the favorite on market position; the winner beat it on merit the short price hid.';
+    } else {
+        tail = 'The winner went unmarked — a different profile came through.';
+    }
+    return `The engine’s ◎ was <b>${escapeHtml(an.name)}</b> (finished ${fin}). ${tail}`;
+}
+
+function autopsyTakeaway(a) {
+    const w = a.winner;
+    switch (a.bucket) {
+        case 'chalk':
+            return 'A favorite won — the lesson here is in the bet STRUCTURE (what you staked and how wide), not the pick.';
+        case 'catchable': {
+            const best = [['form', a.ranks.form], ['breeding fit', a.ranks.sire], ['surface record', a.ranks.surf]]
+                .filter(([, r]) => r === 1).map(([n]) => n);
+            const lead = best.length ? `the field’s best ${best.join(' and ')}` : 'a top-tier merit profile';
+            return `Catchable: the winner had ${lead} despite long odds. At a higher Risk setting the engine leans toward exactly this kind of underrated horse — a pattern worth learning to see.`;
+        }
+        case 'semi':
+            return 'Half-readable: there was some signal here, but also real variance. Worth noting, not worth chasing.';
+        case 'freak':
+            return `Freak: at ${Number.isFinite(w.odds) ? w.odds.toFixed(1) + '×' : 'long odds'} the winner was weak on every signal the engine reads. Nothing could have flagged it — the honest response is cheaper, wider bets, not trying to out-pick this.`;
+    }
+    return '';
+}
+
+function ensureRaceAutopsyModal() {
+    let m = document.getElementById('race-autopsy-modal');
+    if (m) return m;
+    m = document.createElement('div');
+    m.id = 'race-autopsy-modal';
+    m.className = 'race-autopsy-modal';
+    m.style.display = 'none';
+    m.addEventListener('click', (e) => { if (e.target === m) closeRaceAutopsy(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeRaceAutopsy(); });
+    document.body.appendChild(m);
+    return m;
+}
+
+function closeRaceAutopsy() {
+    const m = document.getElementById('race-autopsy-modal');
+    if (m) m.style.display = 'none';
+    raceAutopsyState = { raceId: null };
+}
+
+function openRaceAutopsy(raceId) {
+    raceAutopsyState = { raceId };
+    renderRaceAutopsy(raceId);
+}
+
+// Re-render in place if the operator moves the Risk slider while it's open
+// (merit/ranks shift with risk, just like the pre-race popover).
+function refreshRaceAutopsyIfOpen() {
+    const m = document.getElementById('race-autopsy-modal');
+    if (raceAutopsyState.raceId && m && m.style.display !== 'none') renderRaceAutopsy(raceAutopsyState.raceId);
+}
+
+function renderRaceAutopsy(raceId) {
+    const m = ensureRaceAutopsyModal();
+    const info = globalRaceInfo[raceId] || {};
+    const title = `${trackName(info.place) || ''} R${info.race_number || ''}`.trim();
+
+    const a = computeRaceAutopsy(raceId);
+    if (!a) {
+        m.innerHTML = `<div class="ra-panel"><div class="ra-head"><div class="ra-title">Why It Won — ${escapeHtml(title)}</div>
+            <button class="ra-close" onclick="closeRaceAutopsy()" title="Close">✕</button></div>
+            <div class="ra-empty">No finish order yet for this race — nothing to autopsy.</div></div>`;
+        m.style.display = 'flex';
+        return;
+    }
+
+    const bk = AUTOPSY_BUCKET[a.bucket];
+    const w = a.winner;
+    const wOdds = Number.isFinite(w.odds) ? w.odds.toFixed(1) + '×' : '—';
+
+    // Result strip: top-3 finishers with their pre-race market rank.
+    const resultStrip = a.top3.map(s => {
+        const pos = autopsyOrdinal(s.finish);
+        const fav = Number.isFinite(s.fav) && s.fav < 999 ? `${s.fav}${['st', 'nd', 'rd'][s.fav - 1] || 'th'} fav` : '—';
+        const od = Number.isFinite(s.odds) ? s.odds.toFixed(1) + '×' : '';
+        return `<div class="ra-fin"><span class="ra-fin-pos">${pos}</span><span class="ra-fin-name">${escapeHtml(s.name)}</span><span class="ra-fin-meta">${fav} · ${od}</span></div>`;
+    }).join('');
+
+    // Winner factor rows (mini-bar + sentiment), reusing the explainer's visual grammar.
+    const factorsHtml = autopsyWinnerFactors(a).map(f => {
+        let bar = '';
+        if (f.rank !== null && a.field > 1) {
+            const pct = (a.field - f.rank) / (a.field - 1);
+            const fill = Math.round(pct * 6);
+            bar = `<span class="ra-bar-filled">${'█'.repeat(fill)}</span><span class="ra-bar-empty">${'░'.repeat(6 - fill)}</span>`;
+        }
+        const rankStr = f.rank !== null ? `${f.rank}/${a.field}` : '';
+        return `<div class="ra-factor">
+            <span class="ra-factor-emoji">${f.emoji}</span>
+            <div class="ra-factor-body">
+                <span class="ra-factor-label">${f.label}</span>
+                <span class="ra-factor-desc ra-${f.sent}">${f.desc}</span>
+            </div>
+            <div class="ra-factor-rank"><span class="ra-factor-bar">${bar}</span><span class="ra-factor-pos">${rankStr}</span></div>
+        </div>`;
+    }).join('');
+
+    const meritStr = a.statsRank !== null ? `${a.statsRank}/${a.field}` : '—';
+
+    m.innerHTML = `<div class="ra-panel">
+        <div class="ra-head">
+            <div class="ra-title">Why It Won — ${escapeHtml(title)}</div>
+            <span class="ra-bucket" style="color:${bk.color};border-color:${bk.color}66;background:${bk.color}14;">${bk.label}</span>
+            <button class="ra-close" onclick="closeRaceAutopsy()" title="Close">✕</button>
+        </div>
+
+        <div class="ra-winner">
+            <span class="ra-winner-tag">🏆 Winner</span>
+            <span class="ra-winner-name">${escapeHtml(w.name)}</span>
+            <span class="ra-winner-odds">${wOdds} · ${Number.isFinite(w.fav) && w.fav < 999 ? autopsyOrdinal(w.fav) + ' favorite' : 'unranked'}</span>
+            ${a.winnerMark ? `<span class="ra-winner-mark">engine: ${a.winnerMark}</span>` : ''}
+        </div>
+
+        <div class="ra-meaning" style="border-left-color:${bk.color};">${bk.meaning}</div>
+
+        <div class="ra-section-label">Finish (with pre-race market rank)</div>
+        <div class="ra-result">${resultStrip || '<div class="ra-empty-sm">Top-3 finish order unavailable.</div>'}</div>
+
+        <div class="ra-section-label">What the winner had (engine’s own factors, ranked in the field)</div>
+        <div class="ra-factors">${factorsHtml || '<div class="ra-empty-sm">No scored factors available for this horse.</div>'}</div>
+        <div class="ra-merit">Odds-removed merit (form + breeding) ranked it <b>${meritStr}</b> in the field before the race.</div>
+
+        <div class="ra-section-label">The engine’s call</div>
+        <div class="ra-engine">${autopsyEngineLine(a)}</div>
+
+        <div class="ra-takeaway">${autopsyTakeaway(a)}</div>
+
+        <div class="ra-foot">Read at Risk ${a.risk} · a learning aid on settled results, not a betting signal. Some winners are genuinely unreadable — it will say so.</div>
+    </div>`;
+    m.style.display = 'flex';
+}
+
 function getCurrentAutoPickRisk(riskOverride = null) {
     const hasOverride = riskOverride !== null && riskOverride !== 'null' && riskOverride !== undefined;
     // Discipline mode replaces the slider entirely — pin to a market-trusting low risk. An explicit
@@ -4487,23 +4794,45 @@ const COLD_FRESH_LO = 61, COLD_FRESH_HI = 120;
 //   🚫 dirt  — switching ONTO dirt at mid/long odds (rank ≥4) → a fade; the market underrates it (H8).
 function coldValuePillForRow(r_id, row) {
     if (appConfig.ui?.coldValuePreview === false) return '';
+    // The FACTS (switch-to-dirt, fresh off a break) are known as soon as the card loads; only the
+    // VALUE judgment (is it a longshot?) needs odds. So show a dimmed "pending" chip on the factual
+    // setup before odds post, then brighten it to the real cold-engine flag once the price confirms
+    // the longshot gate — or drop it if it prices short (resolved to "not a value signal").
     const fav = parseInt(row.Fav, 10);
-    if (!Number.isFinite(fav)) return '';
+    const hasOdds = Number.isFinite(fav) && fav >= 1;
     const todaySurface = String(globalRaceInfo[r_id]?.surface || '').toLowerCase();
     const lastSurface = String(row.Last_Surface || '').toLowerCase();
     const days = (row.Days_Since_Last == null || row.Days_Since_Last === '') ? null : parseInt(row.Days_Since_Last, 10);
     const toDirt = lastSurface && lastSurface !== 'jump' && todaySurface === 'dirt' && lastSurface !== 'dirt';
+    const isFresh = days != null && days >= COLD_FRESH_LO && days <= COLD_FRESH_HI && !toDirt;
     const base = 'display:inline-block;font-size:0.7em;font-weight:700;margin-left:5px;padding:0 6px;' +
                  'border-radius:8px;vertical-align:middle;white-space:nowrap;';
-    if (toDirt && fav >= 4) {
-        const title = 'Cold-value PREVIEW (informational — bets nothing): switching ONTO dirt at mid/long odds — ' +
-            'a fade. The market underrates the surface switch and these crater (H8). Edge NOT confirmed yet.';
-        return ` <span class="cold-value-pill" title="${escapeHtml(title)}" style="${base}background:#3a1e1e;color:#ffc9c9;border:1px solid #a84444;">🚫 dirt</span>`;
+    const pill = (label, colors, title, pending) =>
+        ` <span class="cold-value-pill${pending ? ' cold-pending' : ''}" title="${escapeHtml(title)}" style="${base}${colors}${pending ? 'opacity:0.4;' : ''}">${label}</span>`;
+
+    if (toDirt) {
+        const colors = 'background:#3a1e1e;color:#ffc9c9;border:1px solid #a84444;';
+        if (hasOdds && fav >= 4)
+            return pill('🚫 dirt', colors,
+                'Cold-value PREVIEW (informational — bets nothing): switching ONTO dirt at mid/long odds — a fade. ' +
+                'The market underrates the surface switch and these crater (H8). Edge NOT confirmed yet.', false);
+        if (!hasOdds)
+            return pill('🚫 dirt', colors,
+                'Switching ONTO dirt from its last start — a setup the cold engine FADES (H8). Dimmed until odds ' +
+                'post; brightens if it prices as 4th choice or longer (otherwise it’s not the fade).', true);
+        return ''; // priced as a short favorite → not the fade
     }
-    if (fav >= 9 && days != null && days >= COLD_FRESH_LO && days <= COLD_FRESH_HI && !toDirt) {
-        const title = `Cold-value PREVIEW (informational — bets nothing): fresh longshot — back from a ${days}-day ` +
-            'break at long odds, not switching to dirt. Candidate PLACE overlay (H7). Watch live; NOT confirmed yet.';
-        return ` <span class="cold-value-pill" title="${escapeHtml(title)}" style="${base}background:#10303a;color:#aee9ff;border:1px solid #2f86a8;">💧 fresh ${days}d</span>`;
+    if (isFresh) {
+        const colors = 'background:#10303a;color:#aee9ff;border:1px solid #2f86a8;';
+        if (hasOdds && fav >= 9)
+            return pill(`💧 fresh ${days}d`, colors,
+                `Cold-value PREVIEW (informational — bets nothing): fresh longshot — back from a ${days}-day break at ` +
+                'long odds, not switching to dirt. Candidate PLACE overlay (H7). Watch live; NOT confirmed yet.', false);
+        if (!hasOdds)
+            return pill(`💧 fresh ${days}d`, colors,
+                `Coming off a ${days}-day break — the cold engine’s fresh-longshot PLACE overlay (H7). Dimmed until ` +
+                'odds post; brightens if it prices as 9th choice or longer (otherwise it’s not the overlay).', true);
+        return ''; // priced shorter than 9th choice → not the overlay
     }
     return '';
 }
@@ -4943,6 +5272,16 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         const historyBtnHtml = dateTimeline === 'past' && !raceHasHistoryData(race)
             ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Fetch finish positions and result data for this race">📜 Update History</button>`
             : "";
+        // Post-race teaching: the winner's grade (Chalk/Catchable/Semi/Freak) — click for why. Settled past races only.
+        let autopsyBtnHtml = "";
+        if (dateTimeline === 'past' && raceHasHistoryData(race)) {
+            let label = 'Result', color = '#ffb454', emoji = '🔍', grade = '';
+            try {
+                const a = computeRaceAutopsy(r_id);
+                if (a) { const bk = AUTOPSY_BUCKET[a.bucket]; label = bk.short; color = bk.color; emoji = bk.emoji; grade = ` (graded ${bk.short})`; }
+            } catch (_) {}
+            autopsyBtnHtml = `<button class="btn-why-won" style="border-color:${color};color:${color};" onclick="event.stopPropagation(); openRaceAutopsy('${r_id}')" title="Post-race teaching${grade} — why the winner beat the field, read on the engine's own factors. Click for the breakdown.">${emoji} ${label}</button>`;
+        }
         // Odds-trend graph (Phase 37): only for upcoming/live cards, where odds history accrues.
         const trendsBtnHtml = dateTimeline !== 'past'
             ? `<button class="btn-odds-trends" onclick="event.stopPropagation(); showOddsHistory('${r_id}')" title="Odds over time for every runner">📈 Trends</button>`
@@ -4967,6 +5306,7 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
                 <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> <span id="header-meta-${r_id}">${raceStatusEmoji(race)} ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName}${raceSurfaceDistChip(race.info)} ${winBadgesHtml}</span>
 
                 ${historyBtnHtml}
+                ${autopsyBtnHtml}
                 ${trendsBtnHtml}
                 ${exportBtnHtml}
                 ${tuneBtnHtml}

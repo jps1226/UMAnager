@@ -983,6 +983,7 @@
         .row-watch { background-color: rgba(100, 149, 237, 0.15); }
         
         /* --- MARKS --- */
+        .shirushi-cell { min-width: 170px; }   /* mobile/auto-layout fallback (desktop width is fixed below) */
         .mark-btn { background: #333; color: #aaa; border: none; padding: 4px 8px; margin: 0 2px; border-radius: 4px; cursor: pointer; font-size: 14px; }
         .mark-btn.auto-bet-preview { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35), 0 0 0 3px rgba(var(--auto-bet-preview-rgb, 29, 209, 161), 0.20); }
         .mark-btn.active-◎ { background: #ff4b4b; color: white; font-weight: bold; }
@@ -992,7 +993,32 @@
         .mark-btn.active-△ { background: #0abde3; color: white; font-weight: bold; }
         /* NEW: The X Button */
         .mark-btn.active-X { background: #2b1111; color: #ff4b4b; font-weight: bold; border: 1px solid #ff4b4b; }
-        
+
+/* --- CONSISTENT RACE-CARD COLUMNS (desktop) ---
+   Every race is a separate width:100% table; with table-layout:auto each sized its columns from
+   its OWN content, so columns drifted race-to-race and the marks got squeezed onto a 2nd line.
+   table-layout:fixed + a width per column makes every card line up; Horse has no width so it
+   absorbs the slack (names wrap as before). Scoped >768px so the mobile column set is untouched. */
+@media (min-width: 769px) {
+    .race-content table { table-layout: fixed; }
+    .race-content .shirushi-cell { white-space: nowrap; }   /* ◎〇▲△X never wrap to a 2nd line */
+    .race-content th[data-col="Finish"]   { width: 46px; }
+    .race-content th[data-col="Shirushi"] { width: 192px; }
+    .race-content th[data-col="BK"]       { width: 40px; }
+    .race-content th[data-col="PP"]       { width: 40px; }
+    .race-content th[data-col="Record"]   { width: 66px; }
+    .race-content th[data-col="Last3"]    { width: 88px; }
+    .race-content th[data-col="J%"]       { width: 50px; }
+    .race-content th[data-col="T%"]       { width: 50px; }
+    .race-content th[data-col="Sire"]     { width: 86px; }
+    .race-content th[data-col="SF"]       { width: 46px; }
+    .race-content th[data-col="Dam"]      { width: 86px; }
+    .race-content th[data-col="BMS"]      { width: 86px; }
+    .race-content th[data-col="Odds"]     { width: 64px; }
+    .race-content th[data-col="Fav"]      { width: 56px; }
+    /* Horse column has no fixed width → it flexes to absorb the slack; long names wrap as before. */
+}
+
 
 /* --- HORSE LIST CARDS --- */
 .horse-list-container {
@@ -1673,6 +1699,118 @@ tr:hover .score-explain-trigger { opacity: 1; }
     padding-top: 6px; border-top: 1px solid #2a2e35;
 }
 
+/* Horse cell: name + ⓘ on the top line, chips (cold-value / voted) on their own line underneath. */
+.horse-cell .horse-name-line { display: block; }
+.horse-cell .horse-chips { margin-top: 3px; line-height: 1.4; font-weight: normal; }
+.horse-cell .horse-chips > span { margin-left: 0 !important; margin-right: 5px; }
+
+/* Cold-value chip awaiting odds: the factual setup is known, the longshot/value gate isn't yet.
+   Dashed border + reduced opacity (set inline) reads as "tentative — will resolve when odds post". */
+.cold-value-pill.cold-pending { border-style: dashed !important; }
+
+/* --- POST-RACE "WHY IT WON" AUTOPSY (s54) --- */
+.btn-why-won {
+    background: transparent;
+    border: 1px solid #ffb454;
+    color: #ffb454;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 8px;
+    transition: 0.2s;
+    vertical-align: middle;
+}
+/* Border/text color is set inline per grade (Chalk/Catchable/Semi/Freak); hover just lifts it. */
+.btn-why-won:hover { background: rgba(255,255,255,0.13); }
+
+.race-autopsy-modal {
+    position: fixed; inset: 0; z-index: 10000;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.55);
+}
+.race-autopsy-modal .ra-panel {
+    width: min(520px, 92vw); max-height: 88vh; overflow-y: auto;
+    background: #1c1f24; border: 1px solid #333; border-radius: 8px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.7);
+    color: #e6e6e6; font-size: 12px; padding: 14px 16px;
+}
+.race-autopsy-modal .ra-head {
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid #2a2e35; padding-bottom: 9px; margin-bottom: 10px;
+}
+.race-autopsy-modal .ra-title { font-weight: bold; font-size: 14px; color: #fff; flex: 1; }
+.race-autopsy-modal .ra-bucket {
+    font-size: 10px; font-weight: 800; letter-spacing: 0.8px;
+    padding: 2px 8px; border-radius: 10px; border: 1px solid;
+}
+.race-autopsy-modal .ra-close {
+    background: transparent; border: none; color: #666; cursor: pointer;
+    font-size: 15px; padding: 0 2px; line-height: 1; flex-shrink: 0;
+}
+.race-autopsy-modal .ra-close:hover { color: #fff; }
+
+.race-autopsy-modal .ra-winner {
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 9px;
+}
+.race-autopsy-modal .ra-winner-tag { font-size: 11px; color: #ffd700; }
+.race-autopsy-modal .ra-winner-name { font-size: 15px; font-weight: bold; color: #ffd700; }
+.race-autopsy-modal .ra-winner-odds { font-size: 12px; color: #aaa; }
+.race-autopsy-modal .ra-winner-mark {
+    font-size: 10px; color: #7ed6df; border: 1px solid #2f6f7a;
+    background: rgba(126,214,223,0.08); border-radius: 8px; padding: 1px 7px;
+}
+.race-autopsy-modal .ra-meaning {
+    font-size: 12px; color: #ddd; line-height: 1.45;
+    padding: 7px 10px; margin-bottom: 12px;
+    background: rgba(255,255,255,0.03); border-left: 3px solid #888; border-radius: 2px;
+}
+.race-autopsy-modal .ra-section-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.7px;
+    color: #6a7180; margin: 10px 0 6px;
+}
+.race-autopsy-modal .ra-result { display: flex; flex-direction: column; gap: 4px; }
+.race-autopsy-modal .ra-fin { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+.race-autopsy-modal .ra-fin-pos { min-width: 30px; color: #888; font-weight: bold; }
+.race-autopsy-modal .ra-fin-name { flex: 1; color: #ddd; }
+.race-autopsy-modal .ra-fin:first-child .ra-fin-name { color: #ffd700; font-weight: bold; }
+.race-autopsy-modal .ra-fin-meta { color: #777; font-size: 11px; }
+.race-autopsy-modal .ra-factors { display: flex; flex-direction: column; gap: 7px; }
+.race-autopsy-modal .ra-factor { display: flex; align-items: flex-start; gap: 8px; }
+.race-autopsy-modal .ra-factor-emoji { font-size: 14px; min-width: 18px; margin-top: 1px; flex-shrink: 0; }
+.race-autopsy-modal .ra-factor-body { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.race-autopsy-modal .ra-factor-label { font-size: 10px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
+.race-autopsy-modal .ra-factor-desc { font-size: 12px; line-height: 1.35; }
+.race-autopsy-modal .ra-factor-desc.ra-pos { color: #1dd1a1; }
+.race-autopsy-modal .ra-factor-desc.ra-neg { color: #ff6b6b; }
+.race-autopsy-modal .ra-factor-desc.ra-neu { color: #bbb; }
+.race-autopsy-modal .ra-factor-rank { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; }
+.race-autopsy-modal .ra-factor-bar { font-family: 'Consolas','Menlo',monospace; font-size: 9px; line-height: 1.2; letter-spacing: -0.5px; }
+.race-autopsy-modal .ra-bar-filled { color: #1dd1a1; }
+.race-autopsy-modal .ra-bar-empty  { color: #2a3040; }
+.race-autopsy-modal .ra-factor-pos { font-size: 10px; color: #555; }
+.race-autopsy-modal .ra-merit {
+    font-size: 11px; color: #9aa3b2; margin-top: 8px;
+    padding: 6px 9px; background: rgba(255,255,255,0.02); border-radius: 3px;
+}
+.race-autopsy-modal .ra-merit b { color: #cdd6e4; }
+.race-autopsy-modal .ra-engine {
+    font-size: 12px; color: #cfe6ff; line-height: 1.45;
+    padding: 7px 10px; background: rgba(110,168,255,0.07);
+    border-left: 3px solid #6ea8ff; border-radius: 2px;
+}
+.race-autopsy-modal .ra-engine .ra-good { color: #1dd1a1; font-weight: bold; }
+.race-autopsy-modal .ra-takeaway {
+    font-size: 12.5px; color: #ffe08a; line-height: 1.5;
+    padding: 9px 11px; margin-top: 12px;
+    background: rgba(255,215,0,0.06); border: 1px solid #4a4226; border-radius: 4px;
+}
+.race-autopsy-modal .ra-foot {
+    font-size: 10px; color: #5a6170; line-height: 1.4;
+    margin-top: 11px; padding-top: 8px; border-top: 1px solid #2a2e35;
+}
+.race-autopsy-modal .ra-empty, .race-autopsy-modal .ra-empty-sm { color: #888; font-size: 12px; padding: 6px 0; }
+
 /* --- SIRE FIT % (Phase 9) ---
    Compact win-rate pill in the SF column. Color tiers:
    strong ≥15%, mid 9–14%, weak <9%, none = below 10-start sample threshold. */
@@ -2229,6 +2367,7 @@ td.jt-rate-none   { color: #444; }
 .race-header.collapsed .btn-autopick-safe,
 .race-header.collapsed .btn-autopick-lucky,
 .race-header.collapsed .btn-history-refresh,
+.race-header.collapsed .btn-why-won,
 .race-header.collapsed .btn-clear-bets,
 .race-header.collapsed .btn-lock-bets,
 .race-header.collapsed .btn-reorder,

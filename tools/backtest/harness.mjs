@@ -75,6 +75,9 @@ export function loadEngine() {
     // (the engine's own form + pedigree merit, with the market/odds term factored OUT).
     entries: (rid) => globalRaceEntries[rid] || [],
     merit: (row) => { const e = explainPowerScore(row, 30); return e.form.subtotal + e.pedigree.subtotal; },
+    // s54: the post-race "Why It Won" autopsy compute (pure logic, no DOM) — winner grade
+    // (chalk/catchable/semi/freak), field ranks, and the engine's ◎ result. Same code the UI runs.
+    autopsy: (rid) => computeRaceAutopsy(rid),
     // For the stats-tilt test: override the live formula weights (the real Settings lever) so we can
     // replay with the picker trusting form/breeding more vs odds. getFormulaWeights reads this.
     setFormulaWeights: (w) => { appConfig.ui = appConfig.ui || {}; appConfig.ui.formulaWeights = w; },
