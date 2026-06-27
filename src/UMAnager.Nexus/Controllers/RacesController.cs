@@ -7,7 +7,7 @@
 //          odds-history series, and the voting-tab bet-estimate.
 // KEY DEPENDENCIES: AppDbContext, SettingsService, SirePerformanceService,
 //          JockeyTrainerStatsService, IMemoryCache.
-// CAUTION: The /api/races ETag is data-keyed "races-v11-…" — BUMP vN on any response-shape
+// CAUTION: The /api/races ETag is data-keyed "races-v12-…" — BUMP vN on any response-shape
 //          change or browsers serve a stale 304 body. SortTime is JST-wall-clock-in-UTC.
 // LAST DOCUMENTED: 2026-06-02
 // ============================================================
@@ -218,7 +218,7 @@ public sealed class RacesController : ControllerBase
                         .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                         .FirstOrDefaultAsync();
                     var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                    etag = $"\"races-v11-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                    etag = $"\"races-v12-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                     _cache.Set(EtagCacheKey, etag,
                         new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
                 }
@@ -293,7 +293,7 @@ public sealed class RacesController : ControllerBase
                 from e in db.RaceEntries.AsNoTracking()
                 join r in db.Races.AsNoTracking() on e.RaceId equals r.RaceId
                 where entryHorseIds.Contains(e.HorseId!) && e.FinishPos != null && e.FinishPos > 0
-                select new { e.HorseId, e.RaceId, r.RaceDate, Finish = e.FinishPos!.Value, e.FavRank, r.Surface, r.Distance }
+                select new { e.HorseId, e.RaceId, r.RaceDate, Finish = e.FinishPos!.Value, e.FavRank, r.Surface, r.Distance, e.PerformanceJson }
             ).ToListAsync();
 
             // Phase 43: the horse's OWN record split by surface and distance bucket, derived from
@@ -341,7 +341,9 @@ public sealed class RacesController : ControllerBase
                 .ToDictionary(
                     g => g.Key,
                     g => g.OrderByDescending(x => x.RaceDate)
-                          .Select(x => (x.RaceDate, Surface: x.Surface ?? "", x.Distance))
+                          // s54: also carry the run's PerformanceJson (corner positions) so the card can
+                          // show the horse's PREDICTED running style (front-runner/closer) from its last start.
+                          .Select(x => (x.RaceDate, Surface: x.Surface ?? "", x.Distance, Perf: x.PerformanceJson ?? ""))
                           .ToList()
                 );
 
@@ -440,6 +442,7 @@ public sealed class RacesController : ControllerBase
                         int? daysSinceLast = null;
                         string lastSurface = "";
                         int? lastDistance = null;
+                        string lastPerf = "";
                         if (priorRunsByHorse.TryGetValue(e.HorseId ?? "", out var priorRuns))
                         {
                             foreach (var pr in priorRuns) // already desc by date → first match = most recent
@@ -448,6 +451,7 @@ public sealed class RacesController : ControllerBase
                                 daysSinceLast = (int)(race.RaceDate - pr.RaceDate).TotalDays;
                                 lastSurface = pr.Surface;
                                 lastDistance = pr.Distance;
+                                lastPerf = pr.Perf; // corner positions of the last start → predicted run style
                                 break;
                             }
                         }
@@ -556,6 +560,8 @@ public sealed class RacesController : ControllerBase
                             Days_Since_Last = daysSinceLast,
                             Last_Surface = lastSurface,
                             Last_Distance = lastDistance,
+                            // s54: last start's PerformanceJson (corners/l3f) → frontend infers predicted run style.
+                            Last_Perf = lastPerf,
                             Finish = e.FinishPos?.ToString() ?? "",
                             // SE 異常区分 1/2/3 (取消/除外) → horse removed from betting; the frontend
                             // bet-line synthesizer (buildRaceBetLines) shrinks the ticket. Only set

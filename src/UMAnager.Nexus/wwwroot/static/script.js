@@ -2666,8 +2666,11 @@ function buildTableBody(r_id, entries) {
                 const voteCount = votedCountExcludingRace(h_id, r_id);
                 const votedBadge = voteCount > 0 ? `<span class="voted-badge" title="You backed this horse in ${voteCount} earlier race${voteCount !== 1 ? 's' : ''} this season (not counting this one)">Voted ${voteCount}×</span>` : '';
                 const coldPill = coldValuePillForRow(r_id, row);
-                // Name + ⓘ stay on the top line; any chips (cold-value, voted) drop to a line underneath.
-                const chips = `${votedBadge}${coldPill}`.trim();
+                // Predicted run-style is a PRE-race read → only on unfinished rows (a settled row's
+                // "last start" would be a stale prior race; today's actual run is the autopsy's job).
+                const stylePill = String(row.Finish || '').trim() ? '' : predictedStylePill(r_id, row);
+                // Name + ⓘ stay on the top line; any chips (style, cold-value, voted) drop to a line underneath.
+                const chips = `${stylePill}${coldPill}${votedBadge}`.trim();
                 const chipsHtml = chips ? `<div class="horse-chips">${chips}</div>` : '';
                 return `<td class="horse-cell" style="font-weight: bold;"><span class="horse-name-line">${horseStr} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></span>${chipsHtml}</td>`;
             })(),
@@ -4792,6 +4795,37 @@ const COLD_FRESH_LO = 61, COLD_FRESH_HI = 120;
 // Built straight into the row (see buildTableBody's Horse cell) so it survives every re-render/reprice.
 //   💧 fresh — a longshot (rank ≥9) back from a 61–120 day break, NOT switching to dirt → place candidate (H7).
 //   🚫 dirt  — switching ONTO dirt at mid/long odds (rank ≥4) → a fade; the market underrates it (H8).
+// s54: predicted running style on the UPCOMING card — Lead/Press/Close/Deep inferred from the
+// horse's LAST start's corner positions (backend field Last_Perf = that run's PerformanceJson).
+// A handicapping read on paper ("this one usually leads"). Thresholds mirror horseRunStyle() in
+// the profile; kept separate so the card pill has its own "predicted, from last start" tooltip.
+function predictedStylePill(r_id, row) {
+    const perf = row.Last_Perf;
+    if (!perf) return '';
+    let p = perf;
+    if (typeof perf === 'string') { try { p = JSON.parse(perf); } catch { return ''; } }
+    if (!p || !Array.isArray(p.corners)) return '';
+    const pos = p.corners.map(c => parseInt(c, 10)).filter(n => Number.isFinite(n) && n > 0);
+    if (!pos.length) return '';
+    const early = pos[0];
+    // Normalize early position by field size. The last run's own field size isn't on the card, so use
+    // THIS race's field size as a proxy (JRA fields are similar enough for a reading-aid read); without
+    // it, blank early corners in sprints make everyone look like a deep closer.
+    const fieldN = (globalRaceEntries[r_id] || []).length;
+    const n = fieldN > 1 ? fieldN : Math.max(...pos);
+    const ratio = early / n;
+    let label, color;
+    if (early <= 1)        { label = 'Lead';  color = '#ff6b9d'; }
+    else if (ratio <= 0.30){ label = 'Press'; color = '#ffc04a'; }
+    else if (ratio <= 0.66){ label = 'Close'; color = '#6cc6ff'; }
+    else                   { label = 'Deep';  color = '#ff7b6b'; }
+    const tip = `Predicted running style from its last start — ${label}. Lead = front-runner · Press = stalker · ` +
+        'Close = off-pace · Deep = deep closer (from the horse’s corner positions last time).';
+    const base = 'display:inline-block;font-size:0.7em;font-weight:700;padding:0 6px;border-radius:8px;' +
+                 'vertical-align:middle;white-space:nowrap;';
+    return `<span class="run-style-pill" title="${escapeHtml(tip)}" style="${base}color:${color};border:1px solid ${color}66;background:${color}1a;">${label}</span>`;
+}
+
 function coldValuePillForRow(r_id, row) {
     if (appConfig.ui?.coldValuePreview === false) return '';
     // The FACTS (switch-to-dirt, fresh off a break) are known as soon as the card loads; only the
