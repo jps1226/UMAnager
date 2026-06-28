@@ -1011,12 +1011,12 @@ const BK_COLORS = {
 };
 const MARK_RANK = { '◎': 1, '〇': 2, '▲': 3, '△': 4 };
 
-// SE 性別コード → small JRA-standard sex sign next to a horse. 1=牡 colt (blue),
-// 2=牝 filly/mare (pink), 3=セ gelding (gray). 0/unknown → nothing.
-const SEX_SIGN = { 1: ['牡', 'sex-m'], 2: ['牝', 'sex-f'], 3: ['セ', 'sex-g'] };
+// SE 性別コード → small sex symbol next to a horse. 1=♂ colt (blue), 2=♀ filly/mare
+// (pink), 3=⚥ gelding (gray). 0/unknown → nothing. Full term on hover (we have sex, not age).
+const SEX_SIGN = { 1: ['♂', 'sex-m', 'Colt'], 2: ['♀', 'sex-f', 'Mare / Filly'], 3: ['⚥', 'sex-g', 'Gelding'] };
 function sexSign(sex) {
-    const s = SEX_SIGN[sex];
-    return s ? `<span class="horse-sex ${s[1]}">${s[0]}</span>` : '';
+    const s = SEX_SIGN[parseInt(sex, 10)];
+    return s ? `<span class="horse-sex ${s[1]}" title="${s[2]}">${s[0]}</span>` : '';
 }
 
 let racesData = null;
@@ -1027,8 +1027,10 @@ let activeDate = null;
 // bet, not just your marks (fixes phantom ◎ wins on races you didn't bet).
 let recapByRace = {};
 // Japanese ticket label → short English + ticker pill style. Mirrors the backend HitLabels.
-const TICKET_LABEL_EN  = { '単勝': 'Win', '馬連': 'Quinella', 'ワイド': 'Wide', '3連複': 'Trio', '3連複ながし': 'Trio' };
-const TICKET_PILL_CLASS = { '単勝': 'rt-hit-honmei', '馬連': 'rt-hit-quinella', 'ワイド': 'rt-hit-quinella', '3連複': 'rt-hit-trio', '3連複ながし': 'rt-hit-trio' };
+// '複勝' (Place) was missing → the ticker showed the raw Japanese "複勝 Win" on a place hit
+// (the most common bet, since Discipline mode bets 複勝 on the ◎). Mirror the main screen's map.
+const TICKET_LABEL_EN  = { '単勝': 'Win', '複勝': 'Place', '馬連': 'Quinella', 'ワイド': 'Wide', '3連複': 'Trio', '3連複ながし': 'Trio', '3連単': 'Trifecta', '実績': 'Actual' };
+const TICKET_PILL_CLASS = { '単勝': 'rt-hit-honmei', '複勝': 'rt-hit-honmei', '馬連': 'rt-hit-quinella', 'ワイド': 'rt-hit-quinella', '3連複': 'rt-hit-trio', '3連複ながし': 'rt-hit-trio', '3連単': 'rt-hit-trio' };
 let gchPlayer = null;
 let splitPercent = 50;
 let panelFlipped = false;

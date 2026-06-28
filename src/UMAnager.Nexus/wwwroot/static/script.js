@@ -2538,6 +2538,15 @@ function setSort(r_id, col) {
     updateAutoBetHighlighting();
 }
 
+// SE 性別コード → small sex symbol shown next to the horse name. 1=♂ colt (blue),
+// 2=♀ filly/mare (pink), 3=⚥ gelding (gray). 0/null/unknown → nothing. We have sex, not
+// age, so the hover says "Mare / Filly" rather than guessing. Mirrors the TV-mode sign.
+function sexSign(sex) {
+    const map = { 1: ['♂', '#4a9eff', 'Colt'], 2: ['♀', '#ff6b9d', 'Mare / Filly'], 3: ['⚥', '#9aa0a6', 'Gelding'] };
+    const s = map[parseInt(sex, 10)];
+    return s ? `<span class="horse-sex" style="color:${s[1]};font-weight:bold;margin-left:4px;" title="${s[2]}">${s[0]}</span>` : '';
+}
+
 // Generates the inner rows (Pulled out of loadRaces to be reusable)
 function buildTableBody(r_id, entries) {
     let rowsHtml = "";
@@ -2672,7 +2681,7 @@ function buildTableBody(r_id, entries) {
                 // Name + ⓘ stay on the top line; any chips (style, cold-value, voted) drop to a line underneath.
                 const chips = `${stylePill}${coldPill}${votedBadge}`.trim();
                 const chipsHtml = chips ? `<div class="horse-chips">${chips}</div>` : '';
-                return `<td class="horse-cell" style="font-weight: bold;"><span class="horse-name-line">${horseStr} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></span>${chipsHtml}</td>`;
+                return `<td class="horse-cell" style="font-weight: bold;"><span class="horse-name-line">${horseStr}${sexSign(row.Sex)} <button class="score-explain-trigger" title="Explain auto-pick score" onclick="openScoreExplain(event, '${r_id}', '${h_id}')">ⓘ</button></span>${chipsHtml}</td>`;
             })(),
             Record: `<td>${row.Record || ""}</td>`,
             Last3: (() => {
