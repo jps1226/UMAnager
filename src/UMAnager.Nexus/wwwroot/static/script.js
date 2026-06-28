@@ -2556,7 +2556,9 @@ function buildTableBody(r_id, entries) {
     let showEngineDiff = false;
     const engineMarkByHorse = {};
     try {
-        if ((appConfig.ui?.showEngineDisagreement ?? true) && raceHasUserMarks(r_id)) {
+        // Engine-vs-you disagreement is a PRE-race handicapping aid — pointless once the race
+        // has run (and confusing on a settled day). Suppress on settled races.
+        if ((appConfig.ui?.showEngineDisagreement ?? true) && raceHasUserMarks(r_id) && !raceIsSettledForAutopsy(r_id)) {
             showEngineDiff = true;
             getUnconditionalAutoBetRankingsForRace(r_id).forEach(p => { engineMarkByHorse[p.h_id] = p.symbol; });
         }
@@ -4290,6 +4292,13 @@ function updateRiskBadge(r_id) {
     const badge = document.getElementById(`risk-badge-${r_id}`);
     if (!badge) return;
 
+    // Risk-alignment ("On Target / Riskier / Safer") is a pre-bet aid — meaningless once the
+    // race is settled. Hide it in review mode.
+    if (raceIsSettledForAutopsy(r_id)) {
+        badge.style.display = 'none';
+        return;
+    }
+
     if (!(appConfig.ui?.betSafetyIndicator ?? true)) {
         badge.style.display = 'none';
         return;
@@ -5304,20 +5313,26 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         }
 
         const isLocked = isRaceLocked(r_id);
-        const autoStyle = (usedCount >= 4) ? "display: none;" : "display: inline-block;";
-        const reorderStyle = (usedCount >= 4 && !isLocked) ? "display: inline-block;" : "display: none;";
+        // A race with results is in REVIEW mode — betting controls (Auto / Clear / Smart Sort)
+        // are moot, so hide them even when the DATE is still classified 'upcoming' (today's races
+        // stay 'upcoming' until the JST day rolls over, so a settled race would otherwise keep them).
+        const raceSettled = raceIsSettledForAutopsy(r_id);
+        const autoStyle = (raceSettled || usedCount >= 4) ? "display: none;" : "display: inline-block;";
+        const reorderStyle = (!raceSettled && usedCount >= 4 && !isLocked) ? "display: inline-block;" : "display: none;";
         const lockLabel = isLocked ? "🔓 Unlock Bets" : "🔒 Lock Bets";
         const lockClass = isLocked ? " is-locked" : "";
-        const clearStyle = countRaceMarks(r_id) > 0 ? "display: inline-block;" : "display: none;";
+        const clearStyle = (!raceSettled && countRaceMarks(r_id) > 0) ? "display: inline-block;" : "display: none;";
 
         const localName = localizeRaceName(race.info.race_name) || localizeRaceClass(race.info.race_class);
         const winBadgesHtml = buildRaceWinBadgesHtml(race);
         const historyBtnHtml = dateTimeline === 'past' && !raceHasHistoryData(race)
             ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Fetch finish positions and result data for this race">📜 Update History</button>`
             : "";
-        // Post-race teaching: the winner's grade (Chalk/Catchable/Semi/Freak) — click for why. Settled past races only.
+        // Post-race teaching: the winner's grade (Chalk/Catchable/Semi/Freak) — click for why.
+        // Gate on the race being SETTLED (a real winner exists), not on the date being 'past' —
+        // so the "why it won" pill appears the moment a race finishes, even on today's card.
         let autopsyBtnHtml = "";
-        if (dateTimeline === 'past' && raceHasHistoryData(race)) {
+        if (raceSettled && raceHasHistoryData(race)) {
             let label = 'Result', color = '#ffb454', emoji = '🔍', grade = '';
             try {
                 const a = computeRaceAutopsy(r_id);
