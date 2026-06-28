@@ -54,6 +54,15 @@ public static class SeRecordParser
                 bracket = br;
             }
 
+            // Sex (性別コード): 79 (1 byte). Oracle 2026-06-27. 1=牡 colt, 2=牝 filly/mare,
+            // 3=セ gelding, 0=unknown (initial value / foreign horses lacking data).
+            var sexStr = ExtractString(data, 78, 1).Trim();
+            short? sex = null;
+            if (!string.IsNullOrEmpty(sexStr) && short.TryParse(sexStr, out var sx) && sx > 0)
+            {
+                sex = sx;
+            }
+
             // BurdenWeight: 289-291 (3 bytes, jockey weight in kg)
             var burdenWeightStr = ExtractString(data, 288, 3).Trim();
             int? burdenWeight = null;
@@ -131,6 +140,7 @@ public static class SeRecordParser
                 FavRank = favRank,
                 FinishPos = finishPos,
                 Scratched = scratched,
+                Sex = sex,
                 DataStatus = dataStatus,
                 LastModified = lastModified,
                 UpdatedAt = DateTime.UtcNow

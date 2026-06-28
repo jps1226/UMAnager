@@ -63,6 +63,18 @@
             user-select: none;
         }
         #rt-next-tick.is-soon { color: #888; }
+        #rt-day-total {
+            margin-left: 10px;
+            font-weight: bold;
+            font-size: 13px;
+            padding: 2px 10px;
+            border-radius: 4px;
+            white-space: nowrap;
+            flex-shrink: 0;
+            font-variant-numeric: tabular-nums;
+        }
+        #rt-day-total.rt-day-pos { color: #6dd197; background: rgba(46, 110, 61, 0.25); border: 1px solid #2e6e3d; }
+        #rt-day-total.rt-day-neg { color: #ff8a8a; background: rgba(192, 57, 43, 0.22); border: 1px solid #7a2b22; }
         #rt-sound-toggle:hover { color: #fff; }
         #results-ticker .rt-label {
             color: #f5a623;
@@ -641,6 +653,31 @@
         }
         .race-title:hover { color: #fff; }
         .race-title.collapsed { margin-bottom: 0; border-bottom-style: solid; border-color: #222; }
+        .race-meta {
+            font-size: 10px;
+            font-weight: normal;
+            color: #888;
+            margin-top: 2px;
+            letter-spacing: .3px;
+        }
+        .race-meta-dist { color: #aaa; }
+        .race-meta-surf.surf-turf { color: #6abf69; }
+        .race-meta-surf.surf-dirt { color: #c9a36a; }
+        .race-cancel-badge {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: bold;
+            color: #fff;
+            background: #c0392b;
+            border-radius: 3px;
+            padding: 1px 5px;
+            margin-left: 6px;
+            letter-spacing: .3px;
+            vertical-align: middle;
+        }
+        /* Cancelled (中止) slot: dim the card and strike the title so it reads as dead. */
+        .race-card.race-cancelled, .tv-card.race-cancelled { opacity: .55; }
+        .race-card.race-cancelled .race-title-main { text-decoration: line-through; text-decoration-color: #c0392b; }
         .race-body { }
         .race-body.hidden { display: none; }
         .horse-line {
@@ -652,12 +689,23 @@
         }
         .horse-post { order: 1; }
         .horse-mark { order: 2; }
+        .horse-line .horse-sex { order: 3; }
         .horse-name { order: 3; }
         .horse-fav { order: 4; }
         #tv-layout.panels-flipped .horse-post { order: 4; }
         #tv-layout.panels-flipped .horse-mark { order: 3; }
+        #tv-layout.panels-flipped .horse-line .horse-sex { order: 2; }
         #tv-layout.panels-flipped .horse-name { order: 2; text-align: right; }
         #tv-layout.panels-flipped .horse-fav { order: 1; }
+        .horse-sex {
+            font-size: 11px;
+            font-weight: bold;
+            flex-shrink: 0;
+            line-height: 1;
+        }
+        .horse-sex.sex-m { color: #4a9eff; }  /* 牡 colt — blue */
+        .horse-sex.sex-f { color: #ff6b9d; }  /* 牝 filly/mare — pink */
+        .horse-sex.sex-g { color: #9aa0a6; }  /* セ gelding — gray */
         .badge {
             display: inline-flex;
             align-items: center;
@@ -963,6 +1011,14 @@ const BK_COLORS = {
 };
 const MARK_RANK = { '◎': 1, '〇': 2, '▲': 3, '△': 4 };
 
+// SE 性別コード → small JRA-standard sex sign next to a horse. 1=牡 colt (blue),
+// 2=牝 filly/mare (pink), 3=セ gelding (gray). 0/unknown → nothing.
+const SEX_SIGN = { 1: ['牡', 'sex-m'], 2: ['牝', 'sex-f'], 3: ['セ', 'sex-g'] };
+function sexSign(sex) {
+    const s = SEX_SIGN[sex];
+    return s ? `<span class="horse-sex ${s[1]}">${s[0]}</span>` : '';
+}
+
 let racesData = null;
 let marksData = null;
 let activeDate = null;
@@ -985,6 +1041,14 @@ let forceScrollOnNextCollapse = true;
 // 5-min broadcast or 60s reload of the same data.
 let lastTickerRaceId = null;
 let lastTickerHadHit = false;
+// Monotonic guard: the latest finished race (by sort key) already shown for the
+// CURRENT race day. SignalR patches a new race's finishes in-place and flashes it,
+// but a concurrent full /api/races reload can return slightly STALE data that lacks
+// those finishes — which would regress the ticker to the prior race and re-flash it
+// ("previous result re-fires, then the new one fires 5-10s later"). We refuse to go
+// backwards within the same day; resets naturally when activeDate rolls over.
+let tickerHighWaterDate = null;
+let tickerHighWaterKey = '';
 let tickerSoundEnabled = false;
 let tickerAudioCtx = null;
 const TICKER_SOUND_KEY = 'umanager-tv-ticker-sound';
@@ -1665,6 +1729,25 @@ function renderUpcomingTicker(allRaces) {
     applyTickerMarquee();
 }
 
+// Running day P/L pill for the ticker's top-right: sums the backend recap Net across
+// every SETTLED race on the active race day (the same authoritative evaluator the per-race
+// Net pill uses). Empty until at least one race settles. Net, so it can go negative — that's
+// the honest running total, matching the per-race "Net ±¥" pills.
+function dayTotalPillHtml() {
+    const dayRaces = (racesData?.races_by_date || {})[activeDate] || [];
+    let net = 0, n = 0;
+    for (const r of dayRaces) {
+        const rid = String(r.info?.race_id || '').trim();
+        const rc = recapByRace[rid];
+        if (rc && rc.HasResults && Number.isFinite(Number(rc.Net))) { net += Number(rc.Net); n++; }
+    }
+    if (n === 0) return '';
+    const sign = net >= 0 ? '+' : '−';
+    const cls = net >= 0 ? 'rt-day-pos' : 'rt-day-neg';
+    return `<span id="rt-day-total" class="${cls}" title="Running net P/L across ${n} settled race${n === 1 ? '' : 's'} today">`
+         + `Day ${sign}¥${Math.abs(net).toLocaleString()}</span>`;
+}
+
 function renderResultsTicker() {
     const ticker = document.getElementById('results-ticker');
     if (!ticker) return;
@@ -1687,7 +1770,22 @@ function renderResultsTicker() {
         const kb = String(b.info?.sort_time || b.info?.race_id || '');
         return kb.localeCompare(ka);
     });
-    const race = finished[0];
+    // Only show a race once it's READY: the finish AND its payout/net land TOGETHER.
+    // A bet race (has a recap) is held back until recap.HasResults (payouts processed);
+    // a race we didn't bet (no recap) has nothing to wait for, so it shows immediately.
+    // Until the freshest finisher is ready we keep showing the previous ready race —
+    // no more "finish flashes now, win/net pops in 10s later."
+    const isReady = (r) => {
+        const rc = recapByRace[String(r.info?.race_id || '').trim()];
+        return !rc || rc.HasResults === true;
+    };
+    const race = finished.find(isReady);
+    if (!race) {
+        // Latest finisher's payout is still pending and nothing earlier is ready —
+        // hold on the pre-results (upcoming) ticker rather than reveal a half-baked result.
+        renderUpcomingTicker(allRaces);
+        return;
+    }
     const info = race.info || {};
     const raceId = String(info.race_id || '').trim();
 
@@ -1715,6 +1813,17 @@ function renderResultsTicker() {
         ticker.innerHTML = '';
         return;
     }
+
+    // Monotonic guard (see tickerHighWater* above): never regress to an older race
+    // than the latest already shown today. A stale reload that drops a SignalR-patched
+    // finish would otherwise re-flash the previous race. Same key (re-render of the same
+    // race, e.g. payouts landing) still passes so the win pill can update.
+    const candidateKey = String(info.sort_time || info.race_id || '');
+    if (tickerHighWaterDate === activeDate && candidateKey < tickerHighWaterKey) {
+        return; // keep the newer ticker already on screen
+    }
+    tickerHighWaterDate = activeDate;
+    tickerHighWaterKey = candidateKey;
 
     const place = String(info.place_name || info.place || '').toUpperCase();
     const raceNo = info.race_number || '?';
@@ -1777,6 +1886,7 @@ function renderResultsTicker() {
     }
 
     html += `<span id="rt-next-tick" title="Time until next results poll">${esc(formatNextTickLabel())}</span>`;
+    html += dayTotalPillHtml();
 
     ticker.innerHTML = html;
     ticker.classList.add('visible');
@@ -1869,7 +1979,8 @@ function renderRaceList() {
                 horse  : row ? String(row.Horse || 'Unknown') : 'Unknown',
                 pp     : row ? (parseInt(row.PP) || 99) : 99,
                 bk     : row ? (parseInt(row.BK) || 0) : 0,
-                fav    : row ? String(row.Fav || '').trim() : ''
+                fav    : row ? String(row.Fav || '').trim() : '',
+                sex    : row ? (parseInt(row.Sex) || 0) : 0
             };
         }).sort((a, b) => a.rank - b.rank);
 
@@ -1881,8 +1992,24 @@ function renderRaceList() {
         const titleId = 'rt-' + raceId;
         const bodyId  = 'rb-' + raceId;
 
-        html += `<div class="race-card" id="wrapper-${esc(raceId)}">`;
-        html += `<div class="race-title" id="${esc(titleId)}" onclick="toggleRaceBody('${esc(raceId)}')">${esc(place)} R${esc(String(raceNo))} ${esc(raceTime)}</div>`;
+        // Sub-line: distance + surface, shown under every race (stays visible when collapsed).
+        const distTxt = info.distance ? `${esc(String(info.distance))}m` : '';
+        const surfRaw = String(info.surface || '').toLowerCase();
+        const surfTxt = surfRaw ? surfRaw.charAt(0).toUpperCase() + surfRaw.slice(1) : '';
+        const surfCls = surfRaw === 'turf' ? 'surf-turf' : (surfRaw === 'dirt' ? 'surf-dirt' : '');
+        const metaInner = [
+            distTxt ? `<span class="race-meta-dist">${distTxt}</span>` : '',
+            surfTxt ? `<span class="race-meta-surf ${surfCls}">${esc(surfTxt)}</span>` : ''
+        ].filter(Boolean).join(' ');
+
+        const cancelled = info.cancelled === true;
+        const cancelBadge = cancelled ? ` <span class="race-cancel-badge">中止 CANCELLED</span>` : '';
+
+        html += `<div class="race-card${cancelled ? ' race-cancelled' : ''}" id="wrapper-${esc(raceId)}">`;
+        html += `<div class="race-title" id="${esc(titleId)}" onclick="toggleRaceBody('${esc(raceId)}')">` +
+                `<div class="race-title-main">${esc(place)} R${esc(String(raceNo))} ${esc(raceTime)}${cancelBadge}</div>` +
+                (metaInner ? `<div class="race-meta">${metaInner}</div>` : '') +
+                `</div>`;
         html += `<div class="race-body" id="${esc(bodyId)}">`;
 
         for (const m of enriched) {
@@ -1894,7 +2021,7 @@ function renderRaceList() {
             const symBadge = `<span class="badge horse-mark" style="${bkStyle};font-size:${m.symbol === '◎' ? '17px' : '14px'};">${esc(m.symbol)}</span>`;
             const favText  = m.fav ? `Fav ${esc(m.fav)}` : 'Fav -';
 
-            html += `<div class="horse-line">${ppBadge}${symBadge}<span class="horse-name">${esc(m.horse)}</span><span class="fav-badge horse-fav">${favText}</span></div>`;
+            html += `<div class="horse-line">${ppBadge}${symBadge}${sexSign(m.sex)}<span class="horse-name">${esc(m.horse)}</span><span class="fav-badge horse-fav">${favText}</span></div>`;
         }
 
         html += `</div></div>`;
@@ -1997,6 +2124,19 @@ function autoCollapseRacesTv() {
             body.classList.remove('hidden');
             title.classList.remove('collapsed');
             focusWrapper = wrapper;
+        }
+    }
+
+    if (focusWrapper) {
+        // Bottom spacer so the active race can always scroll to the TOP — even when
+        // it's one of the LAST races and there's no content below to push it up.
+        // Size = scroll viewport height minus the active race's own height (the exact
+        // gap the last race needs); earlier races just gain harmless trailing space.
+        const scrollEl = document.getElementById('racelist-scroll');
+        const bodyEl = document.getElementById('race-list-body');
+        if (scrollEl && bodyEl) {
+            const pad = Math.max(0, scrollEl.clientHeight - focusWrapper.offsetHeight);
+            bodyEl.style.paddingBottom = pad + 'px';
         }
     }
 
@@ -2147,14 +2287,19 @@ function buildRaceCard(race, idx, total, activeRaceId) {
     const raceNo = info.race_number || '?';
     const raceTime = tvFormatRaceTime(info);
     const raceName = String(info.race_name || info.name || '').trim();
-    const label = `${place} R${raceNo} · ${raceTime}${raceName ? ' · ' + raceName : ''}`;
+    const surfRaw = String(info.surface || '').toLowerCase();
+    const surfTxt = surfRaw ? surfRaw.charAt(0).toUpperCase() + surfRaw.slice(1) : '';
+    const distSurf = [info.distance ? `${info.distance}m` : '', surfTxt].filter(Boolean).join(' ');
+    const label = `${place} R${raceNo} · ${raceTime}${distSurf ? ' · ' + distSurf : ''}${raceName ? ' · ' + raceName : ''}`;
     const eta = tvmFormatEta(race);
     const isActive = raceId === activeRaceId;
     const etaCls = isActive ? (eta.cls || 'is-active') : eta.cls;
+    const cancelled = info.cancelled === true;
+    const cancelBadge = cancelled ? `<span class="race-cancel-badge">中止 CANCELLED</span>` : '';
 
-    return `<div class="tv-card${isActive ? ' is-active' : ''}" data-race-id="${esc(raceId)}">
+    return `<div class="tv-card${isActive ? ' is-active' : ''}${cancelled ? ' race-cancelled' : ''}" data-race-id="${esc(raceId)}">
         <div class="tvm-race-header">
-            <span class="race-label">${esc(label)}</span>
+            <span class="race-label">${esc(label)}</span>${cancelBadge}
             <span class="race-eta ${etaCls}" id="tvm-eta-${esc(raceId)}">${esc(eta.text)}</span>
             <span class="race-pager">${idx + 1}/${total}</span>
         </div>
@@ -2183,6 +2328,7 @@ function buildRaceCardBody(race) {
             pp: e ? parseInt(e.PP) : null,
             bk: e ? (parseInt(e.BK) || 0) : 0,
             fav: e ? String(e.Fav || '').trim() : '',
+            sex: e ? (parseInt(e.Sex) || 0) : 0,
         };
     }).sort((a, b) => a.rank - b.rank);
 
@@ -2196,7 +2342,7 @@ function buildRaceCardBody(race) {
         const favHtml = r.fav
             ? `<span class="row-fav${r.fav === '1' ? ' is-chalk' : ''}">Fav ${esc(r.fav)}</span>`
             : `<span class="row-fav">Fav —</span>`;
-        return `<div class="tv-row">${ppBadge}${symBadge}<span class="row-name">${esc(r.name)}</span>${favHtml}</div>`;
+        return `<div class="tv-row">${ppBadge}${symBadge}${sexSign(r.sex)}<span class="row-name">${esc(r.name)}</span>${favHtml}</div>`;
     }).join('');
 }
 
@@ -2300,13 +2446,21 @@ function patchResultsLive(payload) {
 function scheduleResultsSettleReload(raceId) {
     if (_resultsReloadScheduled) return;
     _resultsReloadScheduled = true;
-    const delays = [3000, 6000, 12000, 25000];
+    // Front-loaded cadence: payouts (HR) usually land a few seconds after the finish, so
+    // poll tightly early (catch the win/net within ~1-2s of it being available) and taper
+    // off. The old 3s/9s/21s spacing meant a payout ready at ~4s wasn't shown until ~9s.
+    // /api/races is ETag-cached → unchanged polls are cheap 304s; only the poll that finds
+    // the new payout pays for a full rebuild. The 60s fallback covers anything later.
+    const delays = [1200, 1500, 1500, 2000, 3000, 5000, 8000, 15000];
     let i = 0;
     const step = async () => {
         try { await loadRaces(); } catch (_) { /* keep retrying on transient errors */ }
         const rc = recapByRace[String(raceId || '').trim()];
-        const winResolved = !!(rc && Array.isArray(rc.HitLabels) && rc.HitLabels.length > 0);
-        if (winResolved || i >= delays.length) { _resultsReloadScheduled = false; return; }
+        // Stop once the race is SETTLED (payouts processed → Net/win known), win OR loss —
+        // that's the moment the ticker can reveal finish+net together. The 60s fallback poll
+        // covers anything slower than the budget.
+        const settled = !!(rc && rc.HasResults);
+        if (settled || i >= delays.length) { _resultsReloadScheduled = false; return; }
         setTimeout(step, delays[i++]);
     };
     setTimeout(step, delays[i++]);

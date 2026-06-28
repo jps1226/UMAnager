@@ -50,6 +50,9 @@ public class RaceEntryConfiguration : IEntityTypeConfiguration<RaceEntry>
         builder.Property(e => e.PerformanceJson)
             .HasColumnType("jsonb");
 
+        builder.Property(e => e.Sex)
+            .HasColumnType("smallint");
+
         builder.Property(e => e.DataStatus)
             .HasColumnType("smallint")
             .HasDefaultValue((short)0);

@@ -7,7 +7,7 @@
 //          odds-history series, and the voting-tab bet-estimate.
 // KEY DEPENDENCIES: AppDbContext, SettingsService, SirePerformanceService,
 //          JockeyTrainerStatsService, IMemoryCache.
-// CAUTION: The /api/races ETag is data-keyed "races-v12-…" — BUMP vN on any response-shape
+// CAUTION: The /api/races ETag is data-keyed "races-v13-…" — BUMP vN on any response-shape
 //          change or browsers serve a stale 304 body. SortTime is JST-wall-clock-in-UTC.
 // LAST DOCUMENTED: 2026-06-02
 // ============================================================
@@ -218,7 +218,7 @@ public sealed class RacesController : ControllerBase
                         .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                         .FirstOrDefaultAsync();
                     var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                    etag = $"\"races-v12-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                    etag = $"\"races-v13-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                     _cache.Set(EtagCacheKey, etag,
                         new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
                 }
@@ -420,6 +420,11 @@ public sealed class RacesController : ControllerBase
                     // "debut" / "maiden" / "1win" / "2win" / "3win" / "open" / "other" / null.
                     // Set at RA-ingest time; never changes.
                     race_class = race.RaceClass,
+                    // s55: cancellation. JRA-VAN データ区分 (DataStatus) = 9 means レース中止 (race cancelled);
+                    // there is no separate 順延/postponed code — a scrubbed slot just flips to 9 and any
+                    // rescheduled running appears as a brand-new card (Oracle 2026-06-27). Surface a simple
+                    // bool so the frontend (esp. TV mode) can badge the dead slot.
+                    cancelled = race.DataStatus == 9,
                     // Phase 11 backward: HR payouts — emitted as a raw JSON string for the
                     // frontend to parse only when it needs to enrich past-race recap chips
                     // (◎ Win / Q Box / T Box) with the actual ¥ amount that paid out.
@@ -567,6 +572,8 @@ public sealed class RacesController : ControllerBase
                             // bet-line synthesizer (buildRaceBetLines) shrinks the ticket. Only set
                             // once results settle; false pre-race. (中止 code 4 is NOT a scratch.)
                             Scratched = e.Scratched,
+                            // s55: SE 性別コード → TV-mode gender sign. 1=牡 colt, 2=牝 filly/mare, 3=セ gelding, 0/null=unknown.
+                            Sex = e.Sex,
                             Jockey      = jStat?.NameEn ?? jStat?.NameJa ?? e.JockeyName ?? "",
                             Jockey_Code = e.JockeyCode ?? "",
                             Jockey_Starts = jStat?.Starts,

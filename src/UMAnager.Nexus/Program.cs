@@ -38,14 +38,18 @@ builder.Services.AddControllers()
 builder.Services.AddSignalR();
 
 // Phase 14: gzip/brotli for API responses. /api/races is ~1MB+ uncompressed;
-// gzip typically gets it under ~150KB. Static files are pre-compressed by
-// UseStaticFiles + the file extensions, so we mainly care about JSON here.
+// gzip typically gets it under ~150KB. Static files ALSO flow through this
+// middleware (it runs before UseStaticFiles) — but .NET serves .js as
+// "text/javascript", which was missing from the list, so our 600KB script.js
+// shipped UNCOMPRESSED. Include both the text/* and application/* spellings of
+// JS (s55 fix — ~600KB → ~120KB on the largest static asset).
 builder.Services.AddResponseCompression(opts =>
 {
     opts.EnableForHttps = true;
     opts.Providers.Add<BrotliCompressionProvider>();
     opts.Providers.Add<GzipCompressionProvider>();
-    opts.MimeTypes = new[] { "application/json", "text/plain", "text/html", "text/css", "application/javascript" };
+    opts.MimeTypes = new[] { "application/json", "text/plain", "text/html", "text/css",
+        "application/javascript", "text/javascript" };
 });
 builder.Services.Configure<BrotliCompressionProviderOptions>(o => o.Level = CompressionLevel.Fastest);
 builder.Services.Configure<GzipCompressionProviderOptions>(o => o.Level = CompressionLevel.Fastest);
@@ -131,6 +135,9 @@ using (var scope = app.Services.CreateScope())
             -- idempotent; same raw-SQL pattern as the columns above (no curly braces here — the SQL is
             -- passed through string.Format, which would treat them as format items and throw).
             ALTER TABLE race_entries ADD COLUMN IF NOT EXISTS ""Scratched"" BOOLEAN NOT NULL DEFAULT FALSE;
+            -- Sex: SE 性別コード (offset 79, len 1, Oracle 2026-06-27). 1=牡 colt · 2=牝 filly/mare ·
+            -- 3=セ gelding · 0=unknown. Drives the TV-mode gender sign. Additive/idempotent.
+            ALTER TABLE race_entries ADD COLUMN IF NOT EXISTS ""Sex"" SMALLINT;
             CREATE INDEX IF NOT EXISTS ix_race_entries_jockey  ON race_entries (""JockeyCode"")  WHERE ""JockeyCode""  IS NOT NULL;
             CREATE INDEX IF NOT EXISTS ix_race_entries_trainer ON race_entries (""TrainerCode"") WHERE ""TrainerCode"" IS NOT NULL;
 

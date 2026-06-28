@@ -20,6 +20,7 @@ public class RaceEntry
                                                // 中止 (code 4) does NOT set this — that bet stands and loses. Only populates
                                                // once results settle (DataKubun 3-7); blank on the confirmed card / live window.
     public string? PerformanceJson { get; set; } // Finish time, margins, etc. (JSONB)
+    public short? Sex { get; set; }              // SE 性別コード (offset 79, len 1): 1=牡 colt, 2=牝 filly/mare, 3=セ gelding, 0=unknown
     public short DataStatus { get; set; }        // JRA-VAN データ区分 (offset 3, len 1)
     public DateOnly? LastModified { get; set; }  // データ作成年月日 (offset 4, len 8, YYYYMMDD)
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

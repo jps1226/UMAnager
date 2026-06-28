@@ -286,7 +286,7 @@ public class DifnRecordParsingService
 
                 foreach (var entry in entries)
                 {
-                    seValues.Add($"(@p{seParamIndex}, @p{seParamIndex+1}, @p{seParamIndex+2}, @p{seParamIndex+3}, @p{seParamIndex+4}, @p{seParamIndex+5}, @p{seParamIndex+6}, @p{seParamIndex+7}, @p{seParamIndex+8}, @p{seParamIndex+9}, @p{seParamIndex+10}, @p{seParamIndex+11}, @p{seParamIndex+12}, @p{seParamIndex+13}, NOW())");
+                    seValues.Add($"(@p{seParamIndex}, @p{seParamIndex+1}, @p{seParamIndex+2}, @p{seParamIndex+3}, @p{seParamIndex+4}, @p{seParamIndex+5}, @p{seParamIndex+6}, @p{seParamIndex+7}, @p{seParamIndex+8}, @p{seParamIndex+9}, @p{seParamIndex+10}, @p{seParamIndex+11}, @p{seParamIndex+12}, @p{seParamIndex+13}, @p{seParamIndex+14}, NOW())");
                     seParams.Add(NullableParam($"p{seParamIndex + 0}",  NpgsqlDbType.Text,     entry.RaceId ?? ""));
                     seParams.Add(NullableParam($"p{seParamIndex + 1}",  NpgsqlDbType.Text,     entry.HorseId ?? ""));
                     seParams.Add(NullableParam($"p{seParamIndex + 2}",  NpgsqlDbType.Integer,  entry.PostPosition));
@@ -304,13 +304,14 @@ public class DifnRecordParsingService
                     seParams.Add(NullableParam($"p{seParamIndex + 11}", NpgsqlDbType.Varchar,  entry.JockeyCode));
                     seParams.Add(NullableParam($"p{seParamIndex + 12}", NpgsqlDbType.Varchar,  entry.TrainerCode));
                     seParams.Add(NullableParam($"p{seParamIndex + 13}", NpgsqlDbType.Boolean,  entry.Scratched));
-                    seParamIndex += 14;
+                    seParams.Add(NullableParam($"p{seParamIndex + 14}", NpgsqlDbType.Smallint, entry.Sex));
+                    seParamIndex += 15;
                 }
 
                 if (seValues.Count > 0)
                 {
                     var seSql = $@"
-                        INSERT INTO race_entries (""RaceId"", ""HorseId"", ""PostPosition"", ""Bracket"", ""Weight"", ""JockeyName"", ""Odds"", ""FavRank"", ""FinishPos"", ""DataStatus"", ""LastModified"", ""JockeyCode"", ""TrainerCode"", ""Scratched"", ""UpdatedAt"")
+                        INSERT INTO race_entries (""RaceId"", ""HorseId"", ""PostPosition"", ""Bracket"", ""Weight"", ""JockeyName"", ""Odds"", ""FavRank"", ""FinishPos"", ""DataStatus"", ""LastModified"", ""JockeyCode"", ""TrainerCode"", ""Scratched"", ""Sex"", ""UpdatedAt"")
                         VALUES {string.Join(", ", seValues)}
                         ON CONFLICT (""RaceId"", ""HorseId"") DO UPDATE SET
                             ""PostPosition"" = excluded.""PostPosition"",
@@ -325,6 +326,7 @@ public class DifnRecordParsingService
                             ""LastModified"" = excluded.""LastModified"",
                             ""JockeyCode""   = COALESCE(excluded.""JockeyCode"", race_entries.""JockeyCode""),
                             ""TrainerCode""  = COALESCE(excluded.""TrainerCode"", race_entries.""TrainerCode""),
+                            ""Sex""          = COALESCE(excluded.""Sex"", race_entries.""Sex""),
                             ""UpdatedAt""    = excluded.""UpdatedAt""
                         WHERE excluded.""DataStatus"" > race_entries.""DataStatus""
                            OR (excluded.""DataStatus"" = race_entries.""DataStatus""
