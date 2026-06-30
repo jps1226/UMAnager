@@ -53,9 +53,21 @@ public static class TemplateBetEvaluator
         public int? AxisPp { get; init; }                 // axis post position, for nagashi
         public int ComboCount { get; init; }
         public double StakePerCombo { get; set; }
+        // "spine" = the Discipline / main bet (drives the honest recovery number); "side" = an explicit,
+        // additive loyalty bet that must NOT pollute the spine recovery %. Absent in any stored bet to
+        // date, so it defaults to "spine" and every historical figure is unchanged.
+        public string Kind { get; init; } = SpineKind;
     }
 
-    public sealed record BetOutcome(int MarkCount, bool HasResults, int Staked, int Won, List<string> HitLabels)
+    public const string SpineKind = "spine";
+    public const string SideKind  = "side";
+
+    /// <summary>The result of scoring a race's bets. Staked/Won are the SPINE (Discipline) bucket — the
+    /// numbers that feed the honest recovery %. SideStaked/SideWon are the loyalty side bets, tracked
+    /// distinctly so they never move the spine recovery. HitLabels are the spine ticket labels that hit.</summary>
+    public sealed record BetOutcome(
+        int MarkCount, bool HasResults, int Staked, int Won, List<string> HitLabels,
+        int SideStaked = 0, int SideWon = 0)
     {
         public bool AnyHit => Won > 0;
     }
@@ -183,22 +195,32 @@ public static class TemplateBetEvaluator
         IReadOnlyList<BetLine> lines, int markCount,
         int? pp1, int? pp2, int? pp3, JsonElement? payouts)
     {
-        var staked = (int)Math.Round(lines.Sum(l => l.StakePerCombo * l.ComboCount));
+        // Partition into the spine (Discipline) bet and any additive side bets, so the side stake/return
+        // is tallied separately and never moves the spine recovery number.
+        var spineLines = lines.Where(l => l.Kind != SideKind).ToList();
+        var sideLines  = lines.Where(l => l.Kind == SideKind).ToList();
+        var staked     = (int)Math.Round(spineLines.Sum(l => l.StakePerCombo * l.ComboCount));
+        var sideStaked = (int)Math.Round(sideLines.Sum(l => l.StakePerCombo * l.ComboCount));
         var labels = new List<string>();
         if (lines.Count == 0) return new BetOutcome(markCount, false, 0, 0, labels);
         if (pp1 is null || pp2 is null || pp3 is null || payouts is null)
-            return new BetOutcome(markCount, false, staked, 0, labels);
+            return new BetOutcome(markCount, false, staked, 0, labels, sideStaked, 0);
 
         var root = payouts.Value;
         var t3 = new[] { pp1.Value, pp2.Value, pp3.Value };
         var t3set = new HashSet<int>(t3);
-        int won = 0;
-        foreach (var line in lines)
+        int won = 0, sideWon = 0;
+        foreach (var line in spineLines)
         {
             var w = ScoreLine(line, t3, t3set, root);
             if (w > 0) { won += w; labels.Add(line.Label); }
         }
-        return new BetOutcome(markCount, true, staked, won, labels);
+        foreach (var line in sideLines)
+        {
+            var w = ScoreLine(line, t3, t3set, root);
+            if (w > 0) sideWon += w;
+        }
+        return new BetOutcome(markCount, true, staked, won, labels, sideStaked, sideWon);
     }
 
     /// <summary>
@@ -225,7 +247,8 @@ public static class TemplateBetEvaluator
                     if (h.ValueKind == JsonValueKind.Object && h.TryGetProperty("pp", out var pp) && pp.TryGetInt32(out var ppv) && ppv > 0)
                         pps.Add(ppv);
             int? axis = l.TryGetProperty("axisPp", out var ax) && ax.TryGetInt32(out var axv) && axv > 0 ? axv : null;
-            list.Add(new BetLine { Ticket = ticket, Method = method, Label = label, Pps = pps, AxisPp = axis, ComboCount = combo, StakePerCombo = per });
+            var kind = l.TryGetProperty("kind", out var k) && k.ValueKind == JsonValueKind.String && k.GetString() == SideKind ? SideKind : SpineKind;
+            list.Add(new BetLine { Ticket = ticket, Method = method, Label = label, Pps = pps, AxisPp = axis, ComboCount = combo, StakePerCombo = per, Kind = kind });
         }
         return list;
     }

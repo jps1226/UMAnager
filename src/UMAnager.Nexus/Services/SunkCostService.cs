@@ -79,12 +79,13 @@ public sealed class SunkCostService
         if (perRace.Count == 0)
             return SunkCostSummary.Empty(resetAt);
 
-        long totalStaked = 0, totalWon = 0;
+        long totalStaked = 0, totalWon = 0, sideStaked = 0, sideWon = 0;
         int settled = 0, pending = 0, hits = 0;
         foreach (var r in perRace)
         {
             totalStaked += r.Staked;
-            if (r.HasResults) { settled++; totalWon += r.Won; if (r.Won > 0) hits++; }
+            sideStaked  += r.SideStaked;
+            if (r.HasResults) { settled++; totalWon += r.Won; sideWon += r.SideWon; if (r.Won > 0) hits++; }
             else pending++;
         }
 
@@ -97,7 +98,10 @@ public sealed class SunkCostService
             TotalWonYen:    totalWon,
             SunkCostYen:    totalStaked - totalWon,
             NetYen:         totalWon - totalStaked,
-            ResetAt:        resetAt?.ToString("yyyy-MM-dd"));
+            ResetAt:        resetAt?.ToString("yyyy-MM-dd"),
+            SideStakedYen:  sideStaked,
+            SideWonYen:     sideWon,
+            SideNetYen:     sideWon - sideStaked);
     }
 
     /// <summary>Per-race recap for DISPLAY (the TV ticker + dashboard win badges): each placed
@@ -174,7 +178,7 @@ public sealed class SunkCostService
             catch (JsonException) { }
 
             profiles.TryGetValue(race.RaceId, out var prof);
-            var (staked, won, hasResults, labels, imported) = ScoreRace(runners, prof, pp1, pp2, pp3, payouts);
+            var (staked, won, hasResults, labels, imported, sideStaked, sideWon) = ScoreRace(runners, prof, pp1, pp2, pp3, payouts);
             doc?.Dispose();
 
             result.Add(new RaceRecap(
@@ -185,7 +189,10 @@ public sealed class SunkCostService
                 Won:        won,
                 Net:        won - staked,
                 HitLabels:  labels,
-                Imported:   imported));
+                Imported:   imported,
+                SideStaked: sideStaked,
+                SideWon:    sideWon,
+                SideNet:    sideWon - sideStaked));
         }
         return result;
     }
@@ -195,15 +202,15 @@ public sealed class SunkCostService
     /// line list (matches the UI exactly for any custom composition); a locked-but-unapplied race
     /// falls back to the default template. The single seam shared by the tally and the per-race
     /// recap so they can never diverge.</summary>
-    private static (int Staked, int Won, bool HasResults, List<string> Labels, bool Imported) ScoreRace(
+    private static (int Staked, int Won, bool HasResults, List<string> Labels, bool Imported, int SideStaked, int SideWon) ScoreRace(
         IReadOnlyList<TemplateBetEvaluator.MarkedRunner> runners,
         RaceBetProfile? prof, int? pp1, int? pp2, int? pp3, JsonElement? payouts)
     {
-        // Imported OrePro-history race: ACTUAL ¥ staked/returned is truth (no per-ticket labels).
+        // Imported OrePro-history race: ACTUAL ¥ staked/returned is truth (no per-ticket labels, no side bets).
         if (prof?.ActualStaked is int aStaked)
         {
             var aWon = prof.ActualWon ?? 0;
-            return (aStaked, aWon, true, new List<string>(), true);
+            return (aStaked, aWon, true, new List<string>(), true, 0, 0);
         }
 
         TemplateBetEvaluator.BetOutcome outcome;
@@ -214,7 +221,7 @@ public sealed class SunkCostService
             var oreProStake = prof?.Stake > 0 ? prof.Stake : TemplateBetEvaluator.DefaultStakeYen;
             outcome = TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts, TemplateBetEvaluator.BetStructures.Default, oreProStake);
         }
-        return (outcome.Staked, outcome.Won, outcome.HasResults, outcome.HitLabels, false);
+        return (outcome.Staked, outcome.Won, outcome.HasResults, outcome.HitLabels, false, outcome.SideStaked, outcome.SideWon);
     }
 
     /// <summary>Reset the tally so only races on/after the given JST date (default: today) count.</summary>
@@ -402,7 +409,9 @@ public sealed record RaceBetProfile(int Stake, int? ActualStaked, int? ActualWon
 /// history (only the net ¥ is known). Net = Won − Staked.</summary>
 public sealed record RaceRecap(
     string RaceId, int MarkCount, bool HasResults,
-    int Staked, int Won, int Net, IReadOnlyList<string> HitLabels, bool Imported);
+    int Staked, int Won, int Net, IReadOnlyList<string> HitLabels, bool Imported,
+    // Side (loyalty) bets, tracked apart from the spine so they never move the Discipline recovery.
+    int SideStaked = 0, int SideWon = 0, int SideNet = 0);
 
 public sealed record SunkCostSummary(
     int PlacedRaces,
@@ -413,7 +422,11 @@ public sealed record SunkCostSummary(
     long TotalWonYen,
     long SunkCostYen,
     long NetYen,
-    string? ResetAt)
+    string? ResetAt,
+    // Side-bet ledger, kept distinct from the spine totals above so the Discipline recovery % stays honest.
+    long SideStakedYen = 0,
+    long SideWonYen = 0,
+    long SideNetYen = 0)
 {
     public static SunkCostSummary Empty(DateTime? resetAt) =>
         new(0, 0, 0, 0, 0, 0, 0, 0, resetAt?.ToString("yyyy-MM-dd"));

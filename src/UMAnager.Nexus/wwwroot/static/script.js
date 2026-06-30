@@ -307,7 +307,13 @@ function compositionForAutoPreset(presetId) {
 // Honest goal: LOSE LEAST, not profit — the ~20-25% takeout wall stands until better data (Group-B).
 const DISCIPLINE_RISK = 10;            // pinned slider value when on — Ultra-Safe / trust the market
 const DISCIPLINE_PLACE_STAKE = 10000;  // ¥ on the single 複勝 line (the per-race budget the presets use)
-function isDisciplineMode() { return !!(typeof appConfig === 'object' && appConfig && appConfig.ui && appConfig.ui.disciplineMode); }
+// Discipline is the DEFAULT mode (the overhaul made it the spine of betting). UNSET → ON; only an
+// explicit `disciplineMode === false` (you flipped to Manual) turns it off. So a fresh config, or the
+// brief window before /api/config loads, is Discipline.
+function isDisciplineMode() {
+    if (typeof appConfig !== 'object' || !appConfig || !appConfig.ui) return true;
+    return appConfig.ui.disciplineMode !== false;
+}
 // Pure PLACE on the ◎. presetId is special (not in BET_PRESETS) so it never shows in the day dropdown
 // and gets its own min/max=1 plan (no phantom 2nd mark — place only ever bets the ◎).
 function disciplinePlaceComposition() {
@@ -319,6 +325,112 @@ function isDisciplinePlaceComposition(comp) { return !!comp && comp.presetId ===
 function disciplineComposition(r_id) {
     const probe = getEngineMarkPlanForRace(r_id, { compositionOverride: compositionFromPreset('balanced') });
     return probe.shape === 'small-field' ? smallFieldTokenComposition() : disciplinePlaceComposition();
+}
+
+// ── SIDE BETS (loyalty bets — Discipline-era) ────────────────────────────────
+// Explicit, ADDITIVE ¥1k bets on horses you like ("I backed it despite the odds"), riding ALONGSIDE
+// the disciplined ◎ place — never replacing it. Auto-SUGGESTED from your Favorites (the 👁 list) but
+// MANUAL-CONFIRM: each is one-click removable, and nothing fires until you apply the race. One favorite
+// → a ¥1k place (複勝); two+ in one race → ONE ¥1k Wide (ワイド) between them. The engine's ◎ is skipped
+// (never double the spine). Frozen with kind:'side' so C# tracks their P/L APART and the Discipline
+// recovery % stays honest. Whole feature off when appConfig.ui.sideBetsAuto === false.
+const SIDE_BET_STAKE = 1000;
+function sideBetsEnabled() { return isDisciplineMode() && (appConfig.ui?.sideBetsAuto !== false); }
+// Favorite (Watchlist) horse-ids running in a race, MINUS the engine ◎ (don't double the spine).
+function raceFavoriteHorseIds(rid) {
+    const fav = parseListIds(listsData?.watchlist || '');
+    if (!fav.size) return [];
+    const honmei = (getUnconditionalAutoBetRankingsForRace(rid).find(p => p.symbol === '◎') || {}).h_id;
+    const out = [];
+    (globalRaceEntries[rid] || []).forEach(row => {
+        const hid = String(row?.Horse_ID ?? '').split('.')[0].trim();
+        if (hid && fav.has(hid) && hid !== String(honmei || '')) out.push(hid);
+    });
+    return out;
+}
+// The ACTIVE side-bet horse-ids for a race: an explicit per-race choice (raceMeta.sideBets, written
+// when you remove/re-add a suggestion) wins; else the auto-suggested default = every race favorite.
+// Always [] when side bets are off. Re-filtered to favorites still in the field (a scratch drops it).
+function activeSideBetHorseIds(rid) {
+    if (!sideBetsEnabled()) return [];
+    const favs = raceFavoriteHorseIds(rid);
+    const ov = globalRaceMeta[rid]?.sideBets;
+    if (Array.isArray(ov)) return ov.filter(h => favs.includes(h));
+    return favs;
+}
+// Toggle one favorite's side bet on/off for a race (materializes the auto-default first so a removal
+// sticks), persist to the marks blob, and re-render the strip + sunk-cost panel.
+function toggleSideBet(rid, hid) {
+    const favs = raceFavoriteHorseIds(rid);
+    const cur = activeSideBetHorseIds(rid);
+    const next = cur.includes(hid) ? cur.filter(h => h !== hid) : [...cur, hid].filter(h => favs.includes(h));
+    globalRaceMeta[rid] = { ...(globalRaceMeta[rid] || {}), sideBets: next };
+    try { touchRaceMeta(rid); } catch (_) {}
+    saveMarksToServer().catch(() => {});
+    renderSideBetStrip(rid);
+}
+// Build this race's frozen side-bet LINES (kind:'side'): 1 favorite → ¥1k place; 2+ → one ¥1k Wide box.
+function buildSideBetLines(rid) {
+    const hids = activeSideBetHorseIds(rid);
+    if (!hids.length) return [];
+    const ppByHorse = {};
+    (globalRaceEntries[rid] || []).forEach(row => {
+        const hid = String(row?.Horse_ID ?? '').split('.')[0].trim();
+        const pp = parseInt(row?.PP, 10);
+        if (hid && Number.isFinite(pp) && pp > 0) ppByHorse[hid] = pp;
+    });
+    const pps = hids.map(h => ppByHorse[h]).filter(Boolean);
+    if (!pps.length) return [];
+    if (pps.length === 1)
+        return [{ ticket: 'place', method: 'normal', label: '複勝', horses: [{ pp: pps[0] }], comboCount: 1, stakePerCombo: SIDE_BET_STAKE, kind: 'side' }];
+    const c = nCk(pps.length, 2);
+    const per = Math.max(100, Math.round((SIDE_BET_STAKE / c) / 100) * 100);
+    return [{ ticket: 'wide', method: 'box', label: 'ワイド', horses: pps.map(pp => ({ pp })), comboCount: c, stakePerCombo: per, kind: 'side' }];
+}
+
+// The per-race "Bets" strip (shown at the top of an expanded race under Discipline): the green spine
+// bet (◎ place ¥10k) plus a pink ♥ chip per Favorite in the field — active chips carry a ✕ to drop the
+// side bet, removed ones a ＋ to re-add. Visually differentiated so a loyalty bet never looks like the
+// disciplined spine. Empty under Manual / when side bets are off / on settled races (autopsy owns those).
+function sideBetStripHtml(rid) {
+    if (!sideBetsEnabled()) return '';
+    try { if (raceIsSettledForAutopsy(rid)) return ''; } catch (_) {}
+    const honmeiId = (getUnconditionalAutoBetRankingsForRace(rid).find(p => p.symbol === '◎') || {}).h_id;
+    const nameById = {};
+    (globalRaceEntries[rid] || []).forEach(row => { nameById[String(row?.Horse_ID ?? '').split('.')[0].trim()] = row.Horse; });
+    const yk = DISCIPLINE_PLACE_STAKE / 1000;
+    const spineName = honmeiId ? (nameById[honmeiId] || '◎') : '—';
+    const chipBase = 'display:inline-flex;align-items:center;gap:5px;font-size:0.78em;font-weight:700;padding:2px 9px;border-radius:9px;white-space:nowrap;vertical-align:middle;';
+    const spine = `<span style="${chipBase}background:#14361f;color:#b9f0c9;border:1px solid #2f8f57;" `
+        + `title="The disciplined bet — a flat ¥${DISCIPLINE_PLACE_STAKE.toLocaleString()} place (複勝) on the cold engine's top pick.">🎯 ◎ place ¥${yk}k · ${escapeHtml(spineName)}</span>`;
+    const favs = raceFavoriteHorseIds(rid);
+    let favHtml = '';
+    if (favs.length) {
+        const active = new Set(activeSideBetHorseIds(rid));
+        const activeN = favs.filter(h => active.has(h)).length;
+        const typeLabel = activeN >= 2 ? `one ¥1k Wide (ワイド) on ${activeN}` : (activeN === 1 ? `¥1k place (複勝)` : 'none');
+        favHtml = favs.map(h => {
+            const on = active.has(h);
+            const nm = escapeHtml(nameById[h] || h);
+            const style = on
+                ? `${chipBase}background:#3a1830;color:#ffc3e1;border:1px solid #8a3568;cursor:pointer;`
+                : `${chipBase}background:transparent;color:#8a7686;border:1px dashed #6a4a60;cursor:pointer;`;
+            const tip = on ? 'Loyalty side bet ON — click to remove (nothing places until you apply the race).'
+                           : 'Click to add a ¥1k loyalty side bet on this Favorite.';
+            return `<button type="button" style="${style}" title="${tip}" onclick="event.stopPropagation(); toggleSideBet('${rid}','${h}')">♥ ${nm} ${on ? '✕' : '＋'}</button>`;
+        }).join('');
+        favHtml += `<span style="font-size:0.72em;color:#9a8a96;margin-left:2px;">side → ${typeLabel}</span>`;
+    } else {
+        favHtml = `<span style="font-size:0.72em;color:#8a8a8a;">No Favorites in this race.</span>`;
+    }
+    const wrap = 'display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:7px 10px;margin:0 0 8px;'
+        + 'border:1px solid #2a2f3a;border-radius:10px;background:#171a21;';
+    return `<div style="${wrap}"><span style="font-size:0.72em;font-weight:700;color:#8a93a3;letter-spacing:0.04em;">BETS</span>${spine}${favHtml}</div>`;
+}
+function renderSideBetStrip(rid) {
+    const el = document.getElementById(`bets-strip-${rid}`);
+    if (el) el.innerHTML = sideBetStripHtml(rid);
+    try { refreshSunkCostStat(); } catch (_) {}
 }
 
 // Phase 34 — per-preset COUNT BAND + selection TILT (design locked 2026-06-19).
@@ -1224,6 +1336,19 @@ async function refreshSunkCostStat() {
         if (wonEl)    wonEl.textContent    = `¥${won.toLocaleString()}`;
         if (betsEl)   betsEl.textContent   = pending ? `${placed} (${pending} live)` : `${placed}`;
         if (scopeEl)  scopeEl.textContent  = d.ResetAt ? `since ${d.ResetAt}` : 'all-time';
+        // Side (loyalty) bets are tracked APART so the Net/recovery above stays pure Discipline. Show
+        // their running P/L on its own line — hide the row entirely until any side bet exists.
+        const sideWrap = document.getElementById('voting-sunk-side-wrap');
+        const sideEl   = document.getElementById('voting-sunk-side');
+        const sideStaked = Number(d.SideStakedYen) || 0;
+        const sideNet    = Number(d.SideNetYen)    || 0;
+        if (sideWrap) sideWrap.style.display = sideStaked > 0 ? '' : 'none';
+        if (sideEl && sideStaked > 0) {
+            const ss = sideNet >= 0 ? '+' : '−';
+            sideEl.textContent = `${ss}¥${Math.abs(sideNet).toLocaleString()}`;
+            sideEl.classList.toggle('quick-stat-pos', sideNet >= 0);
+            sideEl.classList.toggle('quick-stat-neg', sideNet < 0);
+        }
     } catch (_) { /* leave prior values */ }
 }
 
@@ -1408,7 +1533,7 @@ function renderWeekendWatchlist() {
     const watched = tracked.watchlist;
 
     if (watched.size === 0) {
-        container.innerHTML = '<div class="ww-empty">Add horses to your Watchlist to see them here.</div>';
+        container.innerHTML = '<div class="ww-empty">Add horses to your Favorites to see them here.</div>';
         return;
     }
 
@@ -1439,7 +1564,7 @@ function renderWeekendWatchlist() {
     matches.sort((a, b) => a.sortTime < b.sortTime ? -1 : a.sortTime > b.sortTime ? 1 : 0);
 
     if (matches.length === 0) {
-        container.innerHTML = `<div class="ww-empty">No watchlist horses running on ${activeDate}.</div>`;
+        container.innerHTML = `<div class="ww-empty">No Favorites running on ${activeDate}.</div>`;
         return;
     }
 
@@ -1750,14 +1875,20 @@ function updateAllHoverButtons() {
 
 // --- INITIALIZATION ---
 async function init() {
-    const marksRes = await fetch('/api/marks');
+    // Over a high-latency link (Tailscale / Cloudflare tunnel), awaiting each startup fetch one-by-one
+    // stacks the round-trips serially — a big chunk of the wall-clock load. Fire the independent ones
+    // CONCURRENTLY instead. (Was ~7 serial requests; now two small parallel groups.)
+    const [marksRes, configRes, dictRes] = await Promise.all([
+        fetch('/api/marks'),
+        fetch('/api/config'),
+        fetch('/static/race_name_dict.json').catch(() => null),
+    ]);
+
     const marksPayload = normalizeMarksPayload(await marksRes.json());
     globalMarks = marksPayload.marks;
     globalRaceMeta = marksPayload.raceMeta;
     globalMarksVersion = marksPayload.version;
 
-    // NEW: Load config file
-    const configRes = await fetch('/api/config');
     appConfig = await configRes.json();
     // Migrate jockeyWeight from old default 40 → 20 (A/E shrinkage fix).
     // Only fires if the user never manually changed it away from the old default.
@@ -1771,23 +1902,17 @@ async function init() {
     if (localStorage.getItem(UMM_STORAGE_KEY) === '1') { await loadUmmIconMap(); }
     relocateSearchBar();
 
-    // Phase 21: Load race name translation dictionary
-    try {
-        const dictRes = await fetch('/static/race_name_dict.json');
-        raceNameDict = await dictRes.json();
-    } catch (e) {
-        console.warn('Failed to load race_name_dict.json:', e);
-        raceNameDict = { stakes: {}, classNames: {} };
-    }
+    // Phase 21: race name translation dictionary (fetched above, in parallel).
+    try { raceNameDict = dictRes ? await dictRes.json() : { stakes: {}, classNames: {} }; }
+    catch (e) { console.warn('Failed to load race_name_dict.json:', e); raceNameDict = { stakes: {}, classNames: {} }; }
 
-    // Phase 30: load vote history for "Voted N×" badges and sidebar section.
-    await loadVoteHistory();
-    // Phase 38: load the calendar skeleton so all race days are navigable (lazy detail).
-    await loadCalendarSkeleton();
-    // Load OrePro per-race apply state so the Apply button can reflect history.
-    await loadOreProApplyState();
-    // Load OrePro behavior settings (e.g. navigate-to-receipt-after-submit).
-    await loadOreProSettingsLite();
+    // Vote history (Voted N× badges) + OrePro apply state + settings are independent — load them
+    // concurrently. The calendar skeleton is loaded by refreshDataAndUI below, so it's not fetched here.
+    await Promise.all([
+        loadVoteHistory().catch(() => {}),
+        loadOreProApplyState().catch(() => {}),
+        loadOreProSettingsLite().catch(() => {}),
+    ]);
 
     // Restore persisted race-level estimate cache to avoid recomputing every view switch.
     raceBetEstimateCache = loadStoredBetEstimateCache();
@@ -2555,12 +2680,18 @@ function buildTableBody(r_id, entries) {
     // engine's mark-blind top-4 power ranking (◎〇▲△); a small ⚙ chip flags each row that differs.
     let showEngineDiff = false;
     const engineMarkByHorse = {};
+    const discMode = isDisciplineMode();
+    const discSettled = (() => { try { return raceIsSettledForAutopsy(r_id); } catch (_) { return false; } })();
     try {
-        // Engine-vs-you disagreement is a PRE-race handicapping aid — pointless once the race
-        // has run (and confusing on a settled day). Suppress on settled races.
-        if ((appConfig.ui?.showEngineDisagreement ?? true) && raceHasUserMarks(r_id) && !raceIsSettledForAutopsy(r_id)) {
-            showEngineDiff = true;
+        // The engine's mark-blind top-4 ranking feeds the ⚙ disagreement chip (manual, hand-marked races)
+        // and the Discipline "engine read" column — both PRE-race only. A settled race shows the actual
+        // FINISH in that column instead (cheap, review-useful) — and its pre-race handicapping data is
+        // intentionally trimmed from the payload, so an engine recompute here would be wrong anyway.
+        const wantManualDiff = (appConfig.ui?.showEngineDisagreement ?? true) && raceHasUserMarks(r_id) && !discSettled;
+        const wantDisciplineRead = discMode && !discSettled;
+        if (wantManualDiff || wantDisciplineRead) {
             getUnconditionalAutoBetRankingsForRace(r_id).forEach(p => { engineMarkByHorse[p.h_id] = p.symbol; });
+            showEngineDiff = wantManualDiff;
         }
     } catch (_) { showEngineDiff = false; }
     entries.forEach(row => {
@@ -2628,6 +2759,30 @@ function buildTableBody(r_id, entries) {
         // NEW: Added id="row-${r_id}-${h_id}" to the <tr>
         const cellHtmlByCol = {
             Shirushi: (() => {
+                // Discipline mode: marks are analysis-only and live in the ⓘ popover, so the grid's first
+                // column becomes a read-only ENGINE READ — the cold engine's ◎ (the actual ¥10k place
+                // target) badged, and its 〇▲ leans as quiet notes. No buttons here = nothing on the grid
+                // can place a bet (the safety valve). engineMarkByHorse is the engine's own ranking, so its
+                // ◎ is exactly the horse buildRaceBetLines bets under Discipline — grid and bet never disagree.
+                if (discMode) {
+                    // Settled race: nothing to show here — the bet/engine read is pre-race, and the actual
+                    // finish already has its own column. Leave the first column empty on review.
+                    if (discSettled) return `<td class="shirushi-cell shirushi-discipline"></td>`;
+                    const eng = engineMarkByHorse[h_id] || '';
+                    let inner = '';
+                    if (eng === '◎') {
+                        const yk = DISCIPLINE_PLACE_STAKE / 1000;
+                        inner = `<span title="The disciplined bet — a flat ¥${DISCIPLINE_PLACE_STAKE.toLocaleString()} place (複勝) on the cold engine's top pick. Cashes if it finishes in the top 3." `
+                            + `style="display:inline-flex;align-items:center;gap:4px;font-size:0.78em;font-weight:700;padding:2px 8px;border-radius:8px;`
+                            + `background:#14361f;color:#b9f0c9;border:1px solid #2f8f57;white-space:nowrap;">◎ place ¥${yk}k</span>`;
+                    } else if (eng) {
+                        const rankTxt = { '〇': '2nd', '▲': '3rd', '△': '4th' }[eng] || '';
+                        inner = `<span title="The cold engine's ${rankTxt || 'next'} lean — analysis only, bets nothing." `
+                            + `style="display:inline-flex;align-items:center;gap:3px;font-size:0.72em;font-weight:600;padding:1px 6px;border-radius:6px;`
+                            + `color:#9fb0c0;border:1px solid #3a4654;white-space:nowrap;">${eng}<span style="opacity:0.7;">${rankTxt}</span></span>`;
+                    }
+                    return `<td class="shirushi-cell shirushi-discipline">${inner}</td>`;
+                }
                 const btns = `${createMarkBtn(r_id, h_id, '◎', key)}
                 ${createMarkBtn(r_id, h_id, '〇', key)}
                 ${createMarkBtn(r_id, h_id, '▲', key)}
@@ -2867,6 +3022,27 @@ function updateDisciplineUi() {
     } else {
         updateRiskLabel(slider ? slider.value : 50);
     }
+    // The day-preset selector + line editor only drive MANUAL bets — they're moot under Discipline
+    // (the bet is a fixed ¥10k place on the engine ◎). Hide them so the Bets tab can't mislead.
+    try {
+        document.querySelectorAll('.toolbar-betsel').forEach(el => { el.style.display = on ? 'none' : ''; });
+        const desc = document.getElementById('day-bet-structure-desc');
+        if (desc && on) desc.style.display = 'none';
+    } catch (_) {}
+    try { renderBetsDashMode(); } catch (_) {}
+}
+
+// The Bets-tab sidebar "mode" tile: what betting mode is active + the one-line bet readout.
+function renderBetsDashMode() {
+    const el = document.getElementById('voting-dash-mode');
+    if (!el) return;
+    const on = isDisciplineMode();
+    const yk = DISCIPLINE_PLACE_STAKE / 1000;
+    const name = on ? '🧊 Discipline' : '🎚 Manual';
+    const sub  = on ? `¥${yk}k place on the engine ◎` : 'marks drive bets · risk slider';
+    el.innerHTML = `<div class="dash-mode-label">Mode</div>`
+        + `<div class="dash-mode-name" style="color:${on ? '#0abde3' : '#f3f6fb'};">${name}</div>`
+        + `<div class="dash-mode-sub">${sub}</div>`;
 }
 function toggleDisciplineMode(on) {
     if (typeof appConfig !== 'object' || !appConfig) return;
@@ -4340,16 +4516,25 @@ function updateAllRiskBadges() {
 
 // Returns the engine's unconditional top-4 picks for a race, ignoring any existing marks.
 // Used by the Engine Picks sidebar and agreement-% stats — intentionally mark-blind.
+// Self-invalidating memo: the unconditional ranking only changes when the risk slider moves or the
+// race's entries are reloaded. Keying on (risk, entriesRef) means a data reload (new array) or a risk
+// change recomputes automatically — no manual clear. Collapses the several calls per race the grid +
+// side-bet strip make each render into ONE calculatePowerScore pass (a big post-fetch render win).
+const _unconditionalRankCache = new Map(); // r_id -> { risk, entriesRef, result }
 function getUnconditionalAutoBetRankingsForRace(r_id) {
     const entries = globalRaceEntries[r_id];
     if (!entries || entries.length === 0) return [];
-    const symbols = ['◎', '〇', '▲', '△'];
     const currentRisk = getCurrentAutoPickRisk();
-    return entries
+    const cached = _unconditionalRankCache.get(r_id);
+    if (cached && cached.risk === currentRisk && cached.entriesRef === entries) return cached.result;
+    const symbols = ['◎', '〇', '▲', '△'];
+    const result = entries
         .map(row => ({ h_id: String(row.Horse_ID).split('.')[0], power: calculatePowerScore(row, currentRisk) }))
         .sort((a, b) => b.power - a.power)
         .slice(0, symbols.length)
         .map((e, i) => ({ h_id: e.h_id, symbol: symbols[i] }));
+    _unconditionalRankCache.set(r_id, { risk: currentRisk, entriesRef: entries, result });
+    return result;
 }
 
 // ─── Phase 29 v2: Mark-Count Engine ─────────────────────────────────────────
@@ -4999,6 +5184,17 @@ function getAllCalendarDates() {
     ])].sort();
 }
 
+// The day to show first on a fresh load: the earliest UPCOMING day, else the most recent PAST day.
+// Read from the lightweight calendar skeleton so we can pick WITHOUT having loaded any day's detail.
+function pickInitialActiveDate() {
+    const days = Object.keys(globalCalendarSkeleton || {});
+    if (!days.length) return null;
+    const upcoming = days.filter(d => globalCalendarSkeleton[d]?.timeline === 'upcoming').sort();
+    if (upcoming.length) return upcoming[0];
+    const past = days.filter(d => globalCalendarSkeleton[d]?.timeline !== 'upcoming').sort();
+    return past.length ? past[past.length - 1] : days.sort()[0];
+}
+
 function getMonthKey(dateStr) {
     return dateStr ? String(dateStr).slice(0, 7) : null;
 }
@@ -5047,7 +5243,7 @@ function formatActiveDateLabel(dateStr) {
 }
 
 function updateActiveDateNavigator() {
-    const dates = getSortedActiveDates();
+    const dates = getAllCalendarDates();
     const labelEl = document.getElementById('active-date-label');
     const metaEl = document.getElementById('active-date-meta');
     const prevBtn = document.getElementById('active-date-prev');
@@ -5072,7 +5268,7 @@ function updateActiveDateNavigator() {
 }
 
 function shiftActiveDate(step) {
-    const dates = getSortedActiveDates();
+    const dates = getAllCalendarDates();
     if (!dates.length || !currentActiveDate) return;
     const currentIndex = dates.indexOf(currentActiveDate);
     const safeIndex = currentIndex >= 0 ? currentIndex : 0;
@@ -5384,6 +5580,7 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
                 <span id="risk-badge-${r_id}" class="risk-badge" style="display:none;" onclick="event.stopPropagation()"></span>
             </h3>
             <div id="content-${r_id}" class="race-content ${collapsedClass}">
+                <div id="bets-strip-${r_id}">${sideBetStripHtml(r_id)}</div>
                 <table class="${dateTimeline === 'past' && (appConfig.ui?.cleanPastRaceCards ?? true) ? 'past-race' : ''}">
                     <thead id="thead-${r_id}">${buildTableHeaderRow(r_id)}</thead>
                     <tbody id="tbody-${r_id}">${rowsHtml}</tbody>
@@ -5406,7 +5603,9 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
 }
 
 function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = null, keepOpenRaceId = null) {
-    const dates = Object.keys(globalRacesByDate).sort();
+    // Build tab shells for EVERY race day (loaded ∪ skeleton) so the date arrows / calendar can reach
+    // any day; only the loaded active day renders content now, the rest lazy-load when opened.
+    const dates = getAllCalendarDates();
     const scheds = document.getElementById('schedules-container');
     renderedDates.clear();
     scheds.innerHTML = "";
@@ -5436,6 +5635,11 @@ function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = nu
     // Cheap init for ALL dates: locks, index tags, sort state, race class.
     // Runs fast (no HTML building) so global state is ready before any tab renders.
     dates.forEach(date => {
+        // Skeleton-only (not-yet-loaded) days have no timeline yet — take it from the skeleton so the
+        // date label/coloring is right before the day's detail is fetched.
+        if (!globalDateTimelineByDate[date]) {
+            globalDateTimelineByDate[date] = globalCalendarSkeleton[date]?.timeline || 'upcoming';
+        }
         const dateTimeline = globalDateTimelineByDate[date] || 'upcoming';
         (globalRacesByDate[date] || []).forEach(race => {
             const r_id = race.info.race_id;
@@ -5581,28 +5785,8 @@ async function loadRaceDay(date) {
 // --- RENDER DASHBOARD ---
 async function loadRaces() {
     const t0 = performance.now();
-    appendDebugLine('loadRaces started');
-    // cache: 'no-cache' re-validates every time (sends If-None-Match) but allows
-    // 304 short-circuits — browser skips response.json() when ETag matches, saving
-    // 2-4s of V8 JSON.parse on unchanged data. ETag v5 + 30s server cache makes
-    // the ETag trustworthy. 'no-store' was overkill and blocked all 304s.
-    const _fetchT0 = performance.now();
-    const racesRes = await fetch('/api/races', { cache: 'no-cache' });
-    const _headersMs = Math.round(performance.now() - _fetchT0);
-    appendDebugLine(`/api/races status=${racesRes.status}`);
-    const data = applyTimeDisplayToRacesPayload(await racesRes.json().catch(() => ({})));
-    _devFetchMs = Math.round(performance.now() - _fetchT0); // headers + body download + JSON.parse
-    if (!racesRes.ok) {
-        const detail = data?.detail || data?.message || `HTTP ${racesRes.status}`;
-        appendConsoleLine(`[Races] Failed to load races: ${detail}`);
-        appendDebugLine(`loadRaces failed in ${(performance.now() - t0).toFixed(0)}ms`);
-        throw new Error(detail);
-    }
-    appendDebugLine(
-        `Payload days: upcoming=${Object.keys(data.upcoming_races_by_date || data.races_by_date || {}).length}, ` +
-        `past=${Object.keys(data.past_races_by_date || {}).length}`
-    );
-    const timelineData = normalizeRacesPayload(data);
+    appendDebugLine('loadRaces started (lazy per-day)');
+
     // Reset cached structures for a clean rebuild.
     upcomingRaces = [];
     searchableHorses = [];
@@ -5611,15 +5795,26 @@ async function loadRaces() {
     globalRaceInfo = {};
     globalRacesByDate = {};
     globalDateTimelineByDate = {};
-    globalAllRacesByDate = {
-        upcoming: timelineData.upcoming || {},
-        past: timelineData.past || {}
-    };
+    globalAllRacesByDate = { upcoming: {}, past: {} };
 
-    const _stateT0 = performance.now();
-    populateGlobalsFromTimeline(globalAllRacesByDate);
-    upcomingRaces.sort((a, b) => a.time - b.time);
-    _devStateMs = Math.round(performance.now() - _stateT0);
+    // The calendar skeleton (cheap: date + count + timeline, NO entry data) tells us every race day.
+    // refreshDataAndUI loads it just before us, but ensure it's present so we can pick a day to show.
+    if (!globalCalendarSkeleton || !Object.keys(globalCalendarSkeleton).length) {
+        await loadCalendarSkeleton();
+    }
+
+    // LAZY LOAD — the big win on a slow link. Fetch ONLY the day we're about to show (first load: the
+    // earliest upcoming day, else the most recent past day; a refresh: whatever day you're on). Every
+    // OTHER day stays a lightweight skeleton entry and pulls its heavy detail on demand when opened
+    // (switchMainTab / selectCalendarDate / the date arrows). First paint moves ~1 day (~30 KB) instead
+    // of the whole 14-day window (~450 KB+).
+    const keepCurrent = !isFirstLoad && currentActiveDate && globalCalendarSkeleton[currentActiveDate];
+    const initialDate = keepCurrent ? currentActiveDate : pickInitialActiveDate();
+
+    const _fetchT0 = performance.now();
+    if (initialDate) await loadRaceDay(initialDate); // fetch + populate globals for just this one day
+    _devFetchMs = Math.round(performance.now() - _fetchT0); // single-day fetch + parse
+    _devStateMs = 0;
 
     let collapseBeforeTime = null;
     let keepOpenRaceId = null;
@@ -5627,13 +5822,9 @@ async function loadRaces() {
         const now = new Date();
         const nextUpcomingIndex = upcomingRaces.findIndex(r => r.time > now);
         if (nextUpcomingIndex > -1) {
-            const nextUpcomingRace = upcomingRaces[nextUpcomingIndex];
-            collapseBeforeTime = nextUpcomingRace.time;
-
+            collapseBeforeTime = upcomingRaces[nextUpcomingIndex].time;
             // Keep the race that is most likely in-progress expanded.
-            if (nextUpcomingIndex > 0) {
-                keepOpenRaceId = upcomingRaces[nextUpcomingIndex - 1].r_id;
-            }
+            if (nextUpcomingIndex > 0) keepOpenRaceId = upcomingRaces[nextUpcomingIndex - 1].r_id;
         }
     }
 
@@ -5645,24 +5836,12 @@ async function loadRaces() {
     _devSidebarMs = Math.round(performance.now() - _sidebarT0);
 
     const _renderT0 = performance.now();
-    const hasUpcoming = Object.keys(globalAllRacesByDate.upcoming || {}).length > 0;
-    const upcomingDates = Object.keys(globalAllRacesByDate.upcoming || {}).sort();
-    const pastDates = Object.keys(globalAllRacesByDate.past || {}).sort();
-    const allDates = getSortedActiveDates();
-
-    if (isFirstLoad) {
-        currentActiveDate = upcomingDates[0] || pastDates[pastDates.length - 1] || allDates[0] || null;
-    } else {
-        currentActiveDate = findNearestAvailableDate(currentActiveDate, allDates)
-            || upcomingDates[0]
-            || pastDates[pastDates.length - 1]
-            || allDates[0]
-            || null;
-    }
-
+    currentActiveDate = (initialDate && globalRacesByDate[initialDate])
+        ? initialDate
+        : (getSortedActiveDates()[0] || null);
     currentTimelineTab = currentActiveDate
-        ? (globalDateTimelineByDate[currentActiveDate] || (hasUpcoming ? "upcoming" : "past"))
-        : (hasUpcoming ? "upcoming" : "past");
+        ? (globalDateTimelineByDate[currentActiveDate] || globalCalendarSkeleton[currentActiveDate]?.timeline || 'past')
+        : 'past';
     currentCalendarMonth = currentActiveDate ? getMonthKey(currentActiveDate) : getAvailableCalendarMonths()[0] || null;
 
     renderDayTabsAndSchedules(currentActiveDate, collapseBeforeTime, keepOpenRaceId);
@@ -5684,10 +5863,38 @@ function switchSidebarTab(tab) {
     document.getElementById(`side-tab-${tab}`).classList.add('active');
 }
 
-function switchMainTab(date) {
-    const dates = getSortedActiveDates();
-    const nextDate = findNearestAvailableDate(date, dates);
+async function switchMainTab(date) {
+    const dates = getAllCalendarDates();
+    const nextDate = findNearestAvailableDate(date, dates) || date;
     if (!nextDate) return;
+
+    // Lazy-load the day's heavy detail if we only have its skeleton entry so far (date arrows /
+    // jump-to-race can land on a not-yet-loaded day). The shell already exists from the all-days pass.
+    // Lazy-load the day's heavy detail if we only have its skeleton entry. After loading, a FULL
+    // re-render wires up the new day's entries/locks (the cheap-init inside renderDayTabsAndSchedules)
+    // and renders it — mirrors selectCalendarDate. The fast path below handles already-loaded days.
+    if (!globalRacesByDate[nextDate] && globalCalendarSkeleton[nextDate]) {
+        const loaded = await loadRaceDay(nextDate);
+        if (loaded) {
+            currentActiveDate = nextDate;
+            currentTimelineTab = globalDateTimelineByDate[nextDate] || currentTimelineTab;
+            currentCalendarMonth = getMonthKey(nextDate) || currentCalendarMonth;
+            updateOreProSyncDateDisplay();
+            refreshDayBetStructure();
+            renderDayTabsAndSchedules(nextDate);
+            updateAllRiskBadges();
+            updateAutoBetHighlighting();
+            winningVotesFocusEnabled = false;
+            syncVotingViewAvailability();
+            updateLiveViewPopoutAvailability();
+            updateWinningVotesFocusButton();
+            renderWeekendWatchlist();
+            renderVoteHistory();
+            renderEnginePicks();
+            updateQuickStats();
+            return;
+        }
+    }
 
     currentActiveDate = nextDate;
     currentTimelineTab = globalDateTimelineByDate[nextDate] || currentTimelineTab;
@@ -5887,8 +6094,14 @@ function freezeBetProfileAtApply(rid) {
         ticket: l.ticket, method: l.method, label: l.label,
         horses: (l.horses || []).map(h => ({ pp: h.pp })),
         comboCount: l.comboCount, stakePerCombo: l.stakePerCombo,
-        ...(l.axisPp ? { axisPp: l.axisPp } : {})
+        ...(l.axisPp ? { axisPp: l.axisPp } : {}),
+        ...(l.kind === 'side' ? { kind: 'side' } : {})
     }));
+    // Append any CONFIRMED loyalty side bets (kind:'side') so they freeze alongside the spine. C#
+    // scores them into a SEPARATE side-P/L bucket, keeping the Discipline recovery % honest. The
+    // active set is whatever survived your removals in the Bets strip — manual-confirm, not auto-place.
+    const sideLines = buildSideBetLines(rid);
+    for (const s of sideLines) lines.push({ ...s, horses: (s.horses || []).map(h => ({ pp: h.pp })) });
     // The frozen betLines ARE the record of what was placed (C# scores them verbatim). We also
     // stash the composition label so applied races can show "Trio chase + Wide net" etc.
     const comp = resolveBetComposition(rid);
@@ -6097,7 +6310,9 @@ async function saveMarksToServer() {
             // Per-race bet COMPOSITION override (Voting tab). Preserve only valid shapes.
             ...(normalizeComposition(meta.betComposition) ? { betComposition: normalizeComposition(meta.betComposition) } : {}),
             // Phase 34: tag marking an override as auto-created by Auto Bet Day's backup-preset rescue.
-            ...(meta.betCompositionAutoBackup === true ? { betCompositionAutoBackup: true } : {})
+            ...(meta.betCompositionAutoBackup === true ? { betCompositionAutoBackup: true } : {}),
+            // Side bets: the explicit per-race active set (whitelisted so removals/re-adds survive reload).
+            ...(Array.isArray(meta.sideBets) ? { sideBets: meta.sideBets.map(h => String(h || '').trim()).filter(Boolean) } : {})
         }])
     );
 
@@ -7039,6 +7254,25 @@ function collectRaceMarkedRunners(raceId) {
     return runners;
 }
 
+// DISCIPLINE = ENGINE-DRIVEN, NOT MARK-DRIVEN. The disciplined place (or small-field token) bets the
+// COLD ENGINE'S OWN ◎ (top-3 ranking), sourced live — so your ◎〇▲△ marks are pure analysis and can
+// NEVER move a bet. This is the full decouple that kills last weekend's accidental side bets at the
+// root: marks and money are no longer the same thing under Discipline. Returns the same runner shape
+// as collectRaceMarkedRunners ({ horseId, symbol, pp }); the place line uses only the ◎, the token
+// boxes the set. Empty only when the field itself is empty.
+function collectDisciplineEngineRunners(raceId) {
+    const ppByHorse = {};
+    (globalRaceEntries[raceId] || []).forEach(row => {
+        const hid = String(row?.Horse_ID ?? '').split('.')[0].trim();
+        const pp = parseInt(row?.PP, 10);
+        if (hid && Number.isFinite(pp) && pp > 0) ppByHorse[hid] = pp;
+    });
+    return getUnconditionalAutoBetRankingsForRace(raceId)
+        .slice(0, 3)
+        .map(p => ({ horseId: p.h_id, symbol: p.symbol, pp: ppByHorse[p.h_id] || null }))
+        .filter(r => r.pp);
+}
+
 function findSlotPayout(arr, combo) {
     if (!Array.isArray(arr)) return 0;
     const key = JSON.stringify([...combo].sort((a, b) => a - b));
@@ -7192,7 +7426,12 @@ function buildRaceBetLines(race) {
             .map(row => String(row?.Horse_ID ?? '').split('.')[0].trim())
             .filter(Boolean)
     );
-    const runners = collectRaceMarkedRunners(raceId).filter(r => !scratchedHorseIds.has(r.horseId));
+    // Under Discipline the bet is engine-driven: source runners from the cold engine's own ◎ ranking,
+    // not the user's marks (full decouple — marks are analysis-only). A per-race bet override is an
+    // explicit manual intent, so it still reads marks. Frozen/locked bets bypass this entirely below.
+    const useEngineRunners = isDisciplineMode() && !getRaceBetCompositionOverride(raceId);
+    const runners = (useEngineRunners ? collectDisciplineEngineRunners(raceId) : collectRaceMarkedRunners(raceId))
+        .filter(r => !scratchedHorseIds.has(r.horseId));
     const n = runners.length;
     if (n === 0) return { runners, lines: [], staked: 0 };
 
@@ -8445,6 +8684,18 @@ async function openOreProCompanion() {
     return controlOreProCompanion('open');
 }
 
+// Under Discipline the OrePro ◎-gate is satisfied by the ENGINE's ◎ (the actual bet target),
+// synthesized at apply WITHOUT writing to globalMarks — so the marks store stays clean/analysis-free.
+// Just the ◎: the disciplined bet is a single place on it; supporting marks would only invite stray bets.
+function collectDisciplineOreProMarks(raceId) {
+    const honmeiId = (getUnconditionalAutoBetRankingsForRace(raceId).find(p => p.symbol === '◎') || {}).h_id;
+    if (!honmeiId) return [];
+    const row = (globalRaceEntries[raceId] || []).find(r => String(r?.Horse_ID || '').split('.')[0].trim() === String(honmeiId));
+    const post = parseInt(row?.PP, 10);
+    if (!Number.isFinite(post) || post <= 0) return [];
+    return [{ symbol: '◎', post, mark_code: '1', horse_id: String(honmeiId) }];
+}
+
 function collectOreProMarksFromEntries(raceId, entries) {
     const markPriority = { '◎': 1, '〇': 2, '▲': 3, '△': 4 };
     const marks = [];
@@ -8506,7 +8757,12 @@ function buildOreProApplyVotesPayloadForRace(raceId) {
         return { races: [], dry_run: false, force_refresh: true };
     }
 
-    const marks = collectOreProMarksFromEntries(targetRaceId, globalRaceEntries[targetRaceId] || []);
+    // Under Discipline the bet is engine-driven and the marks store is empty, but OrePro's submit gate
+    // still demands a ◎ on the race — so synthesize the engine ◎ for the payload only (never persisted,
+    // so the marks store stays analysis-clean). Manual mode reads real marks as before.
+    const marks = isDisciplineMode()
+        ? collectDisciplineOreProMarks(targetRaceId)
+        : collectOreProMarksFromEntries(targetRaceId, globalRaceEntries[targetRaceId] || []);
     if (!marks.length) {
         return { races: [], dry_run: false, force_refresh: true };
     }
@@ -8992,8 +9248,12 @@ function buildOreProCustomLinesForRace(race) {
     const TYPE   = { win: 1, place: 2, quinella: 4, wide: 5, trio: 7 };
     const METHOD = { normal: 0, box: 2, nagashi1: 3 };
     const plan = buildRaceBetLines(race);
+    // Place the CONFIRMED loyalty side bets alongside the spine (so OrePro actually fires them, not just
+    // our tracking). They map through the same TYPE/METHOD tables (place=2/normal, wide=5/box).
+    const rid = String(race?.info?.race_id || '').trim();
+    const allLines = [...(plan.lines || []), ...buildSideBetLines(rid)];
     const lines = [];
-    for (const l of (plan.lines || [])) {
+    for (const l of allLines) {
         const type = TYPE[l.ticket];
         const method = METHOD[l.method];
         const money = parseInt(l.stakePerCombo, 10) || 0;
@@ -9790,17 +10050,20 @@ async function requestOreProSessionAccess() {
 }
 
 function renderLiveViewPanel() {
+    // NOTE: voting-sidebar-title / voting-sidebar-display were retired when the Bets-tab sidebar became
+    // the day dashboard (s56). They may be absent now — so DON'T gate the whole render on them, or the
+    // bet list (rendered into voting-races-main below) never paints. Guard each optional use instead.
     const sidebarTitle = document.getElementById('voting-sidebar-title');
     const sidebarDisplay = document.getElementById('voting-sidebar-display');
     const mainTitle = document.getElementById('voting-main-title');
     const recapPanel = document.getElementById('voting-recap-panel');
-    if (!sidebarTitle || !sidebarDisplay || !mainTitle || !recapPanel) return;
+    if (!mainTitle || !recapPanel) return;
 
     updateLockAllBetsButton(); // sync Lock All / Unlock All on voting-tab render
     const date = String(currentActiveDate || '').trim();
     const timeline = globalDateTimelineByDate[date] || '';
-    sidebarTitle.textContent = `By Racecourse · ${date || 'No day selected'}`;
-    sidebarDisplay.innerHTML = '';
+    if (sidebarTitle) sidebarTitle.textContent = `By Racecourse · ${date || 'No day selected'}`;
+    if (sidebarDisplay) sidebarDisplay.innerHTML = '';
     const mainRaces = document.getElementById('voting-races-main');
     if (mainRaces) mainRaces.innerHTML = buildRacecourseCheatHtml(date);
     mainTitle.textContent = `OrePro Companion · ${date || 'No day selected'}`;
@@ -11476,6 +11739,7 @@ async function showSettingsModal() {
     document.getElementById('setting-votingMarkMode').value = getVotingMarkMode();
     document.getElementById('setting-abstainBackupPreset').value = getAbstainBackupPreset();
     { const t = document.getElementById('setting-showEngineDisagreement'); if (t) t.checked = (appConfig.ui?.showEngineDisagreement ?? true); }
+    { const t = document.getElementById('setting-sideBetsAuto'); if (t) t.checked = (appConfig.ui?.sideBetsAuto !== false); }
     { const os = document.getElementById('setting-oreproDefaultStake'); if (os) os.value = getOreProDefaultStake(); }
     { const us = document.getElementById('setting-uiScalePercent'); if (us) { const p = getUiScalePercent(); us.value = p; const l = document.getElementById('setting-uiScalePercent-val'); if (l) l.textContent = p + '%'; } }
     document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
@@ -11665,6 +11929,7 @@ async function updateSidebarSettings() {
         votingMarkMode: (document.getElementById('setting-votingMarkMode').value === 'TRADITIONAL_ROLES') ? 'TRADITIONAL_ROLES' : 'BOX_OPTIMIZATION',
         abstainBackupPreset: (() => { const v = document.getElementById('setting-abstainBackupPreset')?.value; return (v && BET_PRESETS[v]) ? v : 'none'; })(),
         showEngineDisagreement: document.getElementById('setting-showEngineDisagreement') ? !!document.getElementById('setting-showEngineDisagreement').checked : true,
+        sideBetsAuto: document.getElementById('setting-sideBetsAuto') ? !!document.getElementById('setting-sideBetsAuto').checked : true,
         oreproDefaultStake: (() => { const v = parseInt(document.getElementById('setting-oreproDefaultStake')?.value, 10); return Number.isFinite(v) && v > 0 ? v : 10000; })(),
         tvModeSplitPercent: parseClampedPercent('setting-tvModeSplitPercent', Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent)) ? Number(appConfig.ui?.tvModeSplitPercent) : 50),
         uiScalePercent: (() => { const v = parseInt(document.getElementById('setting-uiScalePercent')?.value, 10); return Number.isFinite(v) ? Math.max(50, Math.min(130, v)) : 100; })(),

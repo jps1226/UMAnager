@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260623-6">
+    <link rel="stylesheet" href="/static/style.css?v=20260630-1">
 </head>
 <body>
 
@@ -30,17 +30,64 @@
     <div class="sidebar-top-controls">
         <div class="view-switcher view-switcher-sidebar">
             <button id="main-view-races" onclick="switchMainView('races')" class="toolbar-btn toolbar-btn-muted is-active">🏠 Main</button>
-            <button id="main-view-voting" onclick="switchMainView('voting')" class="toolbar-btn toolbar-btn-muted">🗳️ Voting</button>
+            <button id="main-view-voting" onclick="switchMainView('voting')" class="toolbar-btn toolbar-btn-muted">🧾 Bets</button>
             <button id="main-view-horse" onclick="switchMainView('horse')" class="toolbar-btn toolbar-btn-muted">🔍 Horse</button>
         </div>
     </div>
 
     <div class="sidebar-scroll">
         <div id="voting-sidebar-panel" class="voting-sidebar-panel" style="display:none;">
-            <div class="voting-sidebar-head">
-                <h3 id="voting-sidebar-title">By Racecourse</h3>
+            <div id="voting-dash-mode" class="voting-dash-mode"></div>
+            <div class="voting-dash-actions">
+                <button id="btn-orepro-auto-day" onclick="autoBetActiveDay()" class="toolbar-btn toolbar-btn-primary" title="Auto-pick the rest of the day with the current risk slider. Only updates marks within UMAnager — nothing is sent to OrePro until you click Apply Day Votes.">⚡ Auto Bet Day</button>
+                <button id="btn-orepro-apply-day" onclick="applyAllDayVotesToOrePro()" class="toolbar-btn toolbar-btn-primary" title="Send all unsubmitted voted races for the selected day to OrePro (apply + submit each one).">📤 Apply Day Votes</button>
+                <button id="btn-orepro-open" onclick="openOreProCompanion()" class="toolbar-btn toolbar-btn-muted">🌐 Open OrePro</button>
+                <button id="btn-lock-all-bets" onclick="toggleLockAllBetsForActiveDay()" class="toolbar-btn toolbar-btn-muted" title="Lock every marked race for the selected day — locking marks them as placed bets so they count toward your sunk cost / Day Net.">🔒 Lock All Bets</button>
+                <button id="btn-orepro-clear-day" onclick="clearActiveDayBets()" class="toolbar-btn toolbar-btn-muted" title="Clear all saved marks for the selected day so you can re-evaluate the card">🧹 Clear Day Bets</button>
+                <button id="btn-reestimate-day" onclick="reEstimateActiveDay()" class="toolbar-btn toolbar-btn-muted">🧮 Re-estimate Day</button>
             </div>
-            <div id="voting-sidebar-display" class="voting-sidebar-display"></div>
+            <div id="quick-stats-voting" class="quick-stats voting-head-stats">
+                <div class="quick-stat-block">
+                    <div class="quick-stat-label">Marks</div>
+                    <div id="qs-marks" class="quick-stat-value">—</div>
+                    <div id="qs-marks-detail" class="quick-stat-sub">no day</div>
+                </div>
+                <div class="quick-stat-block">
+                    <div class="quick-stat-label">Agreement</div>
+                    <div id="qs-agreement" class="quick-stat-value">—</div>
+                    <div id="qs-agreement-sub" class="quick-stat-sub">engine vs you</div>
+                    <div id="qs-agreement-best" class="quick-stat-sub quick-stat-best" title="Risk slider value that would best match your marks today"></div>
+                </div>
+            </div>
+            <div id="voting-sunk-cost" class="voting-sunk-cost">
+                <div class="voting-sunk-cost-head">
+                    <span class="voting-sunk-cost-title">💸 Sunk Cost <span id="voting-sunk-scope" class="voting-sunk-scope">all-time</span></span>
+                    <button onclick="resetSunkCost()" class="toolbar-btn toolbar-btn-muted" title="Reset the tally — counts only races from today (JST) forward.">↺ Reset</button>
+                </div>
+                <div class="voting-sunk-cost-body">
+                    <div class="voting-sunk-stat">
+                        <div class="voting-sunk-label">Net</div>
+                        <div id="voting-sunk-net" class="voting-sunk-value">—</div>
+                    </div>
+                    <div class="voting-sunk-stat">
+                        <div class="voting-sunk-label">Staked</div>
+                        <div id="voting-sunk-staked" class="voting-sunk-value">—</div>
+                    </div>
+                    <div class="voting-sunk-stat">
+                        <div class="voting-sunk-label">Won</div>
+                        <div id="voting-sunk-won" class="voting-sunk-value">—</div>
+                    </div>
+                    <div class="voting-sunk-stat">
+                        <div class="voting-sunk-label">Bets</div>
+                        <div id="voting-sunk-bets" class="voting-sunk-value">—</div>
+                    </div>
+                    <div id="voting-sunk-side-wrap" class="voting-sunk-stat" style="display:none;" title="Loyalty side bets, tracked apart so the Net above stays pure Discipline.">
+                        <div class="voting-sunk-label">♥ Side</div>
+                        <div id="voting-sunk-side" class="voting-sunk-value">—</div>
+                    </div>
+                </div>
+            </div>
+            <div id="voting-sidebar-display" class="voting-sidebar-display" style="display:none;"></div>
         </div>
 
     <!-- Mobile search bar relocates here from .main-toolbar-left on small viewports. -->
@@ -97,7 +144,7 @@
         <div class="sidebar-group-content">
             <div class="tab-bar tab-bar-spaced">
                 <button class="tab-btn active" onclick="switchSidebarTab('fav')">Bloodlines</button>
-                <button class="tab-btn" onclick="switchSidebarTab('watch')">Watchlist</button>
+                <button class="tab-btn" onclick="switchSidebarTab('watch')" title="Active racing horses you like — these drive the ¥1k loyalty side bets under Discipline.">Favorites</button>
             </div>
             <a id="umm-characters-btn" href="/umm.html" target="_blank">🎤 Character Roster</a>
             <div class="list-add-search-wrap">
@@ -117,12 +164,12 @@
     </details>
 
     <details id="weekend-watchlist-group" class="sidebar-group" open>
-        <summary>🏆 Weekend Watchlist</summary>
+        <summary>🏆 Weekend Favorites</summary>
         <div class="sidebar-group-content">
             <div class="ww-section-header">⚙ Engine Picks · Top 5</div>
             <div id="sidebar-engine-picks" class="weekend-watchlist-content"></div>
             <div class="ww-section-divider"></div>
-            <div class="ww-section-header">👁 Watchlist Running</div>
+            <div class="ww-section-header">👁 Favorites Running</div>
             <div id="sidebar-weekend-watchlist" class="weekend-watchlist-content"></div>
         </div>
     </details>
@@ -266,52 +313,7 @@
     </div>
     <div id="live-view-container" class="voting-main-shell" style="display:none;">
         <div class="voting-main-head">
-            <h3 id="voting-main-title">Voting Workspace</h3>
-            <div class="voting-main-head-actions">
-                <button id="btn-orepro-open" onclick="openOreProCompanion()" class="toolbar-btn toolbar-btn-muted">🌐 Open OrePro</button>
-                <button id="btn-orepro-auto-day" onclick="autoBetActiveDay()" class="toolbar-btn toolbar-btn-primary" title="Auto-pick the rest of the day with the current risk slider. Only updates marks within UMAnager — nothing is sent to OrePro until you click Apply Day Votes.">⚡ Auto Bet Day</button>
-                <button id="btn-orepro-apply-day" onclick="applyAllDayVotesToOrePro()" class="toolbar-btn toolbar-btn-primary" title="Send all unsubmitted voted races for the selected day to OrePro (apply + submit each one).">📤 Apply Day Votes</button>
-                <button id="btn-lock-all-bets" onclick="toggleLockAllBetsForActiveDay()" class="toolbar-btn toolbar-btn-muted" title="Lock every marked race for the selected day — locking marks them as placed bets so they count toward your sunk cost / Day Net.">🔒 Lock All Bets</button>
-                <button id="btn-orepro-clear-day" onclick="clearActiveDayBets()" class="toolbar-btn toolbar-btn-muted" title="Clear all saved marks for the selected day so you can re-evaluate the card">🧹 Clear Day Bets</button>
-                <button id="btn-reestimate-day" onclick="reEstimateActiveDay()" class="toolbar-btn toolbar-btn-muted">🧮 Re-estimate Day</button>
-            </div>
-        </div>
-        <div id="quick-stats-voting" class="quick-stats voting-head-stats">
-            <div class="quick-stat-block">
-                <div class="quick-stat-label">Marks</div>
-                <div id="qs-marks" class="quick-stat-value">—</div>
-                <div id="qs-marks-detail" class="quick-stat-sub">no day</div>
-            </div>
-            <div class="quick-stat-block">
-                <div class="quick-stat-label">Agreement</div>
-                <div id="qs-agreement" class="quick-stat-value">—</div>
-                <div id="qs-agreement-sub" class="quick-stat-sub">engine vs you</div>
-                <div id="qs-agreement-best" class="quick-stat-sub quick-stat-best" title="Risk slider value that would best match your marks today"></div>
-            </div>
-        </div>
-        <div id="voting-sunk-cost" class="voting-sunk-cost">
-            <div class="voting-sunk-cost-head">
-                <span class="voting-sunk-cost-title">💸 Sunk Cost <span id="voting-sunk-scope" class="voting-sunk-scope">all-time</span></span>
-                <button onclick="resetSunkCost()" class="toolbar-btn toolbar-btn-muted" title="Reset the tally — counts only races from today (JST) forward.">↺ Reset</button>
-            </div>
-            <div class="voting-sunk-cost-body">
-                <div class="voting-sunk-stat">
-                    <div class="voting-sunk-label">Net</div>
-                    <div id="voting-sunk-net" class="voting-sunk-value">—</div>
-                </div>
-                <div class="voting-sunk-stat">
-                    <div class="voting-sunk-label">Staked</div>
-                    <div id="voting-sunk-staked" class="voting-sunk-value">—</div>
-                </div>
-                <div class="voting-sunk-stat">
-                    <div class="voting-sunk-label">Won</div>
-                    <div id="voting-sunk-won" class="voting-sunk-value">—</div>
-                </div>
-                <div class="voting-sunk-stat">
-                    <div class="voting-sunk-label">Bets</div>
-                    <div id="voting-sunk-bets" class="voting-sunk-value">—</div>
-                </div>
-            </div>
+            <h3 id="voting-main-title">Bets Workspace</h3>
         </div>
         <div id="orepro-import-box" class="voting-sunk-cost dev-only" style="margin-top:8px;">
             <div class="voting-sunk-cost-head">
@@ -435,6 +437,10 @@
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-showEngineDisagreement" onchange="updateSidebarSettings()">
                             <span title="On races you hand-mark, show a small ⚙ chip next to any horse where your mark differs from the engine's own top-4 ranking — e.g. you marked ◎ but the engine rates it ▲, or the engine likes a horse you skipped. Only appears on races you marked yourself, never on auto-picked ones.">⚖ Show engine disagreement</span>
+                        </label>
+                        <label class="settings-option-row">
+                            <input type="checkbox" id="setting-sideBetsAuto" onchange="updateSidebarSettings()">
+                            <span title="Under Discipline, auto-suggest a ¥1k loyalty side bet on each of your Favorites running in a race (place; two+ in one race → one Wide). Suggestions appear in the per-race Bets strip and are one-click removable — nothing places until you apply the race. Turn off to start every race side-bet-free.">♥ Auto-suggest side bets</span>
                         </label>
                         <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
                             <span>🎯 Voting Mark Mode</span>
@@ -683,6 +689,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260628-2"></script>
+<script src="/static/script.js?v=20260630-5"></script>
 </body>
 </html>

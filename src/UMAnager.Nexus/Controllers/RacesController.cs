@@ -138,6 +138,8 @@ public sealed class RacesController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetRaces()
     {
+        var _sw = System.Diagnostics.Stopwatch.StartNew();
+        long tRacesLoaded = 0, tDataFetched = 0, tBuilt = 0;
         try
         {
             // Phase 38: optional ?date=YYYY-MM-DD returns one JST race-day's full detail,
@@ -159,7 +161,10 @@ public sealed class RacesController : ControllerBase
                 if (Request.Headers["If-None-Match"].ToString() == fastEtag)
                     return StatusCode(StatusCodes.Status304NotModified);
                 if (_cache.TryGetValue<(string Tag, byte[] Bytes)>(RacesCacheKey, out var fb) && fb.Tag == fastEtag)
+                {
+                    Response.Headers["X-Races-Timing"] = $"fastbody={_sw.ElapsedMilliseconds}ms";
                     return File(fb.Bytes, "application/json; charset=utf-8");
+                }
                 // Body cache was evicted (server restart / memory pressure) — fall through
                 // with fastEtag set so we skip recomputing the ETag below.
             }
@@ -194,6 +199,7 @@ public sealed class RacesController : ControllerBase
                     .ToListAsync();
             }
 
+            tRacesLoaded = _sw.ElapsedMilliseconds;
             // ETag / 304 / shared-cache only apply to the default windowed request. A
             // date-filtered call is served fresh with no-store (see header below).
             string etag = "";
@@ -218,7 +224,7 @@ public sealed class RacesController : ControllerBase
                         .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                         .FirstOrDefaultAsync();
                     var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                    etag = $"\"races-v13-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                    etag = $"\"races-v14-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                     _cache.Set(EtagCacheKey, etag,
                         new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
                 }
@@ -232,7 +238,10 @@ public sealed class RacesController : ControllerBase
                 if (Request.Headers["If-None-Match"].ToString() == etag)
                     return StatusCode(StatusCodes.Status304NotModified);
                 if (_cache.TryGetValue<(string Tag, byte[] Bytes)>(RacesCacheKey, out var cachedBody) && cachedBody.Tag == etag)
+                {
+                    Response.Headers["X-Races-Timing"] = $"slowbody={_sw.ElapsedMilliseconds}ms;racesLoad={tRacesLoaded}ms";
                     return File(cachedBody.Bytes, "application/json; charset=utf-8");
+                }
             }
             else
             {
@@ -372,6 +381,7 @@ public sealed class RacesController : ControllerBase
                 .ToDictionary(j => j.Code, j => j);
             var trainerStats = (await _jtStats.LoadAllTrainersAsync())
                 .ToDictionary(t => t.Code, t => t);
+            tDataFetched = _sw.ElapsedMilliseconds;
 
 
             string ResolveAncestorName(string? id)
@@ -434,6 +444,12 @@ public sealed class RacesController : ControllerBase
                 var raceEntries = entriesByRace.TryGetValue(race.RaceId, out var re) ? re : new List<Data.Entities.RaceEntry>();
                 var raceSurface = race.Surface ?? "";
                 var raceBucket = Services.SirePerformanceService.DistanceBucket(race.Distance);
+                // A race already run keeps only what the review grid displays — the heavy PRE-race
+                // handicapping payload (sire-fit, surface/distance splits, jockey/trainer rolling stats,
+                // layoff + last-start style) is dead weight once the result is in. Skipping it for past
+                // races roughly halves their JSON, and they dominate the window between meetings — the
+                // biggest lever on page-load size + parse time. Older days reload full via /api/races?date=.
+                var racePast = !(sortTimeUtc > now);
                 var entries = raceEntries
                     .OrderBy(e => e.PostPosition ?? 0)
                     .Select(e =>
@@ -441,6 +457,33 @@ public sealed class RacesController : ControllerBase
                         horseLookup.TryGetValue(e.HorseId ?? "", out var horse);
                         finishesByHorse.TryGetValue(e.HorseId ?? "", out var hist);
                         var (last3Str, formScore, last3Fields) = ComputeLast3(hist, race.RaceDate);
+
+                        if (racePast)
+                        {
+                            return (object)new
+                            {
+                                Horse_ID = e.HorseId,
+                                Horse = horse?.NameEn ?? horse?.NameJa ?? "",
+                                PP = e.PostPosition ?? 0,
+                                BK = e.Bracket ?? 0,
+                                Record = recordByHorse.TryGetValue(e.HorseId ?? "", out var recPast) ? recPast : "",
+                                Last3 = last3Str,
+                                Last3_Fields = last3Fields,
+                                Sire = ResolveAncestorName(horse?.SireId),
+                                Sire_ID = horse?.SireId ?? "",
+                                Dam = ResolveAncestorName(horse?.DamId),
+                                Dam_ID = horse?.DamId ?? "",
+                                BMS = ResolveAncestorName(horse?.BmsId),
+                                BMS_ID = horse?.BmsId ?? "",
+                                Odds = e.Odds?.ToString("F1") ?? "",
+                                Prev_Odds = e.PrevOdds?.ToString("F1") ?? "",
+                                Fav = e.FavRank?.ToString() ?? "",
+                                Finish = e.FinishPos?.ToString() ?? "",
+                                Scratched = e.Scratched,
+                                Sex = e.Sex,
+                                Jockey = e.JockeyName ?? "",
+                            };
+                        }
 
                         // s52: layoff + last-start surface/distance for the preview overlay. Most
                         // recent prior run strictly before this race's date (null/"" when debut).
@@ -622,6 +665,7 @@ public sealed class RacesController : ControllerBase
                 races_by_date          = combinedByDate.ToDictionary(k => k.Key, v => v.Value.ToArray()),
                 top_picks              = Array.Empty<object>()
             };
+            tBuilt = _sw.ElapsedMilliseconds;
             var responseBytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
                 responsePayload,
                 new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = null });
@@ -630,6 +674,9 @@ public sealed class RacesController : ControllerBase
             if (!dateFiltered)
                 _cache.Set(RacesCacheKey, (etag, responseBytes),
                     new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(4) });
+            Response.Headers["X-Races-Timing"] = $"build_total={_sw.ElapsedMilliseconds}ms;racesLoad={tRacesLoaded}ms;"
+                + $"dataFetch={tDataFetched - tRacesLoaded}ms;assemble={tBuilt - tDataFetched}ms;serialize={_sw.ElapsedMilliseconds - tBuilt}ms;"
+                + $"bodyBytes={responseBytes.Length};cached={!dateFiltered}";
             return File(responseBytes, "application/json; charset=utf-8");
         }
         catch (Exception ex)

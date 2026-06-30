@@ -324,7 +324,7 @@
             display: flex;
             flex-direction: column;
             padding: 0 40px 20px 40px;
-            overflow: hidden;
+            overflow-y: auto;
             box-sizing: border-box;
         }
         .voting-main-head {
@@ -721,11 +721,31 @@
             flex-direction: column;
             min-height: 0;
             flex: 1;
+            gap: 10px;
+            padding: 10px;
             background: #1a1c23;
             border: 1px solid #333;
             border-radius: 10px;
-            overflow: hidden;
+            overflow-y: auto;
+            box-sizing: border-box;
         }
+        /* Bets-tab day dashboard (lives in the left sidebar on the Bets tab). */
+        .voting-dash-mode {
+            border: 1px solid #2f4a52;
+            border-radius: 9px;
+            padding: 9px 11px;
+            background: #11252b;
+        }
+        .voting-dash-mode .dash-mode-label {
+            font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #7e93a0;
+        }
+        .voting-dash-mode .dash-mode-name { font-size: 14px; font-weight: 700; margin-top: 2px; }
+        .voting-dash-mode .dash-mode-sub { font-size: 11px; color: #aab7c2; margin-top: 3px; }
+        .voting-dash-actions { display: flex; flex-direction: column; gap: 6px; }
+        .voting-dash-actions .toolbar-btn { width: 100%; box-sizing: border-box; text-align: center; }
+        /* In the narrow sidebar, let the stat rows wrap instead of overflowing. */
+        body.voting-mode #quick-stats-voting,
+        body.voting-mode .voting-sunk-cost-body { flex-wrap: wrap; }
         .voting-sidebar-head {
             display: flex;
             align-items: center;
@@ -758,12 +778,10 @@
             display: none !important;
         }
         body.voting-mode #voting-sidebar-panel {
-            display: none !important;
+            display: flex !important;
         }
         .voting-races-main {
-            flex: 1;
-            min-height: 0;
-            overflow-y: auto;
+            flex: 1 0 auto;
             padding: 14px 18px;
             display: flex;
             flex-direction: column;
