@@ -90,9 +90,23 @@ public sealed class BetWinNotifier
             .ToListAsync(ct);
         var raceMeta = races.ToDictionary(r => r.RaceId, r => r);
 
-        // Resolve names for every marked horse across candidates (for the hit-detail line).
+        // Resolve names for every marked horse across candidates (for the hit-detail line). Also
+        // resolve horses referenced only by a FROZEN bet line (Discipline mode races carry no
+        // manual marks at all) so their names are available for the fallback hit-detail below.
+        var frozenHorseIds = freshCandidates
+            .Where(id => frozenLines.ContainsKey(id))
+            .SelectMany(id =>
+            {
+                var ppToHorse = entriesByRace.GetValueOrDefault(id)?
+                    .Where(e => e.PostPosition.HasValue)
+                    .GroupBy(e => e.PostPosition!.Value).ToDictionary(g => g.Key, g => g.First().HorseId)
+                    ?? new Dictionary<int, string>();
+                return frozenLines[id].SelectMany(l => l.AxisPp.HasValue ? l.Pps.Append(l.AxisPp.Value) : l.Pps)
+                    .Select(pp => ppToHorse.GetValueOrDefault(pp)).Where(h => h != null)!;
+            });
         var markedHorseIds = freshCandidates
             .SelectMany(id => marks.Keys.Where(k => k.StartsWith(id + "_")).Select(k => k.Substring(id.Length + 1)))
+            .Concat(frozenHorseIds!)
             .Distinct().ToList();
         var horseNames = await db.Horses.AsNoTracking()
             .Where(h => markedHorseIds.Contains(h.HorseId))
@@ -121,14 +135,20 @@ public sealed class BetWinNotifier
 
             var ppByHorse = raceEntries.GroupBy(e => e.HorseId).ToDictionary(g => g.Key, g => g.First().PostPosition);
             var runners = TemplateBetEvaluator.BuildRunners(raceId, marks, ppByHorse);
-            if (runners.Count == 0) { notified.Add(raceId); continue; }
+            // Discipline mode never writes manual ◎〇▲△ marks (the engine picks the bet, not a
+            // click) — so `runners` is empty for every Discipline race even when it was bet and
+            // locked. Only bail here if there's ALSO no frozen bet-line record to fall back on,
+            // or a real Discipline win never pings (the same globalMarks-only gap already fixed on
+            // the frontend's Bets-tab race list — this was the backend half of it).
+            var hasFrozenLines = frozenLines.TryGetValue(raceId, out var fl) && fl.Count > 0;
+            if (runners.Count == 0 && !hasFrozenLines) { notified.Add(raceId); continue; }
 
             JsonElement? payouts = null; JsonDocument? pdoc = null;
             try { pdoc = JsonDocument.Parse(rm.ResultsJson ?? "{}"); payouts = pdoc.RootElement; }
             catch (JsonException) { }
             // Applied races carry frozen lines → score them verbatim; else default template.
-            var outcome = frozenLines.TryGetValue(raceId, out var fl) && fl.Count > 0
-                ? TemplateBetEvaluator.EvaluateLines(fl, runners.Count, pp1, pp2, pp3, payouts)
+            var outcome = hasFrozenLines
+                ? TemplateBetEvaluator.EvaluateLines(fl!, runners.Count, pp1, pp2, pp3, payouts)
                 : TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts);
             pdoc?.Dispose();
 
@@ -150,6 +170,21 @@ public sealed class BetWinNotifier
                 if (!finishByHorse.TryGetValue(kv.Key, out var fin)) continue;
                 var name = nameByHorse.TryGetValue(kv.Key, out var n) ? n : kv.Key;
                 hits.Add(new MarkHit(kv.Value, name, fin));
+            }
+            // No manual marks (Discipline mode) → fall back to the horses the FROZEN bet lines
+            // actually referenced, so the ping still names which horse hit instead of an empty list.
+            if (hits.Count == 0 && hasFrozenLines)
+            {
+                var ppToHorse = raceEntries.Where(e => e.PostPosition.HasValue)
+                    .GroupBy(e => e.PostPosition!.Value).ToDictionary(g => g.Key, g => g.First().HorseId);
+                var betPps = fl!.SelectMany(l => l.AxisPp.HasValue ? l.Pps.Append(l.AxisPp.Value) : l.Pps).Distinct();
+                foreach (var pp in betPps)
+                {
+                    if (!ppToHorse.TryGetValue(pp, out var horseId)) continue;
+                    if (!finishByHorse.TryGetValue(horseId, out var fin)) continue;
+                    var name = nameByHorse.TryGetValue(horseId, out var n) ? n : horseId;
+                    hits.Add(new MarkHit("◎", name, fin));
+                }
             }
 
             var label = BuildRaceLabel(rm.TrackCode, rm.RaceNumber);

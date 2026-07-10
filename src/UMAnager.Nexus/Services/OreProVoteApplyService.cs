@@ -360,7 +360,30 @@ public sealed class OreProVoteApplyService
     /// non-race day can read as "not confirmed") so the message says so.
     /// Returns { status: ok|expired|unconfigured|error, loggedIn, message }.
     /// </summary>
-    public async Task<JsonElement> CheckCookieAsync(string? rawRaceId, CancellationToken ct)
+    /// <summary>
+    /// Verifies the stored OrePro session. If it's not logged in (expired/unconfigured) AND login
+    /// credentials are stored, transparently re-logs in once and re-checks — so a stale cookie
+    /// self-heals without the operator noticing. <paramref name="allowRelogin"/> guards against
+    /// recursion (LoginAsync's own verification passes false).
+    /// </summary>
+    public async Task<JsonElement> CheckCookieAsync(string? rawRaceId, CancellationToken ct, bool allowRelogin = true)
+    {
+        var result = await CheckCookieOnceAsync(rawRaceId, ct);
+        var loggedIn = result.TryGetProperty("loggedIn", out var li) && li.ValueKind == JsonValueKind.True;
+        if (loggedIn || !allowRelogin) return result;
+
+        // Cookie is dead — auto-relogin if we have credentials, then re-verify once.
+        if (await HasStoredCredentialsAsync())
+        {
+            _logger.LogInformation("[OrePro] Session not logged in; attempting server-side auto-relogin.");
+            var login = await LoginAsync(null, null, rawRaceId, ct);
+            var reLoggedIn = login.TryGetProperty("loggedIn", out var rli) && rli.ValueKind == JsonValueKind.True;
+            if (reLoggedIn) return await CheckCookieOnceAsync(rawRaceId, ct);
+        }
+        return result;
+    }
+
+    private async Task<JsonElement> CheckCookieOnceAsync(string? rawRaceId, CancellationToken ct)
     {
         var cookie = (await _settings.GetStringAsync(SettingsService.Keys.OreProSessionCookie) ?? "").Trim();
         if (string.IsNullOrEmpty(cookie))
@@ -435,6 +458,121 @@ public sealed class OreProVoteApplyService
             _logger.LogWarning(ex, "OrePro cookie check failed");
             return Result("error", false, $"Cookie check failed to reach OrePro: {ex.Message}");
         }
+    }
+
+    private const string NetkeibaLoginUrl = "https://regist.netkeiba.com/";
+
+    /// <summary>
+    /// Logs in to netkeiba server-side with the stored (or supplied) credentials and re-mints
+    /// <c>orepro_session_cookie</c> from the Set-Cookie handshake — no browser, works from any
+    /// device. Returns { status, loggedIn, message }. On success the fresh cookie is persisted and
+    /// then verified against a real shutuba page (the same reliable check the Settings button uses).
+    /// </summary>
+    public async Task<JsonElement> LoginAsync(string? loginIdOverride, string? passwordOverride, string? verifyRaceId, CancellationToken ct)
+    {
+        var loginId = (loginIdOverride ?? await _settings.GetStringAsync(SettingsService.Keys.OreProLoginId) ?? "").Trim();
+        var password = passwordOverride ?? await _settings.GetStringAsync(SettingsService.Keys.OreProPassword) ?? "";
+        if (string.IsNullOrEmpty(loginId) || string.IsNullOrEmpty(password))
+            return Result("unconfigured", false, "OrePro login id and password are not set. Enter them in Settings → OrePro, then try again.");
+
+        var userAgent = (await _settings.GetStringAsync(SettingsService.Keys.OreProUserAgent) ?? "").Trim();
+        if (string.IsNullOrEmpty(userAgent)) userAgent = SettingsService.Defaults.OreProUserAgent;
+
+        var cookieJar = new CookieContainer();
+        using var handler = new HttpClientHandler
+        {
+            UseCookies = true,
+            CookieContainer = cookieJar,
+            AllowAutoRedirect = true,
+            AutomaticDecompression = DecompressionMethods.All,
+        };
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(25) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
+        http.DefaultRequestHeaders.Add("Accept-Language", "ja,en;q=0.8");
+
+        try
+        {
+            // Prime any initial cookies the login page hands out (some flows expect them echoed back).
+            using (var priming = new HttpRequestMessage(HttpMethod.Get, "https://regist.netkeiba.com/account/?pid=login"))
+                (await http.SendAsync(priming, ct)).Dispose();
+
+            var form = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string, string>("pid", "login"),
+                new KeyValuePair<string, string>("action", "auth"),
+                new KeyValuePair<string, string>("rtn_url", ""),
+                new KeyValuePair<string, string>("login_id", loginId),
+                new KeyValuePair<string, string>("pswd", password),
+            });
+            using var loginReq = new HttpRequestMessage(HttpMethod.Post, NetkeibaLoginUrl) { Content = form };
+            loginReq.Headers.Referrer = new Uri("https://regist.netkeiba.com/account/?pid=login");
+            loginReq.Headers.Add("Origin", "https://regist.netkeiba.com");
+            using var loginResp = await http.SendAsync(loginReq, ct);
+            var respBytes = await loginResp.Content.ReadAsByteArrayAsync(ct);
+            // The regist/login page is served UTF-8 (unlike the EUC-JP betting pages) — honor the
+            // response charset, fall back to UTF-8, so any error text decodes readably.
+            var respCharset = (loginResp.Content.Headers.ContentType?.CharSet ?? "").Trim().Trim('"');
+            string respBody;
+            try { respBody = (string.IsNullOrEmpty(respCharset) ? Encoding.UTF8 : Encoding.GetEncoding(respCharset)).GetString(respBytes); }
+            catch { respBody = Encoding.UTF8.GetString(respBytes); }
+
+            // Harvest every cookie the handshake set on the netkeiba domains. The auth ones
+            // (netkeiba, nkauth) are what OrePro requires; grab the analytics ones too so the
+            // header looks like a real browser's.
+            var jar = new List<Cookie>();
+            foreach (var host in new[] { "https://regist.netkeiba.com/", "https://orepro.netkeiba.com/", "https://www.netkeiba.com/" })
+                foreach (Cookie c in cookieJar.GetCookies(new Uri(host)))
+                    if (!jar.Any(x => x.Name == c.Name)) jar.Add(c);
+
+            var hasAuth = jar.Any(c => c.Name.Equals("nkauth", StringComparison.OrdinalIgnoreCase))
+                       || jar.Any(c => c.Name.Equals("netkeiba", StringComparison.OrdinalIgnoreCase));
+            if (!hasAuth)
+            {
+                // Surface WHY, from netkeiba's own response, so the operator can self-diagnose.
+                // Log a redacted diagnostic (final URL, status, page title, cookie names) — never the password.
+                var title = Regex.Match(respBody, "<title>(?<t>[^<]*)</title>", RegexOptions.IgnoreCase).Groups["t"].Value.Trim();
+                var cookieNames = string.Join(",", jar.Select(c => c.Name));
+                _logger.LogWarning("[OrePro] Login got no auth cookie. finalUrl={Url} status={Status} title=\"{Title}\" cookies=[{Cookies}] bodyLen={Len}",
+                    loginResp.RequestMessage?.RequestUri, (int)loginResp.StatusCode, title, cookieNames, respBody.Length);
+
+                var badCreds = respBody.Contains("パスワードが間違", StringComparison.Ordinal)
+                            || respBody.Contains("メールアドレス）もしくは", StringComparison.Ordinal)
+                            || respBody.Contains("間違っています", StringComparison.Ordinal);
+                if (badCreds)
+                    return Result("bad-credentials", false, "netkeiba says the login ID or password is incorrect. Double-check both — the ID is the EMAIL you log in with (or your netkeiba member ID), and re-type the password to be sure (a trailing space or wrong character will do it).");
+
+                var botCheck = respBody.Contains("captcha", StringComparison.OrdinalIgnoreCase)
+                            || respBody.Contains("認証", StringComparison.Ordinal) && respBody.Contains("画像", StringComparison.Ordinal);
+                if (botCheck)
+                    return Result("bot-check", false, "netkeiba is asking for an extra verification (captcha) that this can't complete automatically. Use the manual cookie paste under Advanced this time.");
+
+                return Result("failed", false, $"netkeiba didn't return a login session (page title: \"{title}\"). Check the credentials, or use the manual cookie paste under Advanced.");
+            }
+
+            var cookieHeader = string.Join("; ", jar.Select(c => $"{c.Name}={c.Value}"));
+            await _settings.SetStringAsync(SettingsService.Keys.OreProSessionCookie, cookieHeader);
+
+            // Verify the fresh cookie against a real logged-in-only page (reliable check).
+            // allowRelogin:false — we're already inside the login flow; don't recurse.
+            var verify = await CheckCookieAsync(verifyRaceId, ct, allowRelogin: false);
+            var loggedIn = verify.TryGetProperty("loggedIn", out var li) && li.ValueKind == JsonValueKind.True;
+            return loggedIn
+                ? Result("ok", true, "Logged in to OrePro and refreshed the session. You're ready to bet.")
+                : Result("saved-unverified", false, "Login handshake succeeded and a cookie was saved, but it didn't verify as logged in. Try once more; if it persists, use the manual cookie paste.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "OrePro server-side login failed");
+            return Result("error", false, $"Could not reach netkeiba to log in: {ex.Message}");
+        }
+    }
+
+    /// <summary>True when both stored login credentials are present (enables auto-relogin).</summary>
+    public async Task<bool> HasStoredCredentialsAsync()
+    {
+        var id = (await _settings.GetStringAsync(SettingsService.Keys.OreProLoginId) ?? "").Trim();
+        var pw = await _settings.GetStringAsync(SettingsService.Keys.OreProPassword) ?? "";
+        return !string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(pw);
     }
 
     private static JsonElement Result(string status, bool loggedIn, string message)

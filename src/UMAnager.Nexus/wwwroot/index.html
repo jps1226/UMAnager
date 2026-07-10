@@ -315,6 +315,8 @@
         <div class="voting-main-head">
             <h3 id="voting-main-title">Bets Workspace</h3>
         </div>
+        <div id="orepro-session-status" class="orepro-session-status"></div>
+        <div id="orepro-sync-results" class="orepro-sync-results" style="margin-top:8px;"></div>
         <div id="orepro-import-box" class="voting-sunk-cost dev-only" style="margin-top:8px;">
             <div class="voting-sunk-cost-head">
                 <span class="voting-sunk-cost-title">⤵ Import OrePro Day <span class="voting-sunk-scope">dev</span></span>
@@ -658,14 +660,32 @@
 
                 <div class="settings-card settings-card-full">
                     <h4 class="settings-section-title">🎫 OrePro Auto-Bet</h4>
-                    <div class="settings-helper-text">Server-side bet application via your OrePro session cookie. <b>How to capture:</b> log in to <a href="https://orepro.netkeiba.com/" target="_blank" rel="noopener">orepro.netkeiba.com</a> in any browser → open DevTools (F12) → Application tab → Cookies → orepro.netkeiba.com → right-click any cookie → "Copy as cURL" — then extract the long `cookie:` header value, OR open the Network tab, click any request to orepro.netkeiba.com, find Request Headers → Cookie, copy the entire value. Paste below. Re-paste whenever OrePro logs you out.</div>
-                    <div class="settings-formula-grid" style="grid-template-columns: 1fr;">
-                        <label title="The full Cookie request header value from a logged-in OrePro session.">OrePro session cookie</label>
-                        <textarea id="setting-orepro-session-cookie" rows="3" placeholder="name1=value1; name2=value2; ..." onblur="saveOrchestratorSetting('orepro_session_cookie', this.value)" class="settings-number-input" style="max-width:100%; font-family:monospace; font-size:11px;"></textarea>
-
-                        <label title="User-Agent header to match the browser where the cookie was captured. The default is usually fine.">User-Agent</label>
-                        <input type="text" id="setting-orepro-user-agent" placeholder="Mozilla/5.0 ..." onblur="saveOrchestratorSetting('orepro_user_agent', this.value)" class="settings-number-input" style="max-width:100%;">
+                    <div class="settings-helper-text">UMAnager places bets using your OrePro login session, which expires now and then. Enter your OrePro (netkeiba) login below and UMAnager will refresh the session itself — no cookie copying, works from your phone.</div>
+                    <div style="margin:10px 0; padding:12px; background:#1a1d24; border:1px solid #2a2f3a; border-radius:8px;">
+                        <div style="font-size:13px; font-weight:600; margin-bottom:8px;">🔑 OrePro login</div>
+                        <div class="settings-formula-grid" style="grid-template-columns: 130px 1fr; gap:8px; align-items:center;">
+                            <label title="Your netkeiba / OrePro login id (email or member id).">Login ID / email</label>
+                            <input type="text" id="setting-orepro-login-id" autocomplete="username" placeholder="you@example.com" onblur="saveOrchestratorSetting('orepro_login_id', this.value)" class="settings-number-input" style="max-width:100%;">
+                            <label title="Your netkeiba / OrePro password. Stored so the session can auto-refresh.">Password</label>
+                            <div style="display:flex; gap:6px; align-items:center;">
+                                <input type="password" id="setting-orepro-password" autocomplete="current-password" placeholder="••••••••" onblur="saveOrchestratorSetting('orepro_password', this.value)" class="settings-number-input" style="max-width:100%; flex:1;">
+                                <button type="button" onclick="toggleOreProPasswordVisible(this)" class="settings-reset-btn" style="white-space:nowrap;" title="Show/hide the password to check for typos">👁 Show</button>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center;">
+                            <button onclick="oreProLoginNow()" class="settings-reset-btn" id="orepro-login-btn">🔄 Log in / refresh session</button>
+                            <span id="orepro-login-status" style="font-size:12px; color:#9ab;"></span>
+                        </div>
+                        <div style="font-size:11.5px; color:#e0a860; margin-top:8px;">⚠ Your password is stored in the app so it can auto-refresh when the session dies. Fine for a login you don't reuse elsewhere; behind your private Cloudflare gate only.</div>
                     </div>
+                    <details style="margin-bottom:8px;">
+                        <summary style="cursor:pointer; font-size:12.5px; color:#9ab;">Advanced — paste a cookie manually instead</summary>
+                        <div class="settings-helper-text" style="margin-top:6px;">Only needed if the login above ever stops working. Log in to <a href="https://orepro.netkeiba.com/" target="_blank" rel="noopener">orepro.netkeiba.com</a> → DevTools (F12) → Network tab → click any orepro.netkeiba.com request → Headers → copy the "Cookie" value under Request Headers → paste below.</div>
+                        <label title="The full Cookie request header value from a logged-in OrePro session." style="display:block; margin-top:6px;">OrePro session cookie</label>
+                        <textarea id="setting-orepro-session-cookie" rows="3" placeholder="name1=value1; name2=value2; ..." onblur="saveOrchestratorSetting('orepro_session_cookie', this.value)" class="settings-number-input" style="max-width:100%; font-family:monospace; font-size:11px;"></textarea>
+                        <label title="User-Agent header to match the browser where the cookie was captured. The default is usually fine." style="display:block; margin-top:8px;">User-Agent</label>
+                        <input type="text" id="setting-orepro-user-agent" placeholder="Mozilla/5.0 ..." onblur="saveOrchestratorSetting('orepro_user_agent', this.value)" class="settings-number-input" style="max-width:100%;">
+                    </details>
                     <div style="margin-top:10px;">
                         <label style="display:flex; align-items:center; gap:6px; cursor:pointer;" title="After a successful Apply+Submit, jump the OrePro popup to /bet/bet_complete.html so you see the receipt page (matches the legacy UX).">
                             <input type="checkbox" id="setting-orepro-nav-to-complete" onchange="saveOrchestratorSetting('orepro_nav_to_complete_after_submit', this.checked ? 'true' : 'false'); globalOreProSettings.orepro_nav_to_complete_after_submit = this.checked ? 'true' : 'false';">
@@ -689,6 +709,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260630-5"></script>
+<script src="/static/script.js?v=20260704-3"></script>
 </body>
 </html>

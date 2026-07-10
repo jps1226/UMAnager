@@ -21,16 +21,18 @@ public sealed class OrchestratorController : ControllerBase
     private readonly PhaseService _phase;
     private readonly SettingsService _settings;
     private readonly DayRecapNotifier _dayRecap;
+    private readonly BetWinNotifier _betWin;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly PipelineHealthService _health;
 
     public OrchestratorController(LiveOrchestrator orchestrator, PhaseService phase, SettingsService settings,
-        DayRecapNotifier dayRecap, IDbContextFactory<AppDbContext> dbFactory, PipelineHealthService health)
+        DayRecapNotifier dayRecap, BetWinNotifier betWin, IDbContextFactory<AppDbContext> dbFactory, PipelineHealthService health)
     {
         _orchestrator = orchestrator;
         _phase = phase;
         _settings = settings;
         _dayRecap = dayRecap;
+        _betWin = betWin;
         _dbFactory = dbFactory;
         _health = health;
     }
@@ -103,6 +105,34 @@ public sealed class OrchestratorController : ControllerBase
             return NotFound(new { error = $"No races found for {date}", hint = "Check date is JST calendar date in yyyy-MM-dd" });
 
         await _dayRecap.EvaluateAndNotifyAsync(raceIds, ct);
+        return Accepted(new { triggered_for = date, race_count = raceIds.Count });
+    }
+
+    /// <summary>
+    /// Manually re-run the per-race win-ping check for a specific JST date (yyyy-MM-dd). Use this to
+    /// catch up races that were skipped by a bug (BetWinNotifier tracks races it's already handled in
+    /// app_state.bet_win_notified_race_ids — clear the ones you want re-checked from that set first,
+    /// or nothing will happen since it's idempotent by design).
+    /// POST /api/orchestrator/trigger-bet-win-recheck?date=2026-07-04
+    /// </summary>
+    [HttpPost("trigger-bet-win-recheck")]
+    public async Task<IActionResult> TriggerBetWinRecheck([FromQuery] string date, CancellationToken ct)
+    {
+        if (!DateTime.TryParseExact(date, "yyyy-MM-dd", null,
+                System.Globalization.DateTimeStyles.None, out var parsed))
+            return BadRequest(new { error = "date must be yyyy-MM-dd" });
+
+        var utcMidnight = DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var raceIds = await db.Races.AsNoTracking()
+            .Where(r => r.RaceDate == utcMidnight)
+            .Select(r => r.RaceId)
+            .ToListAsync(ct);
+
+        if (raceIds.Count == 0)
+            return NotFound(new { error = $"No races found for {date}", hint = "Check date is JST calendar date in yyyy-MM-dd" });
+
+        await _betWin.EvaluateAndNotifyAsync(raceIds, ct);
         return Accepted(new { triggered_for = date, race_count = raceIds.Count });
     }
 }

@@ -33,12 +33,14 @@ internal sealed class TrayApp : ApplicationContext
     private Process? _sidecarProc;
     private Process? _nexusProc;
     private IntPtr _currentHIcon = IntPtr.Zero;
+    private bool _autoStartPending;
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr handle);
 
-    public TrayApp()
+    public TrayApp(bool autoStart = false)
     {
+        _autoStartPending = autoStart;
         _rootDir    = FindRoot();
         _sidecarExe = Path.Combine(_rootDir, "src", "UMAnager.Sidecar", "bin", "Release", "net8.0-windows", "win-x86", "UMAnager.Sidecar.exe");
         _nexusExe   = Path.Combine(_rootDir, "src", "UMAnager.Nexus",   "bin", "Release", "net8.0",                "UMAnager.Nexus.exe");
@@ -75,7 +77,11 @@ internal sealed class TrayApp : ApplicationContext
         _icon.DoubleClick += (_, _) => OpenUrl("http://localhost:5000");
 
         _timer = new System.Windows.Forms.Timer { Interval = 3000 };
-        _timer.Tick += (_, _) => RefreshStatus();
+        _timer.Tick += (_, _) =>
+        {
+            if (_autoStartPending) { _autoStartPending = false; StartAll(); }
+            RefreshStatus();
+        };
         _timer.Start();
 
         RefreshStatus();

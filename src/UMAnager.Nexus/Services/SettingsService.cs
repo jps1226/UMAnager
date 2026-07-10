@@ -60,6 +60,13 @@ public sealed class SettingsService
         // Some sites bind sessions to UA fingerprints; matching it avoids stale-session errors.
         public const string OreProUserAgent = "orepro_user_agent";
 
+        // String — netkeiba/OrePro login id (email or member id) + password, used to
+        // re-mint orepro_session_cookie server-side when it expires (no browser needed).
+        // STORED IN PLAINTEXT in app_settings — the operator opted into this for one-tap /
+        // auto refresh (single-user app behind Cloudflare Access, free-play bets only). Nullable.
+        public const string OreProLoginId  = "orepro_login_id";
+        public const string OreProPassword = "orepro_password";
+
         // Bool ("true"/"false") — after a successful Apply+Submit, navigate the popup
         // to /bet/bet_complete.html?race_id=... to show the receipt page. Mirrors v1 UX.
         public const string OreProNavToCompleteAfterSubmit = "orepro_nav_to_complete_after_submit";
@@ -113,6 +120,8 @@ public sealed class SettingsService
         public static readonly TimeSpan MaintenanceRetryInterval = TimeSpan.FromMinutes(30);
         public const string?            DiscordWebhookUrl        = null;
         public const string?            OreProSessionCookie      = null;
+        public const string?            OreProLoginId            = null;
+        public const string?            OreProPassword           = null;
         public const string             OreProUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
         public const string             OreProNavToCompleteAfterSubmit = "false";
         public const string             DisplayLocalTime               = "false";
@@ -248,6 +257,8 @@ public sealed class SettingsService
         AddIfMissing(Keys.MaintenanceRetryInterval, Defaults.MaintenanceRetryInterval.ToString());
         AddIfMissing(Keys.DiscordWebhookUrl,       Defaults.DiscordWebhookUrl);
         AddIfMissing(Keys.OreProSessionCookie,     Defaults.OreProSessionCookie);
+        AddIfMissing(Keys.OreProLoginId,           Defaults.OreProLoginId);
+        AddIfMissing(Keys.OreProPassword,          Defaults.OreProPassword);
         AddIfMissing(Keys.OreProUserAgent,         Defaults.OreProUserAgent);
         AddIfMissing(Keys.OreProNavToCompleteAfterSubmit, Defaults.OreProNavToCompleteAfterSubmit);
         AddIfMissing(Keys.DisplayLocalTime,               Defaults.DisplayLocalTime);

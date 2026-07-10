@@ -67,23 +67,21 @@ public sealed class NexusPipeServer : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Yield immediately so the host finishes starting before we block on pipe creation.
-        // Without this, a synchronous throw in the NamedPipeServerStream constructor
-        // propagates back into Host.StartAsync and crashes the process.
         await Task.Yield();
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            await using var pipe = new NamedPipeServerStream(
-                PipeEnvelope.PipeName,
-                PipeDirection.InOut,
-                1,
-                PipeTransmissionMode.Byte,
-                PipeOptions.Asynchronous);
-
-            _logger.LogInformation("[Nexus] Waiting for Sidecar on pipe '{Pipe}'...", PipeEnvelope.PipeName);
-
             try
             {
+                await using var pipe = new NamedPipeServerStream(
+                    PipeEnvelope.PipeName,
+                    PipeDirection.InOut,
+                    1,
+                    PipeTransmissionMode.Byte,
+                    PipeOptions.Asynchronous);
+
+                _logger.LogInformation("[Nexus] Waiting for Sidecar on pipe '{Pipe}'...", PipeEnvelope.PipeName);
+
                 await pipe.WaitForConnectionAsync(stoppingToken);
                 _logger.LogInformation("[Nexus] Sidecar connected. Sending INIT command...");
 

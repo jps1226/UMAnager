@@ -88,6 +88,26 @@ public sealed class OreProController : ControllerBase
         return Content(result.GetRawText(), "application/json");
     }
 
+    public sealed class LoginRequest
+    {
+        // Optional: log in with these instead of the stored credentials (e.g. a first-time
+        // "type it each time" flow). When omitted, the stored orepro_login_id/password are used.
+        public string? login_id { get; set; }
+        public string? password { get; set; }
+        public string? race_id { get; set; }
+    }
+
+    /// <summary>
+    /// Logs in to netkeiba/OrePro server-side and re-mints the session cookie — no browser needed,
+    /// works from a phone. Uses stored credentials unless login_id/password are supplied in the body.
+    /// </summary>
+    [HttpPost("login")]
+    public async Task<IActionResult> Login([FromBody] LoginRequest? body, CancellationToken ct)
+    {
+        var result = await _apply.LoginAsync(body?.login_id, body?.password, body?.race_id, ct);
+        return Content(result.GetRawText(), "application/json");
+    }
+
     [HttpPost("votes/apply")]
     public async Task<IActionResult> Apply([FromBody] JsonElement payload, CancellationToken ct)
     {

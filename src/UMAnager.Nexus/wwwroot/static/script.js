@@ -1,3 +1,9 @@
+let _bootMarks = []; // Boot-phase timing (dev mode only) — see bootMark() below.
+function bootMark(label) {
+    _bootMarks.push({ label, t: Math.round(performance.now()) });
+}
+bootMark('scriptStart'); // earliest point this script can run: end of HTML parse + script.js download
+
 let globalMarks = {};
 let globalRaceMeta = {};
 let globalMarksVersion = 2;
@@ -1652,7 +1658,9 @@ async function refreshDataAndUI() {
 
     // 2. Refresh the Grid & Weekend Watchlist (must load races FIRST to populate searchableHorses)
     await loadCalendarSkeleton(); // Phase 38: keep calendar day coverage fresh
+    bootMark('calendarSkeletonDone');
     await loadRaces();
+    bootMark('loadRacesDone');
     
     // 3. Refresh the Sidebar Lists (needs searchableHorses populated)
     const listRes = await fetch('/api/lists');
@@ -1875,6 +1883,7 @@ function updateAllHoverButtons() {
 
 // --- INITIALIZATION ---
 async function init() {
+    bootMark('initStart');
     // Over a high-latency link (Tailscale / Cloudflare tunnel), awaiting each startup fetch one-by-one
     // stacks the round-trips serially — a big chunk of the wall-clock load. Fire the independent ones
     // CONCURRENTLY instead. (Was ~7 serial requests; now two small parallel groups.)
@@ -1883,6 +1892,7 @@ async function init() {
         fetch('/api/config'),
         fetch('/static/race_name_dict.json').catch(() => null),
     ]);
+    bootMark('coreFetchHeadersDone'); // marks/config/dict responses landed (bodies not yet parsed)
 
     const marksPayload = normalizeMarksPayload(await marksRes.json());
     globalMarks = marksPayload.marks;
@@ -1905,6 +1915,7 @@ async function init() {
     // Phase 21: race name translation dictionary (fetched above, in parallel).
     try { raceNameDict = dictRes ? await dictRes.json() : { stakes: {}, classNames: {} }; }
     catch (e) { console.warn('Failed to load race_name_dict.json:', e); raceNameDict = { stakes: {}, classNames: {} }; }
+    bootMark('coreFetchBodiesDone'); // marks/config/dict JSON parsed, ready to use
 
     // Vote history (Voted N× badges) + OrePro apply state + settings are independent — load them
     // concurrently. The calendar skeleton is loaded by refreshDataAndUI below, so it's not fetched here.
@@ -1913,6 +1924,7 @@ async function init() {
         loadOreProApplyState().catch(() => {}),
         loadOreProSettingsLite().catch(() => {}),
     ]);
+    bootMark('secondaryFetchDone'); // vote history + OrePro apply state + OrePro settings
 
     // Restore persisted race-level estimate cache to avoid recomputing every view switch.
     raceBetEstimateCache = loadStoredBetEstimateCache();
@@ -1936,6 +1948,8 @@ async function init() {
     applySidebarSettings();
     
     await refreshDataAndUI();
+    bootMark('initComplete');
+    if (isDevModeEnabled()) printBootBreakdown();
     switchMainView('races');
 
     if (document.getElementById('jvlink-test-status')) {
@@ -3050,6 +3064,15 @@ function toggleDisciplineMode(on) {
     appConfig.ui.disciplineMode = !!on;
     updateDisciplineUi();
     try { saveConfigToServer(); } catch (_) {}
+    // Unlike a risk-slider move, this flips the Shirushi column's HTML itself (engine-read badges vs.
+    // clickable mark buttons) — rebuild every visible race's rows, or the grid keeps showing the other
+    // mode's markup until something else happens to force a re-render.
+    try {
+        Object.keys(globalRaceEntries).forEach(rid => {
+            const tbody = document.getElementById(`tbody-${rid}`);
+            if (tbody) tbody.innerHTML = buildTableBody(rid, globalRaceEntries[rid]);
+        });
+    } catch (_) {}
     // Re-run the same refreshers the slider's 'input' listeners fire, so picks/preview/stats update live.
     try { updateAllRiskBadges(); } catch (_) {}
     try { updateAutoBetHighlighting(); } catch (_) {}
@@ -5598,8 +5621,25 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
             const totalMs = Math.round(performance.now());
             el.textContent = `⚡ json:${_devFetchMs}ms state:${_devStateMs}ms sidebar:${_devSidebarMs}ms render:${_devRenderMs}ms total:${totalMs}ms`;
             console.log(`[DevMode] Breakdown: json=${_devFetchMs}ms state=${_devStateMs}ms sidebar=${_devSidebarMs}ms render=${_devRenderMs}ms total=${totalMs}ms`);
+            bootMark('firstPaint');
         }
     }
+}
+
+// Dev-only: print the boot-phase timeline (scriptStart → initComplete) as both deltas-from-previous
+// (how long THIS phase took) and deltas-from-scriptStart (running total) — answers "what is `total`
+// actually waiting on" without re-measuring on every guess. Call once init() resolves.
+function printBootBreakdown() {
+    if (!_bootMarks.length) return;
+    const t0 = _bootMarks[0].t;
+    let prev = t0;
+    const rows = _bootMarks.map(m => {
+        const row = { phase: m.label, sincePrevMs: m.t - prev, sinceStartMs: m.t - t0 };
+        prev = m.t;
+        return row;
+    });
+    console.log('[BootTiming] phase breakdown (ms):');
+    console.table(rows);
 }
 
 function renderDayTabsAndSchedules(preferredDate = null, collapseBeforeTime = null, keepOpenRaceId = null) {
@@ -8364,6 +8404,39 @@ function buildRacecourseCheatHtml(targetDate) {
         });
     }
 
+    // Discipline mode never writes to globalMarks (the bet is engine-picked, not a manual ◎/〇/▲/△
+    // click), so every Discipline race would otherwise be invisible on this cheat sheet even after
+    // being bet and locked — the same gap already fixed for applyAllDayVotesToOrePro's "has votes"
+    // check (collectDisciplineEngineRunners). Synthesize the same engine mark group here for any race
+    // this date without a per-race manual override, so Discipline bets show up like manual ones do.
+    if (isDisciplineMode()) {
+        for (const [r_id, info] of Object.entries(globalRaceInfo)) {
+            if ((info.clean_date || '') !== date) continue;
+            if (raceMarkGroups[r_id]) continue; // already covered by real marks above
+            if (getRaceBetCompositionOverride(r_id)) continue; // per-race manual override race, not engine-driven
+            const runners = collectDisciplineEngineRunners(r_id);
+            if (!runners.length) continue;
+            const entries = globalRaceEntries[r_id] || [];
+            // disciplineRanking flags this as engine ranking shown for CONTEXT — only the ◎ is bet.
+            // The render mutes the 〇▲ and labels them "not bet" so a 3-horse ranking never reads as
+            // a 3-horse bet (which misled the operator into thinking Discipline placed 3 per race).
+            const group = { info, marks: [], disciplineRanking: true };
+            runners.forEach(r => {
+                const row = entries.find(e => String(e.Horse_ID).split('.')[0] === r.horseId);
+                group.marks.push({
+                    symbol: r.symbol,
+                    rank: sMap[r.symbol] || 99,
+                    horse: row ? row.Horse : 'Unknown Horse',
+                    pp: r.pp || 99,
+                    bk: row ? parseInt(row.BK) || 0 : 0,
+                    fav: row ? String(row.Fav || '').trim() : '',
+                    finishRank: parseFinishRank(row?.Finish)
+                });
+            });
+            raceMarkGroups[r_id] = group;
+        }
+    }
+
     // Flatten all races into a chronological list. Track is shown per-card so
     // mixed venues are unambiguous when sorted by post time.
     const raceCards = [];
@@ -8387,7 +8460,8 @@ function buildRacecourseCheatHtml(targetDate) {
             betLinesHtml: buildVotingBetLinesHtml(raceObj, timeline),
             orepro: oreproRaceMap.get(r_id) || null,
             betEstimate: raceBetEstimateCache[r_id] || null,
-            marks: group.marks
+            marks: group.marks,
+            disciplineRanking: !!group.disciplineRanking
         });
     }
 
@@ -8459,7 +8533,15 @@ function buildRacecourseCheatHtml(targetDate) {
                 </div>`;
             }
 
+            // In Discipline mode the ◎〇▲ list is the engine's RANKING shown for context — only the ◎
+            // is actually bet (a single ¥10k place). Spell that out so three ranked horses never read
+            // as three bets, and mute the non-bet rows below.
+            if (raceCard.disciplineRanking) {
+                html += `<div style="font-size:11px;color:#8fb3c9;margin:2px 0 6px;line-height:1.4;">🧊 Betting the <b>◎ only</b> (place). <span style="color:#8a94a0;">〇 ▲ below = engine ranking, <b>not bet</b>.</span></div>`;
+            }
+
             raceCard.marks.forEach(m => {
+                const notBet = raceCard.disciplineRanking && m.symbol !== '◎';
                 const c = bColors[m.bk] || { bg: '#444', color: '#fff', border: '#444' };
                 const symSize = m.symbol === '◎' ? '19px' : '16px';
                 const ppBadge = m.pp !== 99
@@ -8470,12 +8552,16 @@ function buildRacecourseCheatHtml(targetDate) {
                 const finishBadge = timeline === 'past'
                     ? `<span class="voting-finish-badge${m.finishRank ? ` rank-${m.finishRank}` : ''}">Fin ${m.finishRank || '-'}</span>`
                     : '';
+                const notBetTag = notBet
+                    ? `<span style="font-size:10px;color:#8a94a0;border:1px solid #454b55;border-radius:4px;padding:1px 5px;white-space:nowrap;">not bet</span>`
+                    : '';
 
                 html += `
-                <div class="export-horse-line" style="margin-bottom:8px;">
+                <div class="export-horse-line" style="margin-bottom:8px;${notBet ? 'opacity:0.5;' : ''}">
                     ${ppBadge}${markBadge}<div style="flex:1;min-width:0;display:flex;justify-content:space-between;gap:10px;">
                         <span style="font-weight:500;">${escapeHtml(String(m.horse || 'Unknown Horse'))}</span>
                         <div class="voting-line-right-meta">
+                            ${notBetTag}
                             <span style="font-size:11px;color:#ddd;border:1px solid #555;border-radius:4px;padding:2px 6px;white-space:nowrap;">${favBadge}</span>
                             ${finishBadge}
                         </div>
@@ -9251,7 +9337,12 @@ function buildOreProCustomLinesForRace(race) {
     // Place the CONFIRMED loyalty side bets alongside the spine (so OrePro actually fires them, not just
     // our tracking). They map through the same TYPE/METHOD tables (place=2/normal, wide=5/box).
     const rid = String(race?.info?.race_id || '').trim();
-    const allLines = [...(plan.lines || []), ...buildSideBetLines(rid)];
+    // plan.lines can ALREADY carry a frozen side-bet line (kind:'side') if this race was locked/frozen
+    // on a prior apply (freezeBetProfileAtApply bakes side bets into the frozen betLines). Appending a
+    // FRESH buildSideBetLines() on top of an already-frozen plan double-bets the same favorite — two
+    // identical bet_ids in one ticket, which OrePro rejects on submit ("price over").
+    const hasFrozenSide = (plan.lines || []).some(l => l.kind === 'side');
+    const allLines = [...(plan.lines || []), ...(hasFrozenSide ? [] : buildSideBetLines(rid))];
     const lines = [];
     for (const l of allLines) {
         const type = TYPE[l.ticket];
@@ -9274,7 +9365,26 @@ function buildOreProCustomLinesForRace(race) {
         }
         lines.push({ type, method, umaban, money, _label: l.label, _combos: l.comboCount });
     }
-    return { lines, staked: plan.staked };
+    // Final safety net: OrePro's bet_id is `_b<type>_c<method>_<umaban>`, and TWO lines that resolve
+    // to the SAME bet_id make OrePro reject the whole ticket on submit with reason "price over". That
+    // can happen from a corrupted frozen record (a duplicate side line baked in by an earlier bug) or
+    // any future path that double-lists a horse. Collapse identical bet_ids to a single line, keeping
+    // the LARGER stake (so a real ¥10k spine never loses to a ¥1k dup). This makes a duplicate
+    // physically unsubmittable regardless of where it came from.
+    const deduped = [];
+    const seen = new Map(); // bet_id key -> index in deduped
+    for (const l of lines) {
+        const key = `${l.type}_${l.method}_${l.umaban}`;
+        if (seen.has(key)) {
+            const prev = deduped[seen.get(key)];
+            if (l.money > prev.money) prev.money = l.money; // keep the larger stake
+        } else {
+            seen.set(key, deduped.length);
+            deduped.push(l);
+        }
+    }
+    const staked = deduped.reduce((s, l) => s + (l.money * (l._combos || 1)), 0);
+    return { lines: deduped, staked };
 }
 
 async function placeCustomBetNoSubmit(event, raceId) {
@@ -9452,9 +9562,16 @@ async function applyAllDayVotesToOrePro() {
         return;
     }
 
-    // A race "has votes" if any of ◎〇▲△ is assigned to one of its horses.
+    // A race "has votes" if any of ◎〇▲△ is assigned to one of its horses. Under Discipline (and no
+    // per-race manual override), the bet is engine-driven and never touches globalMarks — so "has
+    // votes" instead means the same engine-◎ source buildRaceBetLines/collectDisciplineEngineRunners
+    // will actually bet from. Checking globalMarks here would always read empty and silently skip
+    // every race (the "Apply Day Votes did nothing" bug).
     const symbols = ['◎', '〇', '▲', '△'];
     const hasMarks = (r_id) => {
+        if (isDisciplineMode() && !getRaceBetCompositionOverride(r_id)) {
+            return collectDisciplineEngineRunners(r_id).some(r => r.symbol === '◎');
+        }
         const entries = globalRaceEntries[r_id] || [];
         return entries.some(row => {
             const h_id = String(row.Horse_ID).split('.')[0];
@@ -9559,6 +9676,7 @@ async function applyAllDayVotesToOrePro() {
         let failCount = 0;
         let sessionExpired = false;
         const failureLines = [];
+        const succeededRaceIds = [];
 
         for (let i = 0; i < eligible.length; i++) {
             const r_id = eligible[i];
@@ -9570,6 +9688,7 @@ async function applyAllDayVotesToOrePro() {
             const routed = await applyRaceRoutedToOrePro(r_id);
             if (routed.ok) {
                 okCount++;
+                succeededRaceIds.push(r_id);
             } else {
                 failCount++;
                 failureLines.push(`[${routed.mode}] ${r_id}: ${routed.message}`);
@@ -9598,9 +9717,12 @@ async function applyAllDayVotesToOrePro() {
             return;
         }
 
-        // Lock only the races we actually submitted (not empty/no-mark races for the day).
-        if (okCount > 0 && isAutoLockAfterSubmitEnabled()) {
-            const lockedCount = eligible.reduce((n, rid) => n + lockSingleRaceAfterSubmit(rid), 0);
+        // Lock only the races we actually submitted (not empty/no-mark races for the day, and NOT
+        // races that failed in this same batch — a mixed batch with any success used to lock/freeze
+        // every eligible race including the failed ones, baking their (never-placed) bet shape in as
+        // if it had gone through. That stale freeze is what caused the R10 double side-bet bug.
+        if (succeededRaceIds.length && isAutoLockAfterSubmitEnabled()) {
+            const lockedCount = succeededRaceIds.reduce((n, rid) => n + lockSingleRaceAfterSubmit(rid), 0);
             if (lockedCount > 0) {
                 saveMarksToServer().then(() => refreshSunkCostStat()).catch(() => {}); // persist auto-locks once
                 updateQuickStats();
@@ -12453,6 +12575,8 @@ async function loadOrchestratorSettings() {
         set('setting-live-window-minutes',        s.live_window_minutes);
         set('setting-discord-webhook-url',        s.discord_webhook_url);
         set('setting-orepro-session-cookie',      s.orepro_session_cookie);
+        set('setting-orepro-login-id',            s.orepro_login_id);
+        set('setting-orepro-password',            s.orepro_password);
         set('setting-orepro-user-agent',          s.orepro_user_agent);
         // Per-leg stakes; fall back to the legacy single-stake setting then ¥100.
         const legacyStake = s.bet_estimate_stake_yen ?? '100';
@@ -12473,6 +12597,55 @@ async function loadOrchestratorSettings() {
         globalDisplayLocalTime = String(s.display_local_time || 'false').toLowerCase() === 'true';
     } catch (e) {
         console.warn('[Orchestrator] loadSettings failed', e);
+    }
+}
+
+// Server-side OrePro login: sends the stored (or just-typed) credentials to the Nexus, which does
+// the netkeiba login handshake and re-mints the session cookie — no browser cookie-copying needed,
+// works from a phone. The Nexus verifies the new session before reporting success.
+// Reveal/hide the OrePro password field so the operator can eyeball it for typos (the #1 cause of
+// a "netkeiba says incorrect" login failure). Also flips the login-id to plain text alongside.
+function toggleOreProPasswordVisible(btn) {
+    const pw = document.getElementById('setting-orepro-password');
+    if (!pw) return;
+    const show = pw.type === 'password';
+    pw.type = show ? 'text' : 'password';
+    if (btn) btn.textContent = show ? '🙈 Hide' : '👁 Show';
+}
+
+async function oreProLoginNow() {
+    const btn = document.getElementById('orepro-login-btn');
+    const statusEl = document.getElementById('orepro-login-status');
+    const id = (document.getElementById('setting-orepro-login-id') || {}).value || '';
+    const pw = (document.getElementById('setting-orepro-password') || {}).value || '';
+    if (!id.trim() || !pw) {
+        if (statusEl) { statusEl.style.color = '#e08060'; statusEl.textContent = 'Enter your login id and password first.'; }
+        return;
+    }
+    // Persist the credentials first so auto-refresh can reuse them later.
+    await saveOrchestratorSetting('orepro_login_id', id);
+    await saveOrchestratorSetting('orepro_password', pw);
+
+    const prev = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Logging in…'; }
+    if (statusEl) { statusEl.style.color = '#9ab'; statusEl.textContent = 'Contacting OrePro…'; }
+    try {
+        const res = await fetch('/api/orepro/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ race_id: firstRaceIdForActiveDay() }),
+        });
+        const data = await res.json().catch(() => ({ loggedIn: false, message: 'Bad response from server.' }));
+        if (statusEl) {
+            statusEl.style.color = data.loggedIn ? '#3ddc84' : '#e08060';
+            statusEl.textContent = (data.loggedIn ? '✅ ' : '⚠️ ') + (data.message || (data.loggedIn ? 'Logged in.' : 'Login failed.'));
+        }
+        // Refresh the cookie field to reflect the freshly-minted session.
+        if (data.loggedIn) loadOrchestratorSettings();
+    } catch (e) {
+        if (statusEl) { statusEl.style.color = '#e08060'; statusEl.textContent = 'Login request failed: ' + e.message; }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = prev; }
     }
 }
 
