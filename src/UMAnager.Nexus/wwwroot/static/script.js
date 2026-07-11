@@ -335,11 +335,12 @@ function disciplineComposition(r_id) {
 
 // ── SIDE BETS (loyalty bets — Discipline-era) ────────────────────────────────
 // Explicit, ADDITIVE ¥1k bets on horses you like ("I backed it despite the odds"), riding ALONGSIDE
-// the disciplined ◎ place — never replacing it. Auto-SUGGESTED from your Favorites (the 👁 list) but
-// MANUAL-CONFIRM: each is one-click removable, and nothing fires until you apply the race. One favorite
-// → a ¥1k place (複勝); two+ in one race → ONE ¥1k Wide (ワイド) between them. The engine's ◎ is skipped
-// (never double the spine). Frozen with kind:'side' so C# tracks their P/L APART and the Discipline
-// recovery % stays honest. Whole feature off when appConfig.ui.sideBetsAuto === false.
+// the disciplined ◎ place — never replacing it. OPT-IN (s60+): nothing bets on a Favorite (👁 Watchlist)
+// horse unless you explicitly add it — either the per-race Bets strip's ＋ chip, or the one-time
+// Watchlist popup shown at Apply Day Votes time (showWatchlistSideBetPopup). One favorite → a ¥1k place
+// (複勝); two+ in one race → ONE ¥1k Wide (ワイド) between them. The engine's ◎ is skipped (never double
+// the spine). Frozen with kind:'side' so C# tracks their P/L APART and the Discipline recovery % stays
+// honest. Whole feature off when appConfig.ui.sideBetsAuto === false.
 const SIDE_BET_STAKE = 1000;
 function sideBetsEnabled() { return isDisciplineMode() && (appConfig.ui?.sideBetsAuto !== false); }
 // Favorite (Watchlist) horse-ids running in a race, MINUS the engine ◎ (don't double the spine).
@@ -354,15 +355,16 @@ function raceFavoriteHorseIds(rid) {
     });
     return out;
 }
-// The ACTIVE side-bet horse-ids for a race: an explicit per-race choice (raceMeta.sideBets, written
-// when you remove/re-add a suggestion) wins; else the auto-suggested default = every race favorite.
-// Always [] when side bets are off. Re-filtered to favorites still in the field (a scratch drops it).
+// The ACTIVE side-bet horse-ids for a race: an explicit per-race choice (raceMeta.sideBets, written by
+// the per-race strip's ＋ chip or the Watchlist Apply-time popup). OPT-IN default (s60+) — nothing is
+// active until you add it. Always [] when side bets are off. Re-filtered to favorites still in the
+// field (a scratch drops it).
 function activeSideBetHorseIds(rid) {
     if (!sideBetsEnabled()) return [];
     const favs = raceFavoriteHorseIds(rid);
     const ov = globalRaceMeta[rid]?.sideBets;
     if (Array.isArray(ov)) return ov.filter(h => favs.includes(h));
-    return favs;
+    return []; // opt-in: nothing bets until explicitly selected
 }
 // Toggle one favorite's side bet on/off for a race (materializes the auto-default first so a removal
 // sticks), persist to the marks blob, and re-render the strip + sunk-cost panel.
@@ -392,6 +394,124 @@ function buildSideBetLines(rid) {
     const c = nCk(pps.length, 2);
     const per = Math.max(100, Math.round((SIDE_BET_STAKE / c) / 100) * 100);
     return [{ ticket: 'wide', method: 'box', label: 'ワイド', horses: pps.map(pp => ({ pp })), comboCount: c, stakePerCombo: per, kind: 'side' }];
+}
+
+// Watchlist horses in the day's ELIGIBLE (about-to-apply) races that don't already have an explicit
+// side bet — the candidate list for the Apply-time opt-in popup below. Skips any horse already added
+// via the per-race strip (raceMeta.sideBets) so the popup never re-asks about a choice already made.
+// Carries the full entry row so the popup can show real stats, not just "it's running".
+function collectWatchlistSideBetCandidates(eligibleRaceIds) {
+    const out = [];
+    (eligibleRaceIds || []).forEach(r_id => {
+        const favs = raceFavoriteHorseIds(r_id);
+        if (!favs.length) return;
+        const already = new Set(Array.isArray(globalRaceMeta[r_id]?.sideBets) ? globalRaceMeta[r_id].sideBets : []);
+        const rowById = {};
+        (globalRaceEntries[r_id] || []).forEach(row => { rowById[String(row?.Horse_ID ?? '').split('.')[0].trim()] = row; });
+        favs.forEach(hid => {
+            if (already.has(hid)) return;
+            const row = rowById[hid] || {};
+            out.push({ r_id, hid, name: row.Horse || hid, row });
+        });
+    });
+    return out;
+}
+
+// Compact single-line stat summary for a Watchlist popup row — odds/fav rank, career record, last-3
+// finishes, jockey win% — enough to judge "is this horse actually live" at a glance, not just its name.
+function watchlistCandidateStatLine(row) {
+    const dn = (v) => {
+        if (v === null || v === undefined) return '—';
+        const s = String(v).trim();
+        return (s === '' || s === '0') ? '—' : s;
+    };
+    const odds = parseFloat(row?.Odds);
+    const oddsStr = Number.isFinite(odds) && odds > 0 ? odds.toFixed(1) : '—';
+    const jWin = (row?.Jockey_Win_Pct === null || row?.Jockey_Win_Pct === undefined) ? NaN : parseFloat(row.Jockey_Win_Pct);
+    const jStr = Number.isFinite(jWin) ? `${(jWin * 100).toFixed(0)}%` : '—';
+    const jName = row?.Jockey || row?.Jockey_Code || '';
+    return `Odds ${oddsStr} (Fav ${dn(row?.Fav)}) · Record ${escapeHtml(dn(row?.Record))} · Last3 ${escapeHtml(dn(row?.Last3))} · ${escapeHtml(jName)} J${jStr}`;
+}
+
+// FINAL gate before Apply Day Votes actually submits anything to OrePro — shown after the day preview
+// is confirmed. s60 incident: an earlier version let ✖/outside-click silently proceed with the main
+// day apply regardless of choice (a fake cancel — Skip and ✖ were coded identically, and there was no
+// real abort path once you'd reached this screen). Fixed: this is now the one true commit point when
+// Watchlist candidates exist. Three explicit outcomes — Cancel (✖ / outside-click / Cancel button) =
+// abort EVERYTHING, nothing is sent to OrePro; Skip = place the day's main bets, no Watchlist extras;
+// Add selected = place the main bets PLUS a ¥1k place side bet on each checked Watchlist horse
+// (unchecked by default — opt-in). Extras ride the existing side-bet OrePro pipeline (kind:'side',
+// same anti-duplicate guards as the per-race strip). The disciplined ◎ spine bet is never affected by
+// any of the three outcomes. Returns Promise<boolean>: true = proceed with the day apply, false =
+// cancel everything. Silent pass-through (resolves true immediately, no popup) if there are no
+// candidates — nothing to ask about.
+function showWatchlistSideBetPopup(eligibleRaceIds, date) {
+    const candidates = collectWatchlistSideBetCandidates(eligibleRaceIds);
+    if (!candidates.length) return Promise.resolve(true);
+
+    return new Promise(resolve => {
+        const rows = candidates.map((c, i) => {
+            const race = findRaceObjById(c.r_id);
+            const label = race ? `${trackName(race.info.place)} R${race.info.race_number}` : c.r_id;
+            const stat = watchlistCandidateStatLine(c.row);
+            return `<label style="display:flex;align-items:flex-start;gap:8px;padding:7px 4px;border-bottom:1px solid #22283a;cursor:pointer;">
+                <input type="checkbox" data-idx="${i}" style="width:16px;height:16px;flex-shrink:0;margin-top:3px;">
+                <div style="flex:1;min-width:0;">
+                    <div>👁 <b>${escapeHtml(c.name)}</b> <span style="color:#9fb2c8;font-size:0.85em;">· ${escapeHtml(label)}</span></div>
+                    <div style="color:#8a93a3;font-size:0.8em;margin-top:2px;">${stat}</div>
+                </div>
+                <span style="color:#9fb2c8;font-size:0.85em;white-space:nowrap;">¥${SIDE_BET_STAKE.toLocaleString()} 複勝</span>
+            </label>`;
+        }).join('');
+
+        const overlay = document.createElement('div');
+        overlay.id = 'watchlist-sidebet-popup';
+        overlay.className = 'modal-overlay';
+        // outcome: 'add' | 'skip' | 'cancel'. Only 'add' writes anything; 'cancel' resolves false so the
+        // caller aborts the ENTIRE day apply — no OrePro call happens for 'cancel'.
+        const cleanup = (outcome) => {
+            if (outcome === 'add') {
+                overlay.querySelectorAll('input[type=checkbox]:checked').forEach(cb => {
+                    const c = candidates[parseInt(cb.dataset.idx, 10)];
+                    if (!c) return;
+                    const cur = Array.isArray(globalRaceMeta[c.r_id]?.sideBets) ? globalRaceMeta[c.r_id].sideBets : [];
+                    if (!cur.includes(c.hid)) {
+                        globalRaceMeta[c.r_id] = { ...(globalRaceMeta[c.r_id] || {}), sideBets: [...cur, c.hid] };
+                        try { touchRaceMeta(c.r_id); } catch (_) {}
+                        try { renderSideBetStrip(c.r_id); } catch (_) {}
+                    }
+                });
+                saveMarksToServer().catch(() => {});
+            }
+            try { overlay.remove(); } catch (_) {}
+            resolve(outcome !== 'cancel');
+        };
+        overlay.onclick = (ev) => { if (ev.target === overlay) cleanup('cancel'); };
+        overlay.innerHTML = `
+            <div class="modal-content" style="max-width:560px;width:92%;display:flex;flex-direction:column;max-height:84vh;">
+                <div class="modal-header">
+                    <h3 class="modal-title">👁 Watchlist horses running ${escapeHtml(date)}</h3>
+                    <div class="modal-header-actions"><button class="close-btn" id="wl-sidebet-x" title="Cancel — nothing will be sent to OrePro">✖</button></div>
+                </div>
+                <div style="padding:2px 16px 6px;color:#9fb2c8;font-size:13px;">
+                    ${candidates.length} Watchlist horse(s) are running today, separate from the disciplined ◎ pick. Check any you want a ¥${SIDE_BET_STAKE.toLocaleString()} place bet on, just to have something on paper — unchecked ones get nothing. This never touches the ◎ spine bet.
+                    <br><b>Nothing has been sent to OrePro yet</b> — pick an option below.
+                </div>
+                <div style="overflow:auto;padding:2px 16px;">${rows}</div>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 16px;border-top:1px solid #243044;flex-wrap:wrap;">
+                    <button id="wl-sidebet-cancel" style="padding:7px 14px;border-radius:6px;border:1px solid #6a3a3a;background:#2a1818;color:#ffc3c3;cursor:pointer;">✖ Cancel — place nothing</button>
+                    <div style="display:flex;gap:8px;">
+                        <button id="wl-sidebet-skip" style="padding:7px 14px;border-radius:6px;border:1px solid #3a4a60;background:#1b2230;color:#cdd9e8;cursor:pointer;">Skip — place ${eligibleRaceIds.length} race(s), no extras</button>
+                        <button id="wl-sidebet-go" style="padding:7px 14px;border-radius:6px;border:1px solid #2f8f57;background:#176b3a;color:#eafff0;font-weight:700;cursor:pointer;">Add selected & place</button>
+                    </div>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        document.getElementById('wl-sidebet-go').onclick = () => cleanup('add');
+        document.getElementById('wl-sidebet-skip').onclick = () => cleanup('skip');
+        document.getElementById('wl-sidebet-cancel').onclick = () => cleanup('cancel');
+        document.getElementById('wl-sidebet-x').onclick = () => cleanup('cancel');
+    });
 }
 
 // The per-race "Bets" strip (shown at the top of an expanded race under Discipline): the green spine
@@ -1174,6 +1294,63 @@ function applyRiskSliderValue(value) {
     slider.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
+// Per-race detail behind the Day Net quick-stat, refreshed on every updateQuickStats() call so the
+// hover panel below always matches what's on screen.
+let dayNetBreakdownCache = [];
+
+// Simple hover panel for Day Net — total gained across winning races vs total lost across losing
+// races (a race with any hit that still nets negative, e.g. a partial box, counts toward "lost", not
+// "gained" — bucketed by NET, not by whether anything hit at all). A native title="" can't show two
+// separate figures cleanly, so this builds a tiny panel on mouseenter (over #qs-pl-block in
+// index.html) and tears it down on mouseleave. Positioned via getBoundingClientRect so it never
+// depends on a parent's overflow/z-index.
+function showDayNetBreakdown(ev) {
+    hideDayNetBreakdown(); // guard against a stray double-fire leaving two panels
+    const settled = dayNetBreakdownCache.filter(r => r.settled);
+    const pending = dayNetBreakdownCache.filter(r => !r.settled);
+    if (!settled.length && !pending.length) return;
+
+    let gained = 0, lost = 0, winCount = 0, lossCount = 0;
+    settled.forEach(r => {
+        const net = r.won - r.staked;
+        if (net > 0) { gained += net; winCount++; }
+        else if (net < 0) { lost += -net; lossCount++; }
+    });
+
+    const pendingNote = pending.length
+        ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #243044;color:#8a93a3;font-size:0.82em;">`
+          + `${pending.length} still running (¥${pending.reduce((s, r) => s + r.staked, 0).toLocaleString()} staked, not counted yet)</div>`
+        : '';
+    const body = settled.length
+        ? `<div style="display:flex;flex-direction:column;gap:4px;">
+             <div style="display:flex;justify-content:space-between;gap:16px;"><span style="color:#9fb2c8;">🟢 Gained</span><span style="font-weight:700;color:#7fe0a0;">+¥${gained.toLocaleString()}${winCount ? ` (${winCount})` : ''}</span></div>
+             <div style="display:flex;justify-content:space-between;gap:16px;"><span style="color:#9fb2c8;">🔴 Lost</span><span style="font-weight:700;color:#ff9a9a;">−¥${lost.toLocaleString()}${lossCount ? ` (${lossCount})` : ''}</span></div>
+           </div>${pendingNote}`
+        : `<div style="color:#8a93a3;">No races settled yet.</div>${pendingNote}`;
+
+    const panel = document.createElement('div');
+    panel.id = 'day-net-breakdown';
+    panel.style.cssText = 'position:fixed;z-index:9999;background:#141a24;border:1px solid #2a3040;'
+        + 'border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.5);padding:10px 12px;font-size:0.85em;'
+        + 'max-width:260px;pointer-events:none;';
+    panel.innerHTML = `<div style="color:#8a93a3;font-size:0.78em;margin-bottom:6px;">Settled races only — Day Net starts at ¥0 each day</div>${body}`;
+    document.body.appendChild(panel);
+
+    const targetEl = document.getElementById('qs-pl-block') || ev.currentTarget;
+    const r = targetEl.getBoundingClientRect();
+    const pr = panel.getBoundingClientRect();
+    let top = r.bottom + 6;
+    let left = Math.min(r.left, window.innerWidth - pr.width - 8);
+    if (left < 8) left = 8;
+    if (top + pr.height > window.innerHeight - 8) top = r.top - pr.height - 6;
+    panel.style.top = `${top}px`;
+    panel.style.left = `${left}px`;
+}
+function hideDayNetBreakdown() {
+    const el = document.getElementById('day-net-breakdown');
+    if (el) el.remove();
+}
+
 function updateQuickStats() {
     const qsMarks = document.getElementById('qs-marks');
     const qsMarksDetail = document.getElementById('qs-marks-detail');
@@ -1284,31 +1461,45 @@ function updateQuickStats() {
         }
     }
 
-    // Day Net (sunk-cost basis): a LOCKED race = a placed bet. Its full template stake
-    // counts the moment it's placed (in the red), BEFORE the race runs. Winnings credit
-    // back as results land — computed from the ACTUAL template bets (place/wide/trio per
-    // the ladder), not the obsolete Win/Q/T model.
+    // Day Net (SETTLED basis, s60+): only races that have actually FINISHED move this number — a
+    // placed-but-still-running bet no longer drags it into the red the moment it's locked. Starts the
+    // day at ¥0 and moves by each race's own net exactly once it settles, same framing as the Discord
+    // win-ping's "Day net" line. (Previously counted the full stake the instant a race was locked,
+    // before it even ran — the "assume you've lost it, hope to claw back big" framing the operator
+    // explicitly asked to move away from now that Discipline mode is the norm, not wild bets.)
+    // Computed from the ACTUAL template bets (place/wide/trio per the ladder), not the obsolete
+    // Win/Q/T model.
     let wonTotal = 0;
     let spentTotal = 0;
     let placedCount = 0;
+    let settledCount = 0;
+    const breakdown = []; // per-race staked/won for the hover panel's gained/lost totals — see showDayNetBreakdown
     dateRaceIds.forEach(r_id => {
         if (!isRaceLocked(r_id)) return;
         const race = { info: globalRaceInfo[r_id], entries: globalRaceEntries[r_id] || [] };
         const out = evaluateTemplateOutcome(race);
         if (out.markCount === 0) return; // locked but no marks → no bet
         placedCount++;
+        if (!out.hasResults) { breakdown.push({ staked: out.staked, won: 0, settled: false }); return; }
+        settledCount++;
         spentTotal += out.staked;
         wonTotal   += out.won;
+        breakdown.push({ staked: out.staked, won: out.won, settled: true });
     });
+    dayNetBreakdownCache = breakdown;
     if (placedCount === 0) {
         qsPL.textContent = '—';
         qsPLSub.textContent = 'no bets placed';
+        qsPL.classList.remove('quick-stat-pos', 'quick-stat-neg');
+    } else if (settledCount === 0) {
+        qsPL.textContent = '¥0';
+        qsPLSub.textContent = `${placedCount} placed · none settled yet`;
         qsPL.classList.remove('quick-stat-pos', 'quick-stat-neg');
     } else {
         const net = Math.round(wonTotal - spentTotal);
         const sign = net >= 0 ? '+' : '−';
         qsPL.textContent = `${sign}¥${Math.abs(net).toLocaleString()}`;
-        qsPLSub.textContent = `¥${Math.round(spentTotal).toLocaleString()} staked · ¥${Math.round(wonTotal).toLocaleString()} won`;
+        qsPLSub.textContent = `${settledCount}/${placedCount} settled · ¥${Math.round(spentTotal).toLocaleString()} staked · ¥${Math.round(wonTotal).toLocaleString()} won`;
         qsPL.classList.toggle('quick-stat-pos', net >= 0);
         qsPL.classList.toggle('quick-stat-neg', net < 0);
     }
@@ -7566,12 +7757,22 @@ function evaluateTemplateOutcome(race) {
         if (top3pp[rank] == null && Number.isFinite(pp) && pp > 0) top3pp[rank] = pp;
     });
     if (!(top3pp[1] && top3pp[2] && top3pp[3])) return out; // unsettled → staked known, won 0
-    out.hasResults = true;
 
     let payouts = null;
     try { const raw = info.results_json; payouts = typeof raw === 'string' ? JSON.parse(raw) : raw; }
     catch (_) { payouts = null; }
-    if (!payouts) return out;
+    // s60 fix: finish positions and the payout table are two separate fields that can land in the
+    // browser at slightly different times (a live results patch updating entries[].Finish before
+    // info.results_json refreshes). Scoring against an empty/missing payout object would silently
+    // read every line as a loss — exactly what happened on a real Kokura win tonight: the race
+    // header showed "lost" and Day Net didn't move, while the backend (reading the same DB column
+    // directly, never racing a stale client copy) correctly pinged the win to Discord. Wait for
+    // actual payout data instead of declaring hasResults on an incomplete read — the next poll/patch
+    // re-evaluates this from scratch, so it self-corrects with no extra invalidation needed.
+    const hasAnyPayoutData = payouts && typeof payouts === 'object'
+        && ['win', 'place', 'quinella', 'wide', 'trio'].some(k => Array.isArray(payouts[k]) && payouts[k].length > 0);
+    if (!hasAnyPayoutData) return out; // top-3 known but payouts not populated yet — stay pending
+    out.hasResults = true;
 
     const t3 = [top3pp[1], top3pp[2], top3pp[3]];
     const t3set = new Set(t3);
@@ -9477,12 +9678,15 @@ function looksLikeExpiredOreProSession(result, data) {
         || haystack.includes('not login');
 }
 
-// Phase 37 C — full-day DRY-RUN PREVIEW (mandatory final gate before Apply Day Votes).
-// Lists every eligible race's exact tickets — bet type, each line's 点数 / per-combo ¥ / line total,
-// the marks, per-race stake, and the day total — all computed from buildRaceBetLines(), the SAME
-// pricing the placement path uses, so the preview can't diverge from what actually gets placed.
-// Returns a Promise<bool>: true = operator confirmed (place), false = cancelled (nothing sent).
-function showDayApplyPreview(eligibleRaceIds, date) {
+// Phase 37 C — full-day DRY-RUN PREVIEW. Lists every eligible race's exact tickets — bet type, each
+// line's 点数 / per-combo ¥ / line total, the marks, per-race stake, and the day total — all computed
+// from buildRaceBetLines(), the SAME pricing the placement path uses, so the preview can't diverge
+// from what actually gets placed. watchlistCount (s60+): when > 0, a Watchlist opt-in popup follows
+// this one and IS the true final gate — the button/copy here must say so honestly (an earlier version
+// claimed "last stop before anything is placed" even when a further step followed, which caused a
+// real live incident — see showWatchlistSideBetPopup). Returns a Promise<bool>: true = operator
+// confirmed (place, or continue to the Watchlist step), false = cancelled (nothing sent).
+function showDayApplyPreview(eligibleRaceIds, date, watchlistCount = 0) {
     return new Promise(resolve => {
         let dayTotal = 0;
         const sections = eligibleRaceIds.map(r_id => {
@@ -9518,6 +9722,14 @@ function showDayApplyPreview(eligibleRaceIds, date) {
             </div>`;
         }).join('');
 
+        const hasWatchlistNext = watchlistCount > 0;
+        const bodyNote = hasWatchlistNext
+            ? `${eligibleRaceIds.length} race(s) below, priced as shown. <b>This does NOT submit yet</b> — next you'll be asked about ${watchlistCount} Watchlist horse${watchlistCount === 1 ? '' : 's'} running today; nothing is sent to OrePro until you choose on that screen.`
+            : `${eligibleRaceIds.length} race(s) will be applied + submitted to OrePro. Review every ticket, then confirm — this is the last stop before anything is placed.`;
+        const goLabel = hasWatchlistNext
+            ? `Continue → Watchlist (${watchlistCount})`
+            : `📤 Place ${eligibleRaceIds.length} race(s)`;
+
         const overlay = document.createElement('div');
         overlay.id = 'day-apply-preview';
         overlay.className = 'modal-overlay';
@@ -9530,14 +9742,14 @@ function showDayApplyPreview(eligibleRaceIds, date) {
                     <div class="modal-header-actions"><button class="close-btn" id="day-preview-x">✖</button></div>
                 </div>
                 <div style="padding:2px 16px 6px;color:#9fb2c8;font-size:13px;">
-                    ${eligibleRaceIds.length} race(s) will be applied + submitted to OrePro. Review every ticket, then confirm — this is the last stop before anything is placed.
+                    ${bodyNote}
                 </div>
                 <div style="overflow:auto;padding:6px 16px;">${sections}</div>
                 <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-top:1px solid #243044;">
                     <div style="font-size:15px;font-weight:700;">Day total: ¥${dayTotal.toLocaleString()}</div>
                     <div style="display:flex;gap:8px;">
                         <button id="day-preview-cancel" style="padding:7px 14px;border-radius:6px;border:1px solid #3a4a60;background:#1b2230;color:#cdd9e8;cursor:pointer;">Cancel</button>
-                        <button id="day-preview-go" style="padding:7px 14px;border-radius:6px;border:1px solid #2f8f57;background:#176b3a;color:#eafff0;font-weight:700;cursor:pointer;">📤 Place ${eligibleRaceIds.length} race(s)</button>
+                        <button id="day-preview-go" style="padding:7px 14px;border-radius:6px;border:1px solid #2f8f57;background:#176b3a;color:#eafff0;font-weight:700;cursor:pointer;">${goLabel}</button>
                     </div>
                 </div>
             </div>`;
@@ -9628,13 +9840,32 @@ async function applyAllDayVotesToOrePro() {
         if (!first) return;
     }
 
-    // Final gate: the full-day DRY-RUN PREVIEW (mandatory). Shows every ticket that will be placed,
-    // priced by buildRaceBetLines — the same code the placement path uses — so what you see is what
-    // gets sent. Confirm here = place + submit; cancel = nothing hits OrePro.
-    const proceed = await showDayApplyPreview(eligible, date);
+    // Watchlist candidates computed BEFORE the day preview so its button/copy can honestly say whether
+    // a further step follows — s60: an earlier version showed "last stop before anything is placed" on
+    // this preview even when a Watchlist step still came after it, which is exactly the confusion that
+    // led to a real live incident (see showWatchlistSideBetPopup's comment for the full story).
+    const watchlistCandidates = sideBetsEnabled() ? collectWatchlistSideBetCandidates(eligible) : [];
+
+    // Day preview (NOT the final gate when Watchlist candidates exist — see watchlistCandidates.length
+    // check below). Shows every ticket that will be placed, priced by buildRaceBetLines — the same
+    // code the placement path uses — so what you see is what gets sent. Cancel here = nothing hits
+    // OrePro, same as always.
+    const proceed = await showDayApplyPreview(eligible, date, watchlistCandidates.length);
     if (!proceed) {
         setOreProSessionStatus('Day apply cancelled from the preview — nothing was sent to OrePro.', 'info');
         return;
+    }
+
+    // Watchlist opt-in — separate from the disciplined ◎ spine (unaffected either way). If any
+    // candidates exist, THIS is the true final gate (Cancel here aborts the whole apply — nothing is
+    // sent to OrePro). Silent pass-through (no popup, proceed=true) if none qualify or side bets are
+    // off in settings.
+    if (watchlistCandidates.length) {
+        const proceedAfterWatchlist = await showWatchlistSideBetPopup(eligible, date);
+        if (!proceedAfterWatchlist) {
+            setOreProSessionStatus('Day apply cancelled from the Watchlist step — nothing was sent to OrePro.', 'info');
+            return;
+        }
     }
 
     const btn = document.getElementById('btn-orepro-apply-day');
@@ -12483,6 +12714,19 @@ function refreshRaceHeaderMeta(raceId) {
     meta.innerHTML = `${raceStatusEmoji(race)} ${info.time} | ${trackName(info.place)} R${info.race_number}: ${localName}${raceSurfaceDistChip(info)} ${winBadgesHtml}`;
 }
 
+// Patches the payout table into BOTH in-memory race representations — globalRaceInfo[raceId] (a
+// separate shallow snapshot taken at render time, line ~5958: `{ ...race.info, _timeline }`), used
+// by the home tab's updateQuickStats, and the nested race.info found via findRaceById (the
+// globalRacesByDate tree), used by the race-header badge. They are NOT the same object, so patching
+// only one leaves the other permanently reading stale/empty payouts. s60 fix — see
+// LiveBroadcastService.BroadcastResultsAsync, which now actually sends this.
+function patchRaceResultsJson(raceId, resultsJson) {
+    if (!raceId || resultsJson == null) return;
+    if (globalRaceInfo[raceId]) globalRaceInfo[raceId].results_json = resultsJson;
+    const race = findRaceById(raceId);
+    if (race?.info) race.info.results_json = resultsJson;
+}
+
 function patchRaceEntries(raceId, entries, fields) {
     if (!raceId || !Array.isArray(entries)) return;
     const race = findRaceById(raceId);
@@ -12550,8 +12794,13 @@ function startLiveHub() {
 
     conn.on('ResultsUpdated', payload => {
         if (!payload) return;
+        // Payout table FIRST — patchRaceEntries below re-renders the header (and thus scores the
+        // bet) as its last step, so results_json must already be in place before that happens.
+        patchRaceResultsJson(payload.raceId, payload.resultsJson);
         patchRaceEntries(payload.raceId, payload.entries, ['finish']);
-        refreshSunkCostStat(); // results landing credits wins back against the tally
+        refreshSunkCostStat(); // Voting-tab all-time net (server-derived)
+        updateQuickStats();    // Home-tab Day Net — s60 fix: this was never called from here before,
+                                // so a live win never moved the home tab no matter how long you waited.
     });
 
     conn.start()

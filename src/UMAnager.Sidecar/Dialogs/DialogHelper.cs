@@ -1,174 +1,125 @@
 // ============================================================
 // FILE: DialogHelper.cs
 // LAYER: Sidecar (Win32 P/Invoke)
-// PURPOSE: Detects the JV-Link CD/ROM setup dialog that can appear after JVOpen so the operator
-//          can be prompted to click through it (FindWindow/EnumChildWindows helpers).
-// LAST DOCUMENTED: 2026-06-02
+// PURPOSE: Auto-dismisses the JV-Link "セットアップ" (start-kit CD/DVD) dialog that JV-Link pops on
+//          the STA thread during JVInit/JVOpen. That dialog BLOCKS the Sidecar's single COM thread
+//          until a human clicks it, so a background watcher thread polls for it and clicks the
+//          "no CD" radio (id 228) then OK (id 1) — exactly the manual dismissal the operator used
+//          to perform by hand on every Sidecar restart.
+// CAUTION: The watcher deliberately runs OFF the STA thread. When the dialog is up, the STA thread
+//          is parked inside the COM call, so only another thread can reach in and clear it.
+// LAST DOCUMENTED: 2026-07-10
 // ============================================================
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace UMAnager.Sidecar.Dialogs;
 
 /// <summary>
-/// P/Invoke-based dialog detector for JV-Link setup/configuration dialogs.
-/// Monitors for the "CD/ROM setup" dialog that appears after JVOpen.
-/// The user is expected to manually interact with the dialog (click "No" to proceed).
+/// Win32 P/Invoke auto-dismisser for the JV-Link setup dialog. Start it once at Sidecar startup;
+/// it runs for the life of the process on its own background thread.
 /// </summary>
 internal static class DialogHelper
 {
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc cb, IntPtr l);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] private static extern IntPtr GetDlgItem(IntPtr hDlg, int id);
+    [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
+    [DllImport("user32.dll")] private static extern uint IsDlgButtonChecked(IntPtr hDlg, int id);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string? lpClassName, string? lpWindowName);
+    private delegate bool EnumProc(IntPtr h, IntPtr l);
 
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hWnd);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    private const uint BM_CLICK = 0x00F5;
+    private const string DialogClass = "#32770";      // standard Win32 dialog window class
+    private const int RadioNoCd = 228;                // "スタートキット(CD/DVD-ROM)を持っていない"
+    private const int RadioHasCd = 227;               // "…を持っている（推奨）"
+    private const int BtnOk = 1;                       // IDOK
+    private const string NoCdMarker = "持っていない"; // label check on radio 228, so we never OK a look-alike
 
     /// <summary>
-    /// Waits for the JV-Link setup dialog to be dismissed by the user.
-    /// Polls for the dialog window and logs when it appears.
-    /// The user is expected to interact with the dialog (click "No") manually.
+    /// Spawns a background thread that watches for the JV-Link setup dialog for the life of the
+    /// process and auto-clicks "no CD" + OK whenever it appears. Safe to call once at startup.
     /// </summary>
-    /// <param name="timeoutSeconds">Maximum time to wait for dialog to be dismissed (default 90 seconds).</param>
-    /// <returns>True if dialog was detected; False if no dialog found within timeout.</returns>
-    public static bool WaitForDialogDismissal(int timeoutSeconds = 90)
+    public static void StartAutoDismissWatcher(CancellationToken ct)
     {
-        var startTime = DateTime.UtcNow;
-        const int pollIntervalMs = 500; // Check every 500ms to reduce CPU usage
-        bool dialogDetected = false;
-
-        Console.WriteLine($"[DialogHelper] Monitoring for JV-Link setup dialog (up to {timeoutSeconds}s)...");
-        Console.WriteLine("[DialogHelper] ⚠️  If a dialog appears, please click the 'No' button to proceed.");
-
-        while ((DateTime.UtcNow - startTime).TotalSeconds < timeoutSeconds)
+        var t = new Thread(() => WatchLoop(ct))
         {
-            IntPtr dialogHwnd = FindDialogWindow();
-
-            if (dialogHwnd != IntPtr.Zero && !dialogDetected)
-            {
-                dialogDetected = true;
-                Console.WriteLine($"[DialogHelper] ✓ Dialog detected! Waiting for you to dismiss it...");
-            }
-
-            // If dialog was detected but is no longer visible, it's been dismissed
-            if (dialogDetected && dialogHwnd == IntPtr.Zero)
-            {
-                Console.WriteLine($"[DialogHelper] ✓ Dialog dismissed. Proceeding with data read...");
-                return true;
-            }
-
-            System.Threading.Thread.Sleep(pollIntervalMs);
-        }
-
-        if (dialogDetected)
-        {
-            Console.WriteLine($"[DialogHelper] ⚠️  Dialog was detected but not dismissed within {timeoutSeconds}s timeout.");
-            // Timeout, but dialog was at least detected
-            return true;
-        }
-
-        Console.WriteLine($"[DialogHelper] No dialog detected within {timeoutSeconds}s (proceeding without dialog).");
-        return false;
+            IsBackground = true,
+            Name = "JvSetupDialogWatcher",
+        };
+        t.Start();
+        Console.WriteLine("[DialogHelper] JV-Link setup-dialog auto-dismiss watcher started.");
     }
 
-    /// <summary>
-    /// Finds the JV-Link setup dialog window by searching for known titles.
-    /// </summary>
-    private static IntPtr FindDialogWindow()
+    private static void WatchLoop(CancellationToken ct)
     {
-        // Search for windows with common JV-Link dialog titles
-        string[] possibleTitles = new[]
+        while (!ct.IsCancellationRequested)
         {
-            "JV-Link", // Generic JV-Link window
-            "Setup",   // Setup dialog
-            "設定",    // Japanese for "Setup"
-            "JRA-VAN", // Could be titled with this
-        };
-
-        foreach (var title in possibleTitles)
-        {
-            IntPtr hwnd = FindWindow(null, title);
-            if (hwnd != IntPtr.Zero && IsWindowVisible(hwnd))
+            try
             {
-                // Verify this is a dialog by checking its window class
-                var className = GetWindowClassName(hwnd);
-                if (className.Contains("#32770") || className.Contains("Dialog"))
+                var hwnd = FindSetupDialog();
+                if (hwnd != IntPtr.Zero)
                 {
-                    return hwnd;
+                    DismissSetupDialog(hwnd);
+                    Thread.Sleep(1500); // cooldown so we don't re-click while it tears down
                 }
             }
-        }
-
-        // If no exact match, enumerate all visible top-level windows and look for setup-like dialogs
-        return FindDialogByEnumeration();
-    }
-
-    /// <summary>
-    /// Enumerates all visible windows to find one that looks like a JV-Link setup dialog.
-    /// </summary>
-    private static IntPtr FindDialogByEnumeration()
-    {
-        IntPtr foundWindow = IntPtr.Zero;
-        var collected = new List<(IntPtr hwnd, string title)>();
-
-        EnumWindowsProc callback = (hwnd, lParam) =>
-        {
-            if (!IsWindowVisible(hwnd))
-                return true; // Continue enumeration
-
-            var sb = new System.Text.StringBuilder(256);
-            GetWindowText(hwnd, sb, 256);
-            var title = sb.ToString();
-
-            // Look for windows with "setup", "配置", or other setup-related keywords
-            if (title.Contains("Setup", StringComparison.OrdinalIgnoreCase) ||
-                title.Contains("JV-Link", StringComparison.OrdinalIgnoreCase) ||
-                title.Contains("JRA-VAN", StringComparison.OrdinalIgnoreCase) ||
-                title.Contains("配置") ||
-                title.Contains("セットアップ"))
+            catch (Exception ex)
             {
-                var className = GetWindowClassName(hwnd);
-                if (className.Contains("#32770") || title.Contains("Dialog"))
-                {
-                    collected.Add((hwnd, title));
-                }
+                Console.Error.WriteLine($"[DialogHelper] watcher error: {ex.Message}");
             }
 
-            return true; // Continue enumeration
-        };
-
-        EnumChildWindows(IntPtr.Zero, callback, IntPtr.Zero);
-
-        // Return the first likely dialog found
-        if (collected.Count > 0)
-        {
-            foundWindow = collected[0].hwnd;
-            Console.WriteLine($"[DialogHelper] Enumeration found window: '{collected[0].title}'");
+            Thread.Sleep(500);
         }
-
-        return foundWindow;
     }
 
-    /// <summary>
-    /// Gets the window class name (used to identify dialog windows).
-    /// </summary>
-    private static string GetWindowClassName(IntPtr hwnd)
+    /// <summary>Finds the JV-Link setup dialog, or IntPtr.Zero if it isn't on screen.</summary>
+    private static IntPtr FindSetupDialog()
     {
-        var sb = new System.Text.StringBuilder(256);
-        GetClassName(hwnd, sb, 256);
-        return sb.ToString();
+        IntPtr found = IntPtr.Zero;
+        EnumProc cb = (h, l) =>
+        {
+            if (!IsWindowVisible(h)) return true;
+
+            var cls = new StringBuilder(64);
+            GetClassName(h, cls, cls.Capacity);
+            if (cls.ToString() != DialogClass) return true;
+
+            // Must carry both radios + OK to be our dialog…
+            if (GetDlgItem(h, RadioNoCd) == IntPtr.Zero) return true;
+            if (GetDlgItem(h, RadioHasCd) == IntPtr.Zero) return true;
+            var ok = GetDlgItem(h, BtnOk);
+            if (ok == IntPtr.Zero) return true;
+
+            // …and the "no CD" radio's label must match, so we never OK a look-alike #32770 dialog.
+            var label = new StringBuilder(256);
+            GetWindowText(GetDlgItem(h, RadioNoCd), label, label.Capacity);
+            if (!label.ToString().Contains(NoCdMarker)) return true;
+
+            found = h;
+            return false; // stop enumeration
+        };
+        EnumWindows(cb, IntPtr.Zero);
+        return found;
     }
 
-    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
-    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+    /// <summary>Selects the "no CD" radio then clicks OK — the operator's manual dismissal.</summary>
+    private static void DismissSetupDialog(IntPtr hwnd)
+    {
+        var radio = GetDlgItem(hwnd, RadioNoCd);
+        var ok = GetDlgItem(hwnd, BtnOk);
+        if (radio == IntPtr.Zero || ok == IntPtr.Zero) return;
 
+        Console.WriteLine("[DialogHelper] JV-Link setup dialog detected — selecting 'no CD' + OK.");
+        SendMessage(radio, BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+        Thread.Sleep(250);
+
+        if (IsDlgButtonChecked(hwnd, RadioNoCd) == 0)
+            Console.Error.WriteLine("[DialogHelper] 'no CD' radio did not register as checked; clicking OK anyway.");
+
+        SendMessage(ok, BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+        Console.WriteLine("[DialogHelper] JV-Link setup dialog dismissed.");
+    }
 }

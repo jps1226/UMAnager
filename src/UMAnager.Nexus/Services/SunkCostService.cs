@@ -79,14 +79,30 @@ public sealed class SunkCostService
         if (perRace.Count == 0)
             return SunkCostSummary.Empty(resetAt);
 
+        // s60: when scoped to a single day (jstRaceDate set — the per-race win ping's "Day net"),
+        // only SETTLED races move the money totals, mirroring the frontend home-tab Day Net (fixed
+        // the same session): starts the day at ¥0, moves by each race's own net once it settles — a
+        // still-running race's stake no longer drags it into the red before it's even run. The
+        // all-time / lifetime tally (jstRaceDate == null, the Voting tab panel) keeps the original
+        // sunk-cost model unchanged — every placed bet counts as "at risk" immediately, which IS the
+        // point there. (Found live: fixing which races got INCLUDED here earlier tonight exposed
+        // this pre-existing "counts immediately" math for the first time on Discipline race — Day
+        // net briefly showed the full day's staked total, e.g. -¥300,000+, instead of the settled-
+        // only figure.)
         long totalStaked = 0, totalWon = 0, sideStaked = 0, sideWon = 0;
         int settled = 0, pending = 0, hits = 0;
         foreach (var r in perRace)
         {
+            if (r.HasResults) settled++; else pending++;
+        }
+        var scored = jstRaceDate.HasValue ? perRace.Where(r => r.HasResults) : perRace;
+        foreach (var r in scored)
+        {
             totalStaked += r.Staked;
             sideStaked  += r.SideStaked;
-            if (r.HasResults) { settled++; totalWon += r.Won; sideWon += r.SideWon; if (r.Won > 0) hits++; }
-            else pending++;
+            totalWon    += r.Won;
+            sideWon     += r.SideWon;
+            if (r.Won > 0) hits++;
         }
 
         return new SunkCostSummary(
@@ -115,12 +131,21 @@ public sealed class SunkCostService
     {
         var (marks, lockedRaces, profiles) = await LoadMarksAndLocksAsync();
 
-        // Placed races = locked AND carry at least one (non-X) mark.
+        // Placed races = locked AND (carry ≥1 non-X manual mark, OR have a frozen bet-line profile
+        // from Discipline's Apply). Discipline never writes manual marks (the engine picks the bet,
+        // not a click — full decouple, s56), so betLines is the ONLY placed-signal for those races.
+        // s60 fix: this exact "globalMarks-blindness" pattern was already fixed in THREE other spots
+        // during s59 (Bets-tab race list, Apply Day Votes' hasMarks gate, BetWinNotifier's own
+        // win/loss check) but missed here — silently zeroed the sunk-cost tally, the "Day net" figure
+        // in Discord win pings, and the TV ticker's day-of-action view for every Discipline race
+        // since the s56 full-decouple shipped.
         var markCountByRace = new Dictionary<string, int>();
         foreach (var raceId in lockedRaces)
         {
             var n = marks.Keys.Count(k => k.StartsWith(raceId + "_"));
-            if (n > 0) markCountByRace[raceId] = n;
+            if (n > 0) { markCountByRace[raceId] = n; continue; }
+            if (profiles.TryGetValue(raceId, out var p) && p.BetLines is { Count: > 0 } bl)
+                markCountByRace[raceId] = bl.SelectMany(l => l.AxisPp.HasValue ? l.Pps.Append(l.AxisPp.Value) : l.Pps).Distinct().Count();
         }
 
         var result = new List<RaceRecap>();

@@ -14,6 +14,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using UMAnager.Sidecar.Com;
+using UMAnager.Sidecar.Dialogs;
 using UMAnager.Sidecar.JvLink;
 using UMAnager.Sidecar.Pipes;
 
@@ -33,6 +34,11 @@ static int Run(CancellationToken ct)
 {
     // Register CodePages encoding provider for Shift-JIS (CP932) support
     System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+
+    // Auto-dismiss JV-Link's "セットアップ" (start-kit CD/DVD) dialog. It pops on the STA thread
+    // during JVInit/JVOpen and blocks the whole Sidecar until dismissed; a background watcher
+    // clicks "no CD" + OK for us. Started before the COM handshake so it's already listening.
+    DialogHelper.StartAutoDismissWatcher(ct);
 
     // ── Configuration ────────────────────────────────────────────────────────
     var config = new ConfigurationBuilder()

@@ -241,9 +241,9 @@
             <div class="top-bar-right">
                 <div class="top-bar-right-row">
                     <div id="quick-stats" class="quick-stats">
-                        <div class="quick-stat-block">
+                        <div id="qs-pl-block" class="quick-stat-block" onmouseenter="showDayNetBreakdown(event)" onmouseleave="hideDayNetBreakdown()">
                             <div class="quick-stat-label">Day Net</div>
-                            <div id="qs-pl" class="quick-stat-value" title="The viewed day's net: every placed (locked) bet's stake counts immediately (in the red), climbing back as bets win.">—</div>
+                            <div id="qs-pl" class="quick-stat-value">—</div>
                             <div id="qs-pl-sub" class="quick-stat-sub">stake / net</div>
                         </div>
                     </div>
@@ -442,7 +442,7 @@
                         </label>
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-sideBetsAuto" onchange="updateSidebarSettings()">
-                            <span title="Under Discipline, auto-suggest a ¥1k loyalty side bet on each of your Favorites running in a race (place; two+ in one race → one Wide). Suggestions appear in the per-race Bets strip and are one-click removable — nothing places until you apply the race. Turn off to start every race side-bet-free.">♥ Auto-suggest side bets</span>
+                            <span title="Under Discipline, lets you opt IN a ¥1k loyalty side bet on your Favorites running that day (place; two+ in one race → one Wide) — via the per-race Bets strip's ＋ chip, or a one-time popup at Apply Day Votes time. Opt-in only: nothing bets unless you check it. Turn off to hide side bets entirely.">♥ Watchlist side bets</span>
                         </label>
                         <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
                             <span>🎯 Voting Mark Mode</span>
@@ -709,6 +709,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260704-3"></script>
+<script src="/static/script.js?v=20260710-7"></script>
 </body>
 </html>

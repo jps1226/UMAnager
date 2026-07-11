@@ -56,6 +56,20 @@ public sealed class LiveBroadcastService
             })
             .ToListAsync(ct);
 
+        // ResultsUpdated also needs the payout table (Races.ResultsJson). Without it the client can
+        // never actually SCORE a placed bet from a live push — only Finish positions patch via the
+        // entries above — so a win/loss verdict would stay stuck until a full page reload, no matter
+        // how long you wait. s60 fix: found live when a real win's badge + Day Net never updated,
+        // even a minute after the Discord ping (which reads the DB directly and was already correct).
+        Dictionary<string, string?> resultsJsonByRace = new();
+        if (method == "ResultsUpdated")
+        {
+            resultsJsonByRace = await db.Races.AsNoTracking()
+                .Where(r => ids.Contains(r.RaceId))
+                .Select(r => new { r.RaceId, r.ResultsJson })
+                .ToDictionaryAsync(r => r.RaceId, r => r.ResultsJson, ct);
+        }
+
         var byRace = rows.GroupBy(r => r.RaceId);
         foreach (var grp in byRace)
         {
@@ -69,7 +83,11 @@ public sealed class LiveBroadcastService
                 finish  = e.finish?.ToString() ?? ""
             }).ToList();
 
-            await _hub.Clients.All.SendAsync(method, new { raceId = grp.Key, entries }, ct);
+            object payload = method == "ResultsUpdated"
+                ? new { raceId = grp.Key, entries, resultsJson = resultsJsonByRace.GetValueOrDefault(grp.Key) }
+                : new { raceId = grp.Key, entries };
+
+            await _hub.Clients.All.SendAsync(method, payload, ct);
         }
 
         _logger.LogInformation("[LiveBroadcast] {Method} sent for {Count} race(s).", method, ids.Count);
