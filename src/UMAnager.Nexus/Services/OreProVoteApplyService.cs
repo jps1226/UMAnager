@@ -441,13 +441,18 @@ public sealed class OreProVoteApplyService
                     : Result("expired", false, "OrePro session is NOT logged in (the cookie looks expired). Re-copy the Cookie header from a fresh OrePro login into Settings → OrePro.");
             }
 
-            // No race supplied — probe the bet race-list page. Logged-in pages link to shutuba
-            // races; the login redirect does not.
+            // No race supplied — probe the bet race-list page for LOGIN-GATED markers only.
+            // NOTE (s61 fix): we used to also treat `shutuba.html?race_id=` links as proof of login,
+            // but those race-card links are served to LOGGED-OUT visitors too (the race list is public),
+            // so a dead cookie could match them and FALSE-POSITIVE as "logged in — bets can be placed."
+            // Only the logout control and the login-gated /mydata/ area actually require a session, so
+            // trust just those. Biasing toward a false NEGATIVE here is the safe direction (worst case:
+            // "open a race and re-test"); a false positive would tell the operator they can bet when they
+            // can't. When a race is available the caller uses the stronger ContainsLoggedInMarker path above.
             using var lreq = new HttpRequestMessage(HttpMethod.Get, BetReferer);
             using var lresp = await http.SendAsync(lreq, ct);
             var body = await lresp.Content.ReadAsStringAsync(ct);
-            var loggedIn = body.Contains("shutuba.html?race_id=", StringComparison.OrdinalIgnoreCase)
-                           || body.Contains("ログアウト", StringComparison.Ordinal)
+            var loggedIn = body.Contains("ログアウト", StringComparison.Ordinal)
                            || body.Contains("/mydata/", StringComparison.OrdinalIgnoreCase);
             return loggedIn
                 ? Result("ok", true, "OrePro session is logged in.")
