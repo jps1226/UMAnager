@@ -116,6 +116,14 @@ public sealed class BetWinNotifier
             h => h.HorseId,
             h => !string.IsNullOrEmpty(h.NameEn) ? h.NameEn! : (h.NameJa ?? h.HorseId));
 
+        // Whether a Discord webhook is even configured. When it ISN'T, win-pings are intentionally
+        // disabled, so we still mark winners "notified" (nothing to deliver → don't re-evaluate them
+        // forever). When it IS configured, we only mark a WIN notified once Discord actually accepts
+        // the message — a failed send (e.g. 429 rate-limit, or a transient network drop) leaves the
+        // race un-notified so the next tick retries it, instead of silently losing the ping (s60).
+        var webhookConfigured = !string.IsNullOrWhiteSpace(
+            await _settings.GetStringAsync(SettingsService.Keys.DiscordWebhookUrl));
+
         var anyNotified = false;
         SunkCostSummary? running = null; // cumulative tally snapshot — computed once, lazily
         foreach (var raceId in freshCandidates)
@@ -152,8 +160,9 @@ public sealed class BetWinNotifier
                 : TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts);
             pdoc?.Dispose();
 
-            notified.Add(raceId);
-            if (!outcome.AnyHit) continue; // placed + settled but lost — no ping
+            // Loser: placed + settled but didn't hit → mark notified (nothing to deliver) and move on.
+            // Winners are marked notified LATER, only once Discord confirms delivery (see below).
+            if (!outcome.AnyHit) { notified.Add(raceId); continue; }
 
             // Pills = the template lines that hit (e.g. "3連複", "ワイド×2").
             var pills = outcome.HitLabels.GroupBy(x => x)
@@ -198,16 +207,33 @@ public sealed class BetWinNotifier
                 $"This race: {raceSign}¥{Math.Abs(raceNet):N0} (won ¥{outcome.Won:N0} − staked ¥{outcome.Staked:N0}) · "
               + $"Day net {runSign}¥{Math.Abs(running.NetYen):N0}";
 
+            bool delivered;
             try
             {
-                await _discord.NotifyMarkHitsAsync(label, pills, hits, runningLine, ct);
-                _logger.LogInformation("[BetWin] Race {RaceId} won ¥{Won:N0} ({Pills})",
-                    raceId, outcome.Won, string.Join(",", pills));
+                delivered = await _discord.NotifyMarkHitsAsync(label, pills, hits, runningLine, ct);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "[BetWin] Discord notify failed for race {RaceId}", raceId);
+                // SendAsync already swallows exceptions internally, so this is belt-and-suspenders.
+                _logger.LogWarning(ex, "[BetWin] Discord notify threw for race {RaceId}", raceId);
+                delivered = false;
             }
+
+            if (delivered)
+                _logger.LogInformation("[BetWin] Race {RaceId} won ¥{Won:N0} ({Pills}) — delivered to Discord",
+                    raceId, outcome.Won, string.Join(",", pills));
+            else
+                _logger.LogWarning("[BetWin] Race {RaceId} won ¥{Won:N0} ({Pills}) — NOT delivered to Discord; " +
+                    "leaving un-notified so the next tick retries", raceId, outcome.Won, string.Join(",", pills));
+
+            // Only bank the race as "notified" once it's genuinely delivered — UNLESS no webhook is
+            // configured at all, in which case there's nothing to retry and we mark it to avoid an
+            // endless re-evaluation loop. This is the actual fix for the s60 silent-drop: a 429 (or
+            // any non-2xx) now leaves the race eligible for the next recheck tick instead of being
+            // marked done with the ping lost.
+            if (!webhookConfigured || delivered)
+                notified.Add(raceId);
+
             anyNotified = true;
         }
 

@@ -18,7 +18,10 @@ public interface IDiscordNotifier
     Task NotifyPhaseChangedAsync(AppPhase from, AppPhase to, CancellationToken ct = default);
     Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default);
-    Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, string? runningNetLine = null, CancellationToken ct = default);
+    /// <returns>true only if the webhook POST actually reached Discord with a 2xx response. false if
+    /// the webhook is unset, or Discord rejected/failed the request (e.g. 429 rate-limit). Callers that
+    /// gate "already notified" bookkeeping on delivery MUST honour this — see BetWinNotifier.</returns>
+    Task<bool> NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, string? runningNetLine = null, CancellationToken ct = default);
     Task NotifyPostPositionsConfirmedAsync(string raceDate, int raceCount, CancellationToken ct = default);
     Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default);
@@ -86,7 +89,7 @@ public sealed class DiscordNotifier : IDiscordNotifier
     public Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default)
         => SendAsync($":moneybag: **Bet card won** on `{raceId}` — {description} → ¥{payout:N0}", ct);
 
-    public Task NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, string? runningNetLine = null, CancellationToken ct = default)
+    public Task<bool> NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, string? runningNetLine = null, CancellationToken ct = default)
     {
         var pills = string.Join(" · ", hitPills);
         var hitList = hits.OrderBy(h => h.Finish).ToList();
@@ -138,10 +141,14 @@ public sealed class DiscordNotifier : IDiscordNotifier
     public Task NotifyTestAsync(CancellationToken ct = default)
         => SendAsync($":wave: **UMAnager test ping** — webhook is wired up. ({DateTime.UtcNow:HH:mm:ss} UTC)", ct);
 
-    private async Task SendAsync(string content, CancellationToken ct)
+    /// <returns>true only if Discord accepted the message (2xx). false if the webhook is unset, or the
+    /// POST was rejected (e.g. HTTP 429 rate-limit) or threw. A non-2xx is NOT success — historically
+    /// this method returned void, so a 429 (or any rejection) was logged but invisible to callers, which
+    /// then marked the race "already notified" and silently dropped the ping (real incident, s60).</returns>
+    private async Task<bool> SendAsync(string content, CancellationToken ct)
     {
         var url = await _settings.GetStringAsync(SettingsService.Keys.DiscordWebhookUrl);
-        if (string.IsNullOrWhiteSpace(url)) return;
+        if (string.IsNullOrWhiteSpace(url)) return false;
 
         try
         {
@@ -151,11 +158,14 @@ public sealed class DiscordNotifier : IDiscordNotifier
             {
                 var body = await resp.Content.ReadAsStringAsync(ct);
                 _logger.LogWarning("[Discord] Webhook returned {Status}: {Body}", (int)resp.StatusCode, body);
+                return false;
             }
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[Discord] Webhook POST failed.");
+            return false;
         }
     }
 }
