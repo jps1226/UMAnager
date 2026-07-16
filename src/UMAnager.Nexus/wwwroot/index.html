@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UMAnager</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260630-1">
+    <link rel="stylesheet" href="/static/style.css?v=20260711-4">
 </head>
 <body>
 
@@ -12,6 +12,10 @@
      (moved 2026-05-22 from fixed position). -->
 <div id="mobile-sidebar-backdrop" class="mobile-sidebar-backdrop" onclick="toggleMobileSidebar(false)"></div>
 
+<!-- .sidebar-shell wraps .sidebar so the collapse toggle can be positioned relative to .sidebar's OWN
+     box (guaranteed to track its true rendered edge under any zoom level) without being clipped by
+     .sidebar's own overflow:hidden (needed for the width:0 collapse animation to actually hide content). -->
+<div class="sidebar-shell">
 <div class="sidebar">
     <div class="sidebar-brand-row">
         <div class="sidebar-brand-left">
@@ -187,6 +191,11 @@
     <div class="sidebar-footer">
         <button id="global-close-server-btn" class="global-close-server-btn" onclick="closeServerInstances()" title="Close all running UMAnager server instances">⏻ Close Server</button>
     </div>
+</div>
+
+<!-- Positioned absolute, relative to .sidebar-shell — anchored to .sidebar's actual box, not a
+     separately-computed CSS-var calc() (that's what drifted under zoom). -->
+<button id="sidebar-collapse-toggle" class="sidebar-collapse-toggle" onclick="toggleSidebarCollapsed()" title="Collapse sidebar">‹</button>
 </div>
 
 <div class="main-content">
@@ -471,11 +480,12 @@
                             <input type="number" id="setting-tvModeSplitPercent" min="20" max="80" step="1" onchange="updateSidebarSettings()" class="tool-input-compact" style="max-width:90px;">
                         </label>
                         <label class="settings-option-row" style="align-items:center; justify-content:space-between; gap:10px;">
-                            <span title="Shrinks or enlarges the whole dashboard. Fixes 'everything's too big' under Windows display scaling (e.g. 125%). Auto-detects a default for this screen; drag to taste — it previews live.">🔎 UI Scale</span>
-                            <span style="display:flex; align-items:center; gap:8px;">
-                                <input type="range" id="setting-uiScalePercent" min="50" max="130" step="5" oninput="onUiScaleInput(this.value)" onchange="updateSidebarSettings()" style="width:120px;">
-                                <span id="setting-uiScalePercent-val" style="min-width:38px; text-align:right; font-size:12px;">100%</span>
-                            </span>
+                            <span title="Auto-detected from this screen's resolution — shrinks the dashboard on a smaller/lower-res monitor so it matches how it looks on a 2K screen. Per-device: each screen gets its own value, nothing to tune.">🔎 UI Scale</span>
+                            <span id="setting-uiScalePercent-val" style="font-size:12px;color:#9fb2c8;">100% (auto)</span>
+                        </label>
+                        <label class="settings-option-row dev-only" style="align-items:center; justify-content:space-between; gap:10px;">
+                            <span title="Force a specific UI Scale on THIS device only, overriding auto-detection — for troubleshooting a monitor the auto heuristic gets wrong. Clear the field to go back to auto.">🔧 UI Scale override (this device)</span>
+                            <input type="number" id="setting-uiScaleOverride" min="50" max="130" step="5" placeholder="auto" onchange="onUiScaleOverrideChange(this.value)" class="tool-input-compact" style="max-width:70px;">
                         </label>
                         <label class="settings-option-row">
                             <input type="checkbox" id="setting-tvModePanelsFlipped" onchange="updateSidebarSettings()">
@@ -709,6 +719,6 @@
 </div>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
-<script src="/static/script.js?v=20260710-7"></script>
+<script src="/static/script.js?v=20260716-1"></script>
 </body>
 </html>

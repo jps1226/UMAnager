@@ -4,6 +4,30 @@ function bootMark(label) {
 }
 bootMark('scriptStart'); // earliest point this script can run: end of HTML parse + script.js download
 
+// QOL: collapsible sidebar (desktop only — see style.css .sidebar-collapse-toggle / body.sidebar-collapsed).
+// Restored here, at the top of the file, so it applies as early as possible and avoids a flash of the
+// expanded sidebar on load.
+const SIDEBAR_COLLAPSED_KEY = 'umanager-sidebar-collapsed';
+if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1') {
+    document.body.classList.add('sidebar-collapsed');
+    // The toggle button's HTML hardcodes the expanded icon (‹) — sync it if we're restoring collapsed.
+    // Button element already exists: this script tag is at the end of <body>, after the button's markup.
+    const _sidebarBtn = document.getElementById('sidebar-collapse-toggle');
+    if (_sidebarBtn) { _sidebarBtn.textContent = '›'; _sidebarBtn.title = 'Expand sidebar'; }
+}
+function toggleSidebarCollapsed() {
+    const collapsed = document.body.classList.toggle('sidebar-collapsed');
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
+    const btn = document.getElementById('sidebar-collapse-toggle');
+    if (btn) {
+        btn.textContent = collapsed ? '›' : '‹';
+        btn.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    }
+    // Collapsing frees enough width that the compact-desktop column set (see isCompactDesktop) no
+    // longer needs to apply — re-render so J%/T% etc. reappear immediately, not just on next refresh.
+    try { rerenderAllRaceTables(); } catch (_) {}
+}
+
 let globalMarks = {};
 let globalRaceMeta = {};
 let globalMarksVersion = 2;
@@ -92,6 +116,25 @@ const RACE_COLUMN_META = {
 // is below the mobile breakpoint. Mobile defaults below.
 const MOBILE_DEFAULT_VISIBLE = new Set(["Shirushi", "PP", "Horse", "Odds", "Fav", "Finish"]);
 
+// s60: a third tier — "compact desktop". Not phone-width, but the screen is small/dense enough that
+// UI Scale sits below 85% (a real laptop, not a deliberate manual choice — see getUiScalePercent, which
+// is per-device and includes any dev-only override, so an operator who overrides to e.g. 90% on a small
+// screen opts back OUT of this). Drops the lowest-priority columns (jockey/trainer win% — a secondary
+// stat, not the primary decision-making ones) to make room, same {key: bool} idea as
+// MOBILE_DEFAULT_VISIBLE but scoped to just what's tight on a laptop, not a phone.
+const COMPACT_HIDDEN_COLUMNS = new Set(["J%", "T%"]);
+function isCompactDesktop() {
+    // <= not < : the recalibrated auto-scale formula now lands laptop-class screens EXACTLY on 85
+    // (see detectSuggestedUiScale) — a strict "<" would silently exclude the exact case this exists for.
+    // Bypassed entirely when the sidebar is collapsed (see toggleSidebarCollapsed) — that frees up
+    // roughly a sidebar-width's worth of room, often enough on its own to fit the dropped columns
+    // again even though the screen itself hasn't changed.
+    try {
+        if (document.body.classList.contains('sidebar-collapsed')) return false;
+        return !isMobileViewport() && getUiScalePercent() <= 85;
+    } catch (_) { return false; }
+}
+
 function normalizeRaceColumnsLayout(layout) {
     const valid = new Set(DEFAULT_RACE_COLUMNS);
     const normalized = [];
@@ -148,7 +191,9 @@ function getVisibleRaceColumns() {
         const mob = getMobileColumnVisibility();
         return layout.filter(c => mob[c.key]).map(c => c.key);
     }
-    return layout.filter(c => c.visible).map(c => c.key);
+    let cols = layout.filter(c => c.visible).map(c => c.key);
+    if (isCompactDesktop()) cols = cols.filter(c => !COMPACT_HIDDEN_COLUMNS.has(c));
+    return cols;
 }
 
 function isVoteSortingEnabled() {
@@ -2823,16 +2868,24 @@ function getSortIcon(r_id, col) {
 function buildTableHeaderRow(r_id) {
     const cols = getVisibleRaceColumns();
     let html = "<tr>";
+    // The Shirushi <th>'s width (style.css) governs the whole column regardless of individual cell
+    // content — so under Discipline on a settled race, where every cell in that column renders empty
+    // (see the Shirushi cellHtmlByCol branch), the header still needs its OWN narrow-state class or
+    // the column stays full-width for a column with nothing in it (s60 fix).
+    const shirushiEmpty = (() => {
+        try { return isDisciplineMode() && raceIsSettledForAutopsy(r_id); } catch (_) { return false; }
+    })();
 
     cols.forEach(col => {
         const meta = RACE_COLUMN_META[col];
         if (!meta) return;
+        const emptyCls = (col === 'Shirushi' && shirushiEmpty) ? ' shirushi-empty' : '';
 
         if (meta.sortable) {
             const sortKey = meta.sortKey;
-            html += `<th class="sortable" data-col="${col}" id="th-${r_id}-${sortKey}" onclick="setSort('${r_id}', '${sortKey}')">${meta.label} ${getSortIcon(r_id, sortKey)}</th>`;
+            html += `<th class="sortable${emptyCls}" data-col="${col}" id="th-${r_id}-${sortKey}" onclick="setSort('${r_id}', '${sortKey}')">${meta.label} ${getSortIcon(r_id, sortKey)}</th>`;
         } else {
-            html += `<th data-col="${col}">${meta.label}</th>`;
+            html += `<th data-col="${col}"${emptyCls ? ` class="${emptyCls.trim()}"` : ''}>${meta.label}</th>`;
         }
     });
 
@@ -2899,6 +2952,25 @@ function buildTableBody(r_id, entries) {
             showEngineDiff = wantManualDiff;
         }
     } catch (_) { showEngineDiff = false; }
+    // s60 fix — a real live discrepancy: once a Discipline bet is LOCKED (frozen at Apply), the grid
+    // must show the horse that was ACTUALLY bet, not a live re-recompute of the engine's CURRENT pick.
+    // The market can move after a bet locks in (◎ favorite-drift, tuning_hypotheses.md H16 — ~26% of
+    // bets drift), so engineMarkByHorse (recomputed fresh on every render) can silently point at a
+    // DIFFERENT horse than the one frozen in betProfile.betLines. Found live: Kokura R1 showed PP10
+    // (the current/live favorite) as the ◎ pick; PP10 WON; the grid still (correctly) scored a loss,
+    // because the actual frozen bet was on PP15, which ran 3rd — the display and the money had quietly
+    // disagreed the whole time. When a frozen single-horse place bet exists, it now overrides the live
+    // read entirely (leans suppressed too — showing a "live lean" next to an already-placed real bet is
+    // the same kind of misleading mix that caused this).
+    let frozenDisciplinePp = null;
+    if (discMode && !discSettled) {
+        try {
+            const frozenLines = getRaceBetProfile(r_id)?.betLines;
+            if (Array.isArray(frozenLines) && frozenLines.length === 1 && frozenLines[0]?.horses?.length === 1) {
+                frozenDisciplinePp = frozenLines[0].horses[0].pp;
+            }
+        } catch (_) { frozenDisciplinePp = null; }
+    }
     entries.forEach(row => {
         const h_id = String(row.Horse_ID).split('.')[0];
         const key = `${r_id}_${h_id}`;
@@ -2967,17 +3039,34 @@ function buildTableBody(r_id, entries) {
                 // Discipline mode: marks are analysis-only and live in the ⓘ popover, so the grid's first
                 // column becomes a read-only ENGINE READ — the cold engine's ◎ (the actual ¥10k place
                 // target) badged, and its 〇▲ leans as quiet notes. No buttons here = nothing on the grid
-                // can place a bet (the safety valve). engineMarkByHorse is the engine's own ranking, so its
-                // ◎ is exactly the horse buildRaceBetLines bets under Discipline — grid and bet never disagree.
+                // can place a bet (the safety valve).
+                //
+                // s60 fix: a LOCKED race shows the FROZEN bet's actual horse (frozenDisciplinePp, computed
+                // above), not a live re-recompute of the engine's current ranking — those can disagree
+                // once the market drifts after a bet locks in (H16). Only an UNLOCKED race (nothing frozen
+                // yet — this IS still a live preview of what Apply would bet right now) falls back to
+                // engineMarkByHorse, and only then do the 〇▲△ "leans" make sense to show at all — once a
+                // real bet is frozen, a live-recomputed lean sitting next to it is the same kind of
+                // misleading mix that caused the original bug, so it's suppressed too.
                 if (discMode) {
                     // Settled race: nothing to show here — the bet/engine read is pre-race, and the actual
-                    // finish already has its own column. Leave the first column empty on review.
-                    if (discSettled) return `<td class="shirushi-cell shirushi-discipline"></td>`;
-                    const eng = engineMarkByHorse[h_id] || '';
+                    // finish already has its own column. Leave the first column empty on review. Distinct
+                    // "shirushi-empty" class (not just shirushi-discipline, which the pill-bearing pre-race
+                    // state below also uses) so CSS can collapse ONLY the truly-empty cell's width — it was
+                    // reserving the same 170px as when it held mark buttons/the engine-read pill (s60 fix).
+                    if (discSettled) return `<td class="shirushi-cell shirushi-discipline shirushi-empty"></td>`;
+                    let eng;
+                    if (frozenDisciplinePp !== null) {
+                        const pp = parseInt(row?.PP, 10);
+                        eng = (Number.isFinite(pp) && pp === frozenDisciplinePp) ? '◎' : '';
+                    } else {
+                        eng = engineMarkByHorse[h_id] || '';
+                    }
                     let inner = '';
                     if (eng === '◎') {
                         const yk = DISCIPLINE_PLACE_STAKE / 1000;
-                        inner = `<span title="The disciplined bet — a flat ¥${DISCIPLINE_PLACE_STAKE.toLocaleString()} place (複勝) on the cold engine's top pick. Cashes if it finishes in the top 3." `
+                        const betNote = frozenDisciplinePp !== null ? ' — the bet actually placed, locked at Apply' : ' (not placed yet — applies at the next Apply Day Votes)';
+                        inner = `<span title="The disciplined bet${betNote}. A flat ¥${DISCIPLINE_PLACE_STAKE.toLocaleString()} place (複勝). Cashes if it finishes in the top 3." `
                             + `style="display:inline-flex;align-items:center;gap:4px;font-size:0.78em;font-weight:700;padding:2px 8px;border-radius:8px;`
                             + `background:#14361f;color:#b9f0c9;border:1px solid #2f8f57;white-space:nowrap;">◎ place ¥${yk}k</span>`;
                     } else if (eng) {
@@ -12094,7 +12183,17 @@ async function showSettingsModal() {
     { const t = document.getElementById('setting-showEngineDisagreement'); if (t) t.checked = (appConfig.ui?.showEngineDisagreement ?? true); }
     { const t = document.getElementById('setting-sideBetsAuto'); if (t) t.checked = (appConfig.ui?.sideBetsAuto !== false); }
     { const os = document.getElementById('setting-oreproDefaultStake'); if (os) os.value = getOreProDefaultStake(); }
-    { const us = document.getElementById('setting-uiScalePercent'); if (us) { const p = getUiScalePercent(); us.value = p; const l = document.getElementById('setting-uiScalePercent-val'); if (l) l.textContent = p + '%'; } }
+    {
+        const auto = detectSuggestedUiScale();
+        const override = localStorage.getItem(UI_SCALE_OVERRIDE_KEY);
+        const l = document.getElementById('setting-uiScalePercent-val');
+        // Screen diagnostics inline (screen.width × devicePixelRatio) — lets a formula-calibration
+        // question get answered by reading this label instead of opening devtools (s60).
+        const diag = `${window.screen?.width || '?'}px × dpr${(window.devicePixelRatio || 1).toFixed(2)}`;
+        if (l) l.textContent = (override !== null ? `${getUiScalePercent()}% (override)` : `${auto}% (auto)`) + ` — ${diag}`;
+        const ov = document.getElementById('setting-uiScaleOverride');
+        if (ov) ov.value = override !== null ? override : '';
+    }
     document.getElementById('setting-showConsole').checked = appConfig.ui?.showConsole ?? true;
     document.getElementById('setting-tvModeSplitPercent').value = Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent))
         ? Number(appConfig.ui?.tvModeSplitPercent)
@@ -12285,7 +12384,9 @@ async function updateSidebarSettings() {
         sideBetsAuto: document.getElementById('setting-sideBetsAuto') ? !!document.getElementById('setting-sideBetsAuto').checked : true,
         oreproDefaultStake: (() => { const v = parseInt(document.getElementById('setting-oreproDefaultStake')?.value, 10); return Number.isFinite(v) && v > 0 ? v : 10000; })(),
         tvModeSplitPercent: parseClampedPercent('setting-tvModeSplitPercent', Number.isFinite(Number(appConfig.ui?.tvModeSplitPercent)) ? Number(appConfig.ui?.tvModeSplitPercent) : 50),
-        uiScalePercent: (() => { const v = parseInt(document.getElementById('setting-uiScalePercent')?.value, 10); return Number.isFinite(v) ? Math.max(50, Math.min(130, v)) : 100; })(),
+        // uiScalePercent REMOVED (s60) — UI scale is now per-device (localStorage), never synced to
+        // the account. It used to live here, which was the root bug: a value tuned on one monitor
+        // silently overrode auto-detection on every other device signed into the same account.
         tvModePanelsFlipped: document.getElementById('setting-tvModePanelsFlipped').checked,
         formulaWeights: {
             oddsCap:            parseFWInput('fw-oddsCap',            100),
@@ -12448,20 +12549,41 @@ async function toggleRaceColumnVisibility(colKey, visible) {
     if (!isMobileViewport()) rerenderAllRaceTables();
 }
 
-// ── UI scale (Windows display-scaling compensation) ──────────────────────────
-// "Everything's too big" at 125% OS scaling = the page renders larger. A CSS `zoom` on the root
-// shrinks the whole UI uniformly AND reflows it (so responsive breakpoints get more room — unlike
-// transform:scale). Auto-seeded from devicePixelRatio: a FRACTIONAL dpr (e.g. 1.25, 1.5) means OS
-// scaling on a standard-density panel → counter-scale; ≈1 or true-HiDPI (≥2 = real sharpness) stays
-// at 100%. Always overridable + persisted (appConfig.ui.uiScalePercent).
+// ── UI scale (per-device, auto — rebuilt s60, no manual slider) ──────────────
+// "Everything's too big" on a lower-res monitor = the page renders larger relative to the screen. A
+// CSS `zoom` on the root shrinks the whole UI uniformly AND reflows it (so responsive breakpoints get
+// more room — unlike transform:scale).
+//
+// WIDTH-primary (s61 fix). The prior version drove the correction off DPR alone
+// (`100 − (dpr−1)×60`). That broke on the operator's daily 2K monitor: the laptop (1080px wide) and
+// the 2K monitor (2560px wide) are BOTH set to 125% OS scaling, so they share the identical dpr of
+// 1.25 — DPR literally cannot tell a cramped laptop from a spacious 2K screen, and it handed both the
+// same 85% (which also tripped the compact-column drop, hiding J%/T% on the roomy monitor). The two
+// live data points have the SAME dpr but very different widths, so screen WIDTH is the only signal
+// that separates them. Calibrated to real data: 1080px → 85% (laptop, felt right), and anything QHD/2K
+// and up (≥1800px) → 100% (plenty of room, no shrink, keep every column). Linear between; clamped.
+// (Note: an even-earlier version DID use width but combined it multiplicatively with the dpr signal
+// and overshot to the 65% floor — this uses width ALONE, no compounding, so no double-correction.)
+//
+// PER-DEVICE, not synced to the account (localStorage, not appConfig.ui) — the old bug: uiScalePercent
+// lived in the backend-synced settings, so a value tuned for one monitor silently overrode every other
+// device signed into the same account, including screens that had never been auto-detected at all.
+const UI_SCALE_OVERRIDE_KEY = 'umanager-ui-scale-override'; // dev-only manual override, this device only
 function detectSuggestedUiScale() {
-    const dpr = window.devicePixelRatio || 1;
-    if (dpr > 1.05 && dpr < 1.95) return Math.max(70, Math.min(100, Math.round(100 / dpr / 5) * 5));
-    return 100;
+    const w = window.screen?.width || 0;
+    if (!w) return 100;                 // no usable width signal → leave the app alone
+    if (w >= 1800) return 100;          // QHD/2K and wider: plenty of room, never shrink
+    // Small/laptop-class widths: gentle shrink so dense tables fit. Anchored to live data
+    // (1080px → 85%) and 1800px → 100%, linear between.
+    const raw = 85 + (w - 1080) * (100 - 85) / (1800 - 1080);
+    return Math.max(65, Math.min(100, Math.round(raw / 5) * 5));
 }
 function getUiScalePercent() {
-    const v = parseInt(appConfig.ui?.uiScalePercent, 10);
-    if (Number.isFinite(v) && v >= 50 && v <= 130) return v;
+    const override = localStorage.getItem(UI_SCALE_OVERRIDE_KEY);
+    if (override !== null) {
+        const v = parseInt(override, 10);
+        if (Number.isFinite(v) && v >= 50 && v <= 130) return v;
+    }
     return detectSuggestedUiScale();
 }
 // Apply both `zoom` (shrinks + reflows) and `--ui-zoom` (lets the body height re-expand to fill the
@@ -12474,12 +12596,17 @@ function setRootZoom(z) {
 function applyUiScale() {
     try { setRootZoom(getUiScalePercent() / 100); } catch (_) {}
 }
-// Live preview while dragging the slider (no save); updateSidebarSettings persists on change.
-function onUiScaleInput(val) {
-    const pct = Math.max(50, Math.min(130, parseInt(val, 10) || 100));
-    setRootZoom(pct / 100);
-    const lbl = document.getElementById('setting-uiScalePercent-val');
-    if (lbl) lbl.textContent = pct + '%';
+// Dev-only manual override (Settings → dev mode, #setting-uiScaleOverride) — for a monitor the auto
+// heuristic gets wrong. Empty field = clear the override and go back to auto for this device.
+function onUiScaleOverrideChange(val) {
+    const raw = String(val || '').trim();
+    if (!raw) localStorage.removeItem(UI_SCALE_OVERRIDE_KEY);
+    else localStorage.setItem(UI_SCALE_OVERRIDE_KEY, String(Math.max(50, Math.min(130, parseInt(raw, 10) || 100))));
+    applyUiScale();
+    const l = document.getElementById('setting-uiScalePercent-val');
+    const diag = `${window.screen?.width || '?'}px × dpr${(window.devicePixelRatio || 1).toFixed(2)}`;
+    if (l) l.textContent = (localStorage.getItem(UI_SCALE_OVERRIDE_KEY) !== null
+        ? `${getUiScalePercent()}% (override)` : `${detectSuggestedUiScale()}% (auto)`) + ` — ${diag}`;
 }
 
 function applySidebarSettings() {

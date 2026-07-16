@@ -24,7 +24,36 @@
 
         /* Fluid width: scales with the viewport so it stays usable under Windows display scaling
            (125%/150%) and on smaller laptops, but never exceeds the original 380px on a full screen. */
-        .sidebar { width: clamp(260px, 24vw, 380px); background-color: #1a1c23; padding: 20px; overflow: hidden; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 0; }
+        :root { --sidebar-width: clamp(260px, 24vw, 380px); }
+        /* .sidebar-shell: a plain positioning wrapper (no width/flex of its own — it just hugs
+           .sidebar's rendered width) so the collapse toggle can be position:absolute relative to
+           .sidebar's TRUE box instead of a separately-computed CSS-var calc(). That calc()-based
+           version drifted from the real sidebar edge under `zoom` (CSS zoom + position:fixed +
+           vw-based custom properties don't reliably agree on where the edge actually renders) — this
+           fix removes the duplicate calculation entirely, so there's nothing left to drift (s60). */
+        .sidebar-shell { position: relative; display: flex; }
+        .sidebar { width: var(--sidebar-width); background-color: #1a1c23; padding: 20px; overflow: hidden; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 0; transition: width 0.18s ease, padding 0.18s ease; }
+        /* QOL: collapsible sidebar (desktop only — mobile already has its own drawer toggle below).
+           State persists via localStorage; see script.js toggleSidebarCollapsed(). */
+        body.sidebar-collapsed .sidebar { width: 0; padding: 0; border-right: none; }
+        .sidebar-collapse-toggle {
+            position: absolute;
+            top: 0;
+            right: -16px;   /* fully external — never overlaps .sidebar's own content, e.g. the ⚙️ button */
+            height: 100%;   /* .sidebar-shell stretches to .sidebar's full height via flex, so this just works */
+            width: 16px;
+            z-index: 60;
+            border-radius: 0;
+            background: transparent;
+            border: none;
+            color: #66707f;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 13px;
+            padding: 0;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+        .sidebar-collapse-toggle:hover { color: #1dd1a1; background: rgba(29, 209, 161, 0.10); }
         .sidebar-scroll { flex: 1; overflow-y: auto; min-height: 0; padding-right: 4px; margin-right: -4px; }
         .sidebar-footer { margin-top: 10px; padding-top: 10px; flex-shrink: 0; background: linear-gradient(180deg, rgba(26, 28, 35, 0), rgba(26, 28, 35, 0.92) 16px, rgba(26, 28, 35, 1) 100%); }
         .sidebar-brand-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; flex-shrink: 0; gap: 8px; }
@@ -1002,6 +1031,9 @@
         
         /* --- MARKS --- */
         .shirushi-cell { min-width: 170px; }   /* mobile/auto-layout fallback (desktop width is fixed below) */
+        /* s60 fix: a settled Discipline race's Shirushi column has NOTHING in it (marks are pre-race-only),
+           but was still reserving the full mark-button width on both the cell and its header — narrow both. */
+        .shirushi-cell.shirushi-empty { min-width: 0; width: 24px; padding-left: 4px; padding-right: 4px; }
         .mark-btn { background: #333; color: #aaa; border: none; padding: 4px 8px; margin: 0 2px; border-radius: 4px; cursor: pointer; font-size: 14px; }
         .mark-btn.auto-bet-preview { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35), 0 0 0 3px rgba(var(--auto-bet-preview-rgb, 29, 209, 161), 0.20); }
         .mark-btn.active-◎ { background: #ff4b4b; color: white; font-weight: bold; }
@@ -1022,6 +1054,10 @@
     .race-content .shirushi-cell { white-space: nowrap; }   /* ◎〇▲△X never wrap to a 2nd line */
     .race-content th[data-col="Finish"]   { width: 46px; }
     .race-content th[data-col="Shirushi"] { width: 192px; }
+    /* s60 fix: table-layout:fixed means the <th> width governs the WHOLE column regardless of cell
+       content — a settled Discipline race's empty Shirushi cells still need this header override, or
+       the column stays 192px wide with nothing in it. */
+    .race-content th[data-col="Shirushi"].shirushi-empty { width: 24px; }
     .race-content th[data-col="BK"]       { width: 40px; }
     .race-content th[data-col="PP"]       { width: 40px; }
     .race-content th[data-col="Record"]   { width: 66px; }
@@ -2554,6 +2590,10 @@ input[type=range]::-webkit-slider-runnable-track {
 @media (max-width: 768px) {
     html, body { overflow-x: hidden; }
     body { font-size: 13px; }
+
+    /* Mobile already has the hamburger drawer toggle — the desktop collapse handle would just
+       float over the slide-in drawer, so hide it below the breakpoint. */
+    .sidebar-collapse-toggle { display: none; }
 
     /* Sidebar: full-width drawer that slides in from the left. */
     .sidebar {
