@@ -6603,7 +6603,36 @@ async function toggleMark(r_id, h_id, symbol) {
 // --- API CALLS ---
 let logInterval = null;
 
-async function saveMarksToServer() {
+// Single-flight + coalescing guard around the marks-blob POST. saveMarksToServer serializes the
+// ENTIRE in-memory blob and the server does a last-write-wins overwrite, and it's called
+// fire-and-forget from ~8 places. Two overlapping POSTs used to race: whichever the server processed
+// LAST won, so a staler snapshot (serialized a moment before a bet was frozen at apply) could silently
+// clobber a fresher one — the s60 "appliedAt timestamp but no betProfile record" bug. This wrapper
+// guarantees only ONE POST is ever in flight; if any saves are requested while one runs, exactly one
+// more runs afterward with the LATEST in-memory state. So the final write always reflects current
+// state and no out-of-order clobber is possible. Callers keep the same `await`/`.then()` contract.
+let _marksSaveInFlight = null;   // Promise of the running save-loop, or null when idle
+let _marksSavePending  = false;  // a save was requested while the loop was busy → run once more
+function saveMarksToServer() {
+    if (_marksSaveInFlight) { _marksSavePending = true; return _marksSaveInFlight; }
+    _marksSaveInFlight = (async () => {
+        let lastErr = null;
+        try {
+            do {
+                _marksSavePending = false;
+                // Re-catch per iteration so a transient POST failure doesn't drop a queued newer save.
+                try { await _postMarksBlobNow(); lastErr = null; }
+                catch (e) { lastErr = e; }
+            } while (_marksSavePending);
+        } finally {
+            _marksSaveInFlight = null;
+        }
+        if (lastErr) throw lastErr;   // surface the final failure to awaiting callers (unchanged contract)
+    })();
+    return _marksSaveInFlight;
+}
+
+async function _postMarksBlobNow() {
     const cleanMarks = Object.fromEntries(
         Object.entries(globalMarks).filter(([, v]) => v !== null && v !== undefined && v !== '')
     );
