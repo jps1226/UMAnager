@@ -1791,16 +1791,9 @@ function renderResultsTicker() {
     const info = race.info || {};
     const raceId = String(info.race_id || '').trim();
 
-    // Build mark lookup for THIS race only.
-    const marks = (marksData && marksData.marks) || {};
-    const markByHorse = {};
-    for (const [key, symbol] of Object.entries(marks)) {
-        if (!symbol || symbol === 'X') continue;
-        const under = key.lastIndexOf('_');
-        if (under < 0) continue;
-        if (key.slice(0, under) !== raceId) continue;
-        markByHorse[key.slice(under + 1)] = symbol;
-    }
+    // Build mark lookup for THIS race only (falls back to the frozen bet record for
+    // Discipline-mode races, which never write into the raw marks blob — see getMarksForRace).
+    const markByHorse = getMarksForRace(raceId);
 
     const top5 = (Array.isArray(race.entries) ? race.entries : [])
         .filter(e => {
@@ -1938,7 +1931,6 @@ function renderRaceList() {
     const races = ((racesData.races_by_date || {})[activeDate] || [])
         .slice()
         .sort((a, b) => String((a.info || {}).sort_time || '').localeCompare(String((b.info || {}).sort_time || '')));
-    const marks = (marksData && marksData.marks) || {};
     const body  = document.getElementById('race-list-body');
 
     if (!races.length) {
@@ -1948,17 +1940,6 @@ function renderRaceList() {
 
     racesByIdForTv = {};
     raceTimeData = [];
-    /* Build mark lookup: raceId → [{ symbol, rank, horse, pp, bk, fav }] */
-    const raceMarkMap = {};
-    for (const [key, symbol] of Object.entries(marks)) {
-        if (!symbol || symbol === 'X') continue;
-        const under = key.lastIndexOf('_');
-        if (under < 0) continue;
-        const raceId  = key.slice(0, under);
-        const horseId = key.slice(under + 1);
-        if (!raceMarkMap[raceId]) raceMarkMap[raceId] = [];
-        raceMarkMap[raceId].push({ symbol, horseId });
-    }
 
     let html = '';
     let any = false;
@@ -1967,7 +1948,11 @@ function renderRaceList() {
         const info    = race.info || {};
         const entries = Array.isArray(race.entries) ? race.entries : [];
         const raceId  = String(info.race_id || '').trim();
-        const rawMarks = raceMarkMap[raceId] || [];
+        // getMarksForRace falls back to the frozen bet record for Discipline-mode races,
+        // which never write into the raw marks blob (the ◎ is engine-computed at apply
+        // time, not stored) — without this, tonight's Discipline card shows an empty scroller.
+        const markByHorse = getMarksForRace(raceId);
+        const rawMarks = Object.entries(markByHorse).map(([horseId, symbol]) => ({ symbol, horseId }));
 
         if (!rawMarks.length) continue;
         any = true;
@@ -1982,7 +1967,8 @@ function renderRaceList() {
                 pp     : row ? (parseInt(row.PP) || 99) : 99,
                 bk     : row ? (parseInt(row.BK) || 0) : 0,
                 fav    : row ? String(row.Fav || '').trim() : '',
-                sex    : row ? (parseInt(row.Sex) || 0) : 0
+                sex    : row ? (parseInt(row.Sex) || 0) : 0,
+                odds   : row ? parseFloat(row.Odds) : NaN
             };
         }).sort((a, b) => a.rank - b.rank);
 
@@ -2022,8 +2008,10 @@ function renderRaceList() {
                 : `<span class="badge horse-post empty"></span>`;
             const symBadge = `<span class="badge horse-mark" style="${bkStyle};font-size:${m.symbol === '◎' ? '17px' : '14px'};">${esc(m.symbol)}</span>`;
             const favText  = m.fav ? `Fav ${esc(m.fav)}` : 'Fav -';
+            const oddsText = Number.isFinite(m.odds) && m.odds > 0 ? `×${m.odds.toFixed(1)}` : '';
+            const oddsBadge = oddsText ? `<span class="fav-badge horse-odds">${esc(oddsText)}</span>` : '';
 
-            html += `<div class="horse-line">${ppBadge}${symBadge}${sexSign(m.sex)}<span class="horse-name">${esc(m.horse)}</span><span class="fav-badge horse-fav">${favText}</span></div>`;
+            html += `<div class="horse-line">${ppBadge}${symBadge}${sexSign(m.sex)}<span class="horse-name">${esc(m.horse)}</span><span class="fav-badge horse-fav">${favText}</span>${oddsBadge}</div>`;
         }
 
         html += `</div></div>`;
@@ -2204,6 +2192,36 @@ function getMarksForRace(raceId) {
         const under = key.lastIndexOf('_');
         if (under < 0 || key.slice(0, under) !== raceId) continue;
         out[key.slice(under + 1)] = symbol;
+    }
+    if (Object.keys(out).length) return out;
+
+    // Discipline mode never writes a ◎ into the raw marks blob above (it's computed by the
+    // engine on the fly at apply time, not stored) — so a Discipline-bet race shows nothing
+    // here even though a real bet was placed. Fall back to the FROZEN bet record
+    // (raceMeta.betProfile.betLines), the ground truth of what was actually bet at apply time.
+    // First horse seen -> ◎ (the honmei/main pick), any additional horses -> 〇.
+    const betProfile = marksData && marksData.raceMeta && marksData.raceMeta[raceId] && marksData.raceMeta[raceId].betProfile;
+    const lines = (betProfile && Array.isArray(betProfile.betLines)) ? betProfile.betLines : [];
+    if (!lines.length) return out;
+
+    const races = (racesData && racesData.races_by_date && racesData.races_by_date[activeDate]) || [];
+    const race = races.find(r => String((r.info || {}).race_id || '').trim() === raceId);
+    const entries = Array.isArray(race && race.entries) ? race.entries : [];
+    const ppToHorseId = {};
+    for (const e of entries) {
+        const pp = parseInt(e.PP, 10);
+        const hid = String(e.Horse_ID != null ? e.Horse_ID : '').split('.')[0];
+        if (Number.isFinite(pp) && hid) ppToHorseId[pp] = hid;
+    }
+
+    let first = true;
+    for (const line of lines) {
+        for (const h of (line.horses || [])) {
+            const hid = ppToHorseId[parseInt(h.pp, 10)];
+            if (!hid || out[hid]) continue;
+            out[hid] = first ? '◎' : '〇';
+            first = false;
+        }
     }
     return out;
 }
