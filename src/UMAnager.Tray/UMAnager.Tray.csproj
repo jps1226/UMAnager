@@ -11,4 +11,10 @@
     <RootNamespace>UMAnager.Tray</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Only used to read a process's command line (StopGchProxy), so it can tell the GCh
+         stream-proxy python.exe apart from any other python process on the machine. -->
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+
 </Project>

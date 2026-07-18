@@ -29,11 +29,16 @@ internal sealed class TrayApp : ApplicationContext
     private readonly string _pidFile;
     private readonly string _sidecarLog;
     private readonly string _nexusLog;
+    private readonly string _gchProxyScript;
+    private readonly string _gchProxyLog;
 
     private Process? _sidecarProc;
     private Process? _nexusProc;
+    private Process? _gchProxyProc;
     private IntPtr _currentHIcon = IntPtr.Zero;
     private bool _autoStartPending;
+    private readonly ToolStripMenuItem _gchProxyStartItem;
+    private readonly ToolStripMenuItem _gchProxyStopItem;
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool DestroyIcon(IntPtr handle);
@@ -49,6 +54,8 @@ internal sealed class TrayApp : ApplicationContext
         Directory.CreateDirectory(logDir);
         _sidecarLog = Path.Combine(logDir, "sidecar.log");
         _nexusLog   = Path.Combine(logDir, "nexus.log");
+        _gchProxyScript = Path.Combine(_rootDir, "tools", "gch_stream_proxy.py");
+        _gchProxyLog    = Path.Combine(logDir, "gch-stream-proxy.log");
 
         // Discover any already-running services (started by us last session, or by launch-services.ps1).
         Rediscover();
@@ -60,6 +67,16 @@ internal sealed class TrayApp : ApplicationContext
         menu.Items.Add(_startItem);
         menu.Items.Add(_stopItem);
         menu.Items.Add(_restartItem);
+        menu.Items.Add(new ToolStripSeparator());
+        // Independent from Start/Stop services above on purpose: this is the JRA livestream
+        // metadata proxy for TV mode (tools/gch_stream_proxy.py) — a separate process so it alone
+        // can sit inside ProtonVPN's split-tunnel (Japan) while Nexus stays out of it (routing
+        // Nexus through the VPN previously broke OrePro/Discord connectivity live). A proxy hiccup
+        // must never touch the actual betting pipeline, and vice versa — hence its own toggle.
+        _gchProxyStartItem = new ToolStripMenuItem("Start stream proxy (TV mode)", null, (_, _) => StartGchProxy());
+        _gchProxyStopItem  = new ToolStripMenuItem("Stop stream proxy",           null, (_, _) => StopGchProxy());
+        menu.Items.Add(_gchProxyStartItem);
+        menu.Items.Add(_gchProxyStopItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Open dashboard", null, (_, _) => OpenUrl("http://localhost:5000"));
         menu.Items.Add("Open logs folder", null, (_, _) => OpenUrl(logDir));
@@ -151,6 +168,124 @@ internal sealed class TrayApp : ApplicationContext
         StartAll();
     }
 
+    // ── GCh stream proxy (TV mode) — deliberately separate from Start/Stop services above ──
+
+    private const int GchProxyPort = 5057;
+
+    private void StartGchProxy()
+    {
+        try
+        {
+            if (IsGchProxyRunning())
+            {
+                _icon.ShowBalloonTip(1500, "UMAnager", "Stream proxy is already running.", ToolTipIcon.Info);
+                return;
+            }
+            if (!File.Exists(_gchProxyScript))
+                throw new FileNotFoundException($"Script missing: {_gchProxyScript}");
+
+            var psi = new ProcessStartInfo
+            {
+                FileName               = FindPythonExe(),
+                // -u = unbuffered stdout/stderr. Without it, Python fully buffers output when it
+                // isn't a real terminal (confirmed live 2026-07-18: the log file stayed 0 bytes the
+                // whole time the proxy was running and serving real requests) — so PipeToFile below
+                // would never see anything until the process exits.
+                Arguments              = $"-u \"{_gchProxyScript}\"",
+                WorkingDirectory       = _rootDir,
+                UseShellExecute        = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+                CreateNoWindow         = true,
+            };
+            _gchProxyProc = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null for python");
+            _ = Task.Run(() => PipeToFile(_gchProxyProc.StandardOutput, _gchProxyLog));
+            _ = Task.Run(() => PipeToFile(_gchProxyProc.StandardError,  _gchProxyLog));
+
+            RefreshStatus();
+            _icon.ShowBalloonTip(2000, "UMAnager",
+                "Stream proxy starting — needs ProtonVPN split-tunnel set to include python.exe, connected to Japan.",
+                ToolTipIcon.Info);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to start stream proxy:\n{ex.Message}", "UMAnager Tray", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void StopGchProxy()
+    {
+        try { _gchProxyProc?.Kill(entireProcessTree: true); } catch { /* already gone */ }
+        _gchProxyProc = null;
+        // Also sweep any instance this tray session didn't launch itself (e.g. started by hand
+        // in a terminal last night) — same "OS is the source of truth" approach as KillAllByName.
+        foreach (var p in Process.GetProcessesByName("python"))
+        {
+            try
+            {
+                if (CommandLineContains(p, "gch_stream_proxy.py"))
+                {
+                    p.Kill(entireProcessTree: true);
+                    p.WaitForExit(3000);
+                }
+            }
+            catch { /* already gone, or couldn't read command line */ }
+            finally { p.Dispose(); }
+        }
+        RefreshStatus();
+        _icon.ShowBalloonTip(1500, "UMAnager", "Stream proxy stopped.", ToolTipIcon.Info);
+    }
+
+    // Port-based liveness check rather than just tracking our own Process handle — covers an
+    // instance started by hand in a terminal (as happened the first night this was built) just
+    // as well as one this tray session launched itself. Short timeout so RefreshStatus's 3s
+    // tick never visibly stalls the tray.
+    private static bool IsGchProxyRunning()
+    {
+        try
+        {
+            using var client = new System.Net.Sockets.TcpClient();
+            var result = client.BeginConnect("127.0.0.1", GchProxyPort, null, null);
+            var connected = result.AsyncWaitHandle.WaitOne(200);
+            if (connected && client.Connected) { client.EndConnect(result); return true; }
+            return false;
+        }
+        catch { return false; }
+    }
+
+    // Bare "python" relies on Process.Start (UseShellExecute=false) resolving it via CreateProcess's
+    // PATH search, which — unlike a shell — does NOT reliably find it here (confirmed live
+    // 2026-07-18: silent failure, no process, no log file, nothing). Use a real, known interpreter
+    // path instead, falling back to the bare name only if neither known install location exists.
+    private static string FindPythonExe()
+    {
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var candidates = new[]
+        {
+            Path.Combine(localAppData, "Python", "pythoncore-3.14-64", "python.exe"),
+            Path.Combine(localAppData, "Python", "bin", "python.exe"),
+        };
+        foreach (var c in candidates)
+            if (File.Exists(c)) return c;
+        return "python"; // last resort — matches old behavior if neither known path exists
+    }
+
+    private static bool CommandLineContains(Process p, string needle)
+    {
+        try
+        {
+            using var searcher = new System.Management.ManagementObjectSearcher(
+                $"SELECT CommandLine FROM Win32_Process WHERE ProcessId = {p.Id}");
+            foreach (System.Management.ManagementObject obj in searcher.Get())
+            {
+                var cmd = obj["CommandLine"]?.ToString() ?? "";
+                if (cmd.Contains(needle, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        catch { /* WMI unavailable — treat as no match rather than risk killing the wrong process */ }
+        return false;
+    }
+
     private void ExitTray(bool stopServices)
     {
         _timer.Stop();
@@ -240,12 +375,16 @@ internal sealed class TrayApp : ApplicationContext
 
         var sideText  = sideUp  ? $"running (PID {_sidecarProc!.Id})" : "stopped";
         var nexusText = nexusUp ? $"running (PID {_nexusProc!.Id})"   : "stopped";
+        var gchUp     = IsGchProxyRunning();
+        var gchText   = gchUp ? "running" : "stopped";
 
         // NotifyIcon.Text is capped at 127 chars on older Windows; keep this short.
-        var tip = $"Sidecar: {sideText}\nNexus:   {nexusText}";
+        var tip = $"Sidecar: {sideText}\nNexus:   {nexusText}\nStream proxy: {gchText}";
         if (tip.Length > 127) tip = tip[..127];
         _icon.Text = tip;
 
+        // Icon color reflects Nexus/Sidecar only — the stream proxy is optional (TV mode) and
+        // deliberately doesn't affect the "is the app healthy" indicator.
         Color dot = (sideUp, nexusUp) switch
         {
             (true, true)  => Color.LimeGreen,
@@ -257,6 +396,8 @@ internal sealed class TrayApp : ApplicationContext
         _startItem.Enabled   = !(sideUp && nexusUp);
         _stopItem.Enabled    = sideUp || nexusUp;
         _restartItem.Enabled = sideUp || nexusUp;
+        _gchProxyStartItem.Enabled = !gchUp;
+        _gchProxyStopItem.Enabled  = gchUp;
     }
 
     private void SetIcon(Color color)
