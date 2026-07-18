@@ -3451,6 +3451,14 @@ function normalizeMarksPayload(payload) {
                 activeSymbols: Array.isArray(meta.activeSymbols)
                     ? meta.activeSymbols.map(symbol => String(symbol || '').trim()).filter(Boolean)
                     : [],
+                // Per-race side-bet horse ids (Watchlist ＋ chip / Apply-time popup). Missing from
+                // this whitelist until 2026-07-18 — every full marks reload (page load included)
+                // silently wiped configured side bets from memory even though the server still had
+                // them saved, so a side bet placed moments before a reload would vanish from the
+                // NEXT apply with zero error. This is what caused two real live drops.
+                sideBets: Array.isArray(meta.sideBets)
+                    ? meta.sideBets.map(hid => String(hid || '').trim()).filter(Boolean)
+                    : [],
                 betProfile: normalizeBetProfile(meta.betProfile),
                 // Per-race bet COMPOSITION override (Voting tab). Preserve only valid shapes.
                 ...(normalizeComposition(meta.betComposition) ? { betComposition: normalizeComposition(meta.betComposition) } : {}),
@@ -9468,8 +9476,10 @@ async function applyRaceRoutedToOrePro(r_id) {
         const race = findRaceObjById(r_id);
         const built = race ? buildOreProCustomLinesForRace(race) : { lines: [] };
         if (!built.lines.length) {
+            const noLinesMsg = 'No custom lines to place — mark horses / set a composition first.';
             return { ok: false, expired: false, submitted: false, mode: 'custom',
-                     message: 'No custom lines to place — mark horses / set a composition first.', data: null, result: null };
+                     message: built.sideBetWarning ? `${noLinesMsg} ${built.sideBetWarning}` : noLinesMsg,
+                     sideBetWarning: built.sideBetWarning, data: null, result: null };
         }
 
         // MARKS-FIRST (proven 2026-06-13; see memory orepro-custom-bet-api). OrePro's submit gate
@@ -9504,8 +9514,11 @@ async function applyRaceRoutedToOrePro(r_id) {
             return { ok: false, expired: false, submitted: false, mode: 'custom', message: `request failed: ${err?.message || err}`, data: null, result: null };
         }
         const st = String(data?.status || '').toLowerCase();
+        const baseMessage = data?.message || st;
         return { ok: st === 'ok', expired: looksLikeExpiredOreProSession(null, data),
-                 submitted: !!data?.submitted, mode: 'custom', message: data?.message || st, data, result: data };
+                 submitted: !!data?.submitted, mode: 'custom',
+                 message: built.sideBetWarning ? `${baseMessage} ${built.sideBetWarning}` : baseMessage,
+                 sideBetWarning: built.sideBetWarning, data, result: data };
     }
 
     // MARKS path (default / easy mode).
@@ -9682,7 +9695,7 @@ function buildOreProCustomLinesForRace(race) {
             if (pps.length < 1) continue;
             umaban = String(pps[0]);
         }
-        lines.push({ type, method, umaban, money, _label: l.label, _combos: l.comboCount });
+        lines.push({ type, method, umaban, money, _label: l.label, _combos: l.comboCount, ...(l.kind === 'side' ? { kind: 'side' } : {}) });
     }
     // Final safety net: OrePro's bet_id is `_b<type>_c<method>_<umaban>`, and TWO lines that resolve
     // to the SAME bet_id make OrePro reject the whole ticket on submit with reason "price over". That
@@ -9703,7 +9716,28 @@ function buildOreProCustomLinesForRace(race) {
         }
     }
     const staked = deduped.reduce((s, l) => s + (l.money * (l._combos || 1)), 0);
-    return { lines: deduped, staked };
+
+    // Guard: warn if side bets are CONFIGURED for this race but didn't all make it into the
+    // built ticket. Found live 2026-07-18: an incomplete/stale client state (globalRaceMeta or
+    // listsData.watchlist not fully loaded yet) can make activeSideBetHorseIds silently return
+    // fewer horses than raceMeta.sideBets has configured — the side bet then vanishes with zero
+    // error and zero log line. This surfaces that mismatch instead of letting it stay silent.
+    // Skipped when hasFrozenSide is true — that's an intentional skip (already-frozen side lines
+    // exist from a prior apply), not a drop.
+    let sideBetWarning = null;
+    if (!hasFrozenSide) {
+        const configuredSideBets = Array.isArray(globalRaceMeta[rid]?.sideBets) ? globalRaceMeta[rid].sideBets : [];
+        const activeSideBets = activeSideBetHorseIds(rid);
+        if (configuredSideBets.length && activeSideBets.length < configuredSideBets.length) {
+            const dropped = configuredSideBets.filter(h => !activeSideBets.includes(h));
+            sideBetWarning = `⚠ side bet(s) configured for this race did not make it into the ticket ` +
+                `(horse id(s): ${dropped.join(', ')}) — Watchlist/marks data may not have been fully ` +
+                `loaded when this was built. Check and retry.`;
+            console.warn('[SideBetGuard]', rid, sideBetWarning);
+        }
+    }
+
+    return { lines: deduped, staked, sideBetWarning };
 }
 
 async function placeCustomBetNoSubmit(event, raceId) {
@@ -10026,6 +10060,7 @@ async function applyAllDayVotesToOrePro() {
         let sessionExpired = false;
         const failureLines = [];
         const succeededRaceIds = [];
+        const sideBetWarningLines = [];
 
         for (let i = 0; i < eligible.length; i++) {
             const r_id = eligible[i];
@@ -10038,6 +10073,12 @@ async function applyAllDayVotesToOrePro() {
             if (routed.ok) {
                 okCount++;
                 succeededRaceIds.push(r_id);
+                // A race can place its main bet fine but still silently drop a configured side
+                // bet (see buildOreProCustomLinesForRace's guard) — that's NOT a failure (okCount
+                // still counts it), but it must not go unnoticed just because the race "succeeded".
+                if (routed.sideBetWarning) {
+                    sideBetWarningLines.push(`${raceLabel(r_id)}: ${routed.sideBetWarning}`);
+                }
             } else {
                 failCount++;
                 failureLines.push(`[${routed.mode}] ${r_id}: ${routed.message}`);
@@ -10099,18 +10140,33 @@ async function applyAllDayVotesToOrePro() {
             ? `\n\n⚠ Skipped ${wontPlace.length} race(s) that won't place under the current preset (handle via custom bet):\n` +
               wontPlace.map(raceLabel).map(l => `  • ${l}`).join('\n')
             : '';
-        window.alert(`${alertIcon} Apply Day Votes finished for ${date}.\n\n${alertTail}${skipTail}`);
+        // A race can succeed its main bet but still silently drop a configured side bet — that's
+        // not a failure, so it can't just ride along with alertTail's ok/fail framing. Call it out
+        // as its own line so it can't be missed the way a real one almost was live 2026-07-18.
+        const sideBetTail = sideBetWarningLines.length
+            ? `\n\n⚠ ${sideBetWarningLines.length} race(s) placed but a side bet did NOT make it in — check these:\n` +
+              sideBetWarningLines.map(l => `  • ${l}`).join('\n')
+            : '';
+        window.alert(`${alertIcon} Apply Day Votes finished for ${date}.\n\n${alertTail}${skipTail}${sideBetTail}`);
 
-        // Drop any failure detail into the diagnostics panel so the operator can see what didn't go through.
-        if (failureLines.length) {
+        // Drop any failure/side-bet-drop detail into the diagnostics panel so the operator can see
+        // what didn't go through, even on an otherwise-"ok" run.
+        if (failureLines.length || sideBetWarningLines.length) {
             const out = document.getElementById('orepro-sync-results');
             if (out) {
-                out.innerHTML = `
-                    <div class="orepro-sync-title">Apply Day Votes — Failures (${failCount})</div>
-                    <div class="orepro-sync-list" style="font-family:monospace; font-size:11px;">
-                        ${failureLines.map(l => `<div>${escapeHtml(l)}</div>`).join('')}
-                    </div>
-                `;
+                const failBlock = failureLines.length
+                    ? `<div class="orepro-sync-title">Apply Day Votes — Failures (${failCount})</div>
+                       <div class="orepro-sync-list" style="font-family:monospace; font-size:11px;">
+                           ${failureLines.map(l => `<div>${escapeHtml(l)}</div>`).join('')}
+                       </div>`
+                    : '';
+                const sideBetBlock = sideBetWarningLines.length
+                    ? `<div class="orepro-sync-title">Apply Day Votes — Side Bet Drops (${sideBetWarningLines.length})</div>
+                       <div class="orepro-sync-list" style="font-family:monospace; font-size:11px;">
+                           ${sideBetWarningLines.map(l => `<div>${escapeHtml(l)}</div>`).join('')}
+                       </div>`
+                    : '';
+                out.innerHTML = failBlock + sideBetBlock;
             }
         }
     } finally {
