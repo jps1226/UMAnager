@@ -66,6 +66,44 @@ public sealed class OreProCustomBetService
 
     private sealed record BetLine(int Type, int Method, string Umaban, int Money);
 
+    /// <summary>
+    /// Re-reads whatever cookies OrePro set during this call and writes them back to Settings —
+    /// mirrors OreProVoteApplyService.PersistSessionCookieAsync. Without this, a session rotation
+    /// that happens during the marks-first step (a separate earlier POST) never carries forward to
+    /// THIS call, which seeds its own fresh CookieContainer from the stale stored string. Found live
+    /// 2026-07-17: exactly this gap caused "not login" on the custom-bet placement right after a
+    /// confirmed-working session had just been used successfully by an earlier, separate call.
+    ///
+    /// BUG FOUND same night: every cookie is seeded under TWO domain scopes (wildcard ".netkeiba.com"
+    /// AND exact "orepro.netkeiba.com"), so a rotated cookie can leave the jar holding a stale value
+    /// under the wildcard entry alongside the fresh one under the exact-host entry. Deduping by
+    /// "whichever came first" could persist the stale copy. Fixed: prefer the non-wildcard (exact)
+    /// cookie whenever both exist for the same name.
+    /// </summary>
+    private async Task PersistSessionCookieAsync(CookieContainer jar, CancellationToken ct)
+    {
+        try
+        {
+            var byName = new Dictionary<string, Cookie>();
+            foreach (var host in new[] { "https://orepro.netkeiba.com/", "https://netkeiba.com/" })
+                foreach (Cookie c in jar.GetCookies(new Uri(host)))
+                {
+                    if (!byName.TryGetValue(c.Name, out var existing) ||
+                        (existing.Domain.StartsWith('.') && !c.Domain.StartsWith('.')))
+                    {
+                        byName[c.Name] = c;
+                    }
+                }
+            if (byName.Count == 0) return;
+            var header = string.Join("; ", byName.Values.Select(c => $"{c.Name}={c.Value}"));
+            await _settings.SetStringAsync(SettingsService.Keys.OreProSessionCookie, header);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed persisting refreshed OrePro session cookie (non-fatal)");
+        }
+    }
+
     public async Task<JsonElement> PlaceAsync(JsonElement payload, CancellationToken ct)
     {
         // ── Parse + validate the request ────────────────────────────────────────
@@ -164,6 +202,8 @@ public sealed class OreProCustomBetService
         if (string.IsNullOrEmpty(weekId) || string.IsNullOrEmpty(jyoCd) || string.IsNullOrEmpty(raceNo))
         {
             // Missing JS vars almost always means a login redirect (expired cookie) rather than a real page.
+            // Still persist — the response we just got may carry a fresher cookie than what we sent.
+            await PersistSessionCookieAsync(cookieJar, ct);
             return Err($"Could not read week_id/jyo_cd/race_no from OrePro shutuba (week_id='{weekId}' jyo_cd='{jyoCd}' race_no='{raceNo}'). " +
                        "The session cookie is likely expired — re-paste it in Settings → OrePro.");
         }
@@ -311,6 +351,11 @@ public sealed class OreProCustomBetService
         var finalStatus = !confirmed ? "warn"
                         : (submitAfter && !submitted) ? "warn"
                         : "ok";
+
+        // Carry forward any session rotation from this run — the next OrePro call (another race in
+        // the same Apply Day Votes batch) reads the stored cookie fresh and must not miss it.
+        await PersistSessionCookieAsync(cookieJar, ct);
+
         return Json(new
         {
             status     = finalStatus,

@@ -62,6 +62,47 @@ public sealed class OreProVoteApplyService
         _voteHistory = voteHistory;
     }
 
+    /// <summary>
+    /// Re-reads whatever cookies OrePro set during this call (session rotation, CSRF refresh) and
+    /// writes them back to Settings, so the NEXT independent OrePro call — a separate HTTP request
+    /// that seeds its own fresh CookieContainer from the stored string — doesn't reuse a cookie OrePro
+    /// already rotated past. Found live 2026-07-17: Apply Day Votes' two-step custom-bet flow
+    /// (marks-first POST here, then a separate OreProCustomBetService.PlaceAsync POST) intermittently
+    /// failed "not login" on the second call even though the session was fine, because the first
+    /// call's Set-Cookie response never made it back into the cookie the second call reads.
+    ///
+    /// BUG FOUND same night: we seed every cookie under TWO domain scopes (wildcard ".netkeiba.com"
+    /// AND exact "orepro.netkeiba.com"), so after a real response rotates a cookie, the jar can hold
+    /// two DIFFERENT values for the same name — a stale one under the wildcard entry (never touched
+    /// by the response) and the fresh one under the exact-host entry (what the response actually
+    /// updated). The first cut of this method deduped by "whichever came first," a coin flip that
+    /// could persist the STALE copy right before the next call needed the fresh one. Fixed: always
+    /// prefer the non-wildcard (exact-domain) cookie when both exist for the same name.
+    /// </summary>
+    private async Task PersistSessionCookieAsync(CookieContainer jar, CancellationToken ct)
+    {
+        try
+        {
+            var byName = new Dictionary<string, Cookie>();
+            foreach (var host in new[] { "https://orepro.netkeiba.com/", "https://netkeiba.com/" })
+                foreach (Cookie c in jar.GetCookies(new Uri(host)))
+                {
+                    if (!byName.TryGetValue(c.Name, out var existing) ||
+                        (existing.Domain.StartsWith('.') && !c.Domain.StartsWith('.')))
+                    {
+                        byName[c.Name] = c;
+                    }
+                }
+            if (byName.Count == 0) return;
+            var header = string.Join("; ", byName.Values.Select(c => $"{c.Name}={c.Value}"));
+            await _settings.SetStringAsync(SettingsService.Keys.OreProSessionCookie, header);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed persisting refreshed OrePro session cookie (non-fatal)");
+        }
+    }
+
     public async Task<JsonElement> ApplyAsync(JsonElement payload, CancellationToken ct)
     {
         var cookie = (await _settings.GetStringAsync(SettingsService.Keys.OreProSessionCookie) ?? "").Trim();
@@ -344,6 +385,11 @@ public sealed class OreProVoteApplyService
             lastOkRace,
         };
 
+        // Carry forward any session rotation from this run before handing control back — the
+        // very next OrePro call (e.g. the custom-bet placement that follows marks-first) reads
+        // the stored cookie fresh and must not miss whatever OrePro just rotated it to.
+        await PersistSessionCookieAsync(cookieJar, ct);
+
         var json = JsonSerializer.Serialize(responseObj);
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.Clone();
@@ -436,7 +482,22 @@ public sealed class OreProVoteApplyService
                 catch { enc = Encoding.UTF8; }
                 var html = enc.GetString(bytes);
 
-                return ContainsLoggedInMarker(html)
+                // Even a read-only check can pick up a rotated session cookie — save it before
+                // the caller's next (separate) OrePro call reads the stored string fresh.
+                await PersistSessionCookieAsync(cookieJar, ct);
+
+                var isLoggedIn = ContainsLoggedInMarker(html);
+                if (!isLoggedIn)
+                {
+                    // This branch used to be completely silent — a "not logged in" verdict left no
+                    // trace of WHY (what page actually came back). Found live 2026-07-17 debugging a
+                    // false-negative-shaped failure with zero log evidence either way. Same diagnostic
+                    // shape as the marks-apply path's "no HorseList rows" log below.
+                    var diag = BuildShutubaDiagnostic(html, raceId);
+                    _logger.LogWarning("OrePro cookie check: shutuba page for {RaceId} did not show a logged-in marker. URL={Url} HTTP={Status} {Diag}",
+                        raceId, url, (int)resp.StatusCode, diag);
+                }
+                return isLoggedIn
                     ? Result("ok", true, "OrePro session is logged in — bets can be placed.")
                     : Result("expired", false, "OrePro session is NOT logged in (the cookie looks expired). Re-copy the Cookie header from a fresh OrePro login into Settings → OrePro.");
             }
@@ -452,8 +513,15 @@ public sealed class OreProVoteApplyService
             using var lreq = new HttpRequestMessage(HttpMethod.Get, BetReferer);
             using var lresp = await http.SendAsync(lreq, ct);
             var body = await lresp.Content.ReadAsStringAsync(ct);
+            await PersistSessionCookieAsync(cookieJar, ct);
             var loggedIn = body.Contains("ログアウト", StringComparison.Ordinal)
                            || body.Contains("/mydata/", StringComparison.OrdinalIgnoreCase);
+            if (!loggedIn)
+            {
+                var diag = BuildShutubaDiagnostic(body, "(no race supplied)");
+                _logger.LogWarning("OrePro cookie check: race-list page did not show logged-in markers. URL={Url} HTTP={Status} {Diag}",
+                    BetReferer, (int)lresp.StatusCode, diag);
+            }
             return loggedIn
                 ? Result("ok", true, "OrePro session is logged in.")
                 : Result("expired", false, "Could not confirm an OrePro login from the race-list page (cookie may be expired, or no race card is open today). Open a race day and test again, or re-paste the cookie.");
