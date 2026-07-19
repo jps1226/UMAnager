@@ -1351,9 +1351,21 @@ async function tryStartGchPlayback(userInitiated) {
     const p = getInnerGchPlayer();
     if (!p || typeof p.play !== 'function') return;
 
+    // Try unmuted first — if the page already carries user-activation from
+    // navigating in (e.g. a remote click on a bookmark/link), Chromium allows
+    // unmuted autoplay without a separate tap on the video itself.
     try {
-        // Best effort: muted autoplay first, then unmute on explicit user action.
-        if (!userInitiated && typeof p.muted === 'function') p.muted(true);
+        if (typeof p.muted === 'function') p.muted(false);
+        await p.play();
+        overlay.style.display = 'none';
+        status.textContent = 'Live stream playing';
+        return;
+    } catch (err) {
+        // Unmuted autoplay blocked — fall back to muted autoplay below.
+    }
+
+    try {
+        if (typeof p.muted === 'function') p.muted(true);
         await p.play();
         if (userInitiated && typeof p.muted === 'function') p.muted(false);
         overlay.style.display = 'none';
