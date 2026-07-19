@@ -47,6 +47,7 @@ export function loadEngine() {
   ctx.document = stub(); ctx.localStorage = stub(); ctx.navigator = stub(); ctx.location = stub();
   ctx.WebSocket = function () { return stub(); };
   ctx.requestAnimationFrame = () => {}; ctx.matchMedia = () => stub();
+  ctx.performance = { now: () => Date.now() };
 
   const EPILOGUE = `
 ;(function () {
