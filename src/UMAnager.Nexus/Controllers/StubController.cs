@@ -30,11 +30,6 @@ public sealed class StubController : ControllerBase
         summary       = "",
     });
 
-    // ── Snipe ────────────────────────────────────────────────────────────────
-
-    [HttpPost("api/snipe")]
-    public IActionResult Snipe() => Ok(new { status = "not_implemented" });
-
     // ── Scrape ───────────────────────────────────────────────────────────────
 
     [HttpPost("api/scrape")]

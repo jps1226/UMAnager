@@ -2314,24 +2314,10 @@ function navigateToHorse(horseId) {
     }, 100);
 }
 
-// --- ADD / REMOVE / SNIPE ACTIONS ---
-
-async function quickAdd(id, listType) {
-    const res = await fetch('/api/snipe', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({id: id, list_type: listType})
-    });
-    const data = await res.json();
-    
-    // If successful, refresh only the sidebar lists (keep scroll position)
-    if(data.status === "success") await refreshListsOnly();
-    else alert(data.message);
-}
+// --- ADD / REMOVE LIST ACTIONS ---
 
 async function quickAddFromHover(id, listType, nameEncoded) {
     // Symmetric with removeHorseFromHover: edit listsData locally + POST /api/lists.
-    // /api/snipe is a stub that returns { status: "not_implemented" } with no
-    // message field, so the old fetch path produced "alert(undefined)".
     // Persists as "<id>#<name>" so buildListHTML renders names even for breeding
     // horses (sires/dams) that don't appear in searchableHorses.
     const cleanId = String(id || '').trim();
