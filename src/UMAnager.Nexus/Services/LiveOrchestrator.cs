@@ -448,11 +448,47 @@ public sealed class LiveOrchestrator : BackgroundService
                 UseShellExecute = false,
                 CreateNoWindow = true,
             });
-            _logger.LogWarning("[Orchestrator] Restarted Sidecar wrapper PID {Pid} after watchdog.", proc?.Id);
+
+            Thread.Sleep(2000);
+            var sidecar = Process.GetProcessesByName("UMAnager.Sidecar")
+                .OrderByDescending(p => p.StartTime)
+                .FirstOrDefault();
+            if (sidecar is not null)
+            {
+                UpdateServicePidFile(root, sidecar.Id);
+                _logger.LogWarning("[Orchestrator] Restarted Sidecar wrapper PID {WrapperPid}; Sidecar PID {SidecarPid}.",
+                    proc?.Id, sidecar.Id);
+                sidecar.Dispose();
+            }
+            else
+            {
+                _logger.LogError("[Orchestrator] Sidecar restart command launched wrapper PID {WrapperPid}, but no UMAnager.Sidecar process was found.", proc?.Id);
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[Orchestrator] Sidecar watchdog restart failed.");
+        }
+    }
+
+    private static void UpdateServicePidFile(string root, int sidecarPid)
+    {
+        try
+        {
+            var pidFile = Path.Combine(root, ".service-pids.json");
+            int? nexusPid = Process.GetProcessesByName("UMAnager.Nexus")
+                .OrderByDescending(p => p.StartTime)
+                .FirstOrDefault()?.Id;
+            var json = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, int?>
+            {
+                ["sidecar"] = sidecarPid,
+                ["nexus"] = nexusPid,
+            });
+            File.WriteAllText(pidFile, json);
+        }
+        catch
+        {
+            // Status is best-effort; the actual restarted process is the important recovery path.
         }
     }
 
