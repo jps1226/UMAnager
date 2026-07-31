@@ -108,6 +108,13 @@ public sealed class NexusPipeServer : BackgroundService
                 await Task.WhenAny(forwardTask, receiveTask);
                 await pipeCts.CancelAsync();
                 await Task.WhenAll(forwardTask.ContinueWith(_ => { }), receiveTask.ContinueWith(_ => { }));
+
+                // Session ended cleanly (e.g. the receive loop hit end-of-stream because the Sidecar
+                // exited or was killed by the watchdog). Anything still in flight died with it and will
+                // never send a completion, so drop the tracking — otherwise a stale head would make the
+                // NEXT session's watchdog blame a command that is long gone. Previously only the catch
+                // block below cleared this, so a non-throwing disconnect leaked stale state.
+                _bridge.ClearInFlight();
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -118,7 +125,7 @@ public sealed class NexusPipeServer : BackgroundService
                 _logger.LogWarning(ex, "[Nexus] Pipe session error. Restarting listener.");
                 _bridge.InitResult      = -1;
                 _bridge.JvLinkVersion   = "Disconnected";
-                _bridge.ActiveStreamCommand = null;
+                _bridge.ClearInFlight();
                 _bridge.IngestionStatus = "Idle";
                 await Task.Delay(3000, stoppingToken);
             }
@@ -148,7 +155,7 @@ public sealed class NexusPipeServer : BackgroundService
                 if (!pipe.IsConnected) break;
                 var commandName = TryGetCommandName(json);
                 if (commandName?.StartsWith("STREAM_", StringComparison.OrdinalIgnoreCase) == true)
-                    _bridge.ActiveStreamCommand = commandName;
+                    _bridge.MarkCommandForwarded(commandName);
 
                 var envelope = new PipeEnvelope(PipeMessageType.Command, Encoding.UTF8.GetBytes(json));
                 await envelope.WriteAsync(pipe, ct);
@@ -212,6 +219,11 @@ public sealed class NexusPipeServer : BackgroundService
                     var eventType = root.TryGetProperty("event_type", out var ev) ? ev.GetString() : null;
                     if (eventType is "STREAM_DIFN_COMPLETE" or "STREAM_TOKU_COMPLETE" or "STREAM_ODDS_COMPLETE" or "STREAM_RESULTS_COMPLETE" or "STREAM_RTCARD_COMPLETE")
                     {
+                        // Retire the oldest in-flight command: the Sidecar runs them one at a time in
+                        // order, so this completion belongs to the head. Keeps ActiveStreamCommand
+                        // pointing at whatever is genuinely executing for the streaming watchdog.
+                        _bridge.MarkCommandCompleted();
+
                         if (batch.Count > 0)
                             totalFlushed += await FlushBatchAsync(batch, totalFlushed, ct);
 
@@ -507,7 +519,7 @@ public sealed class NexusPipeServer : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "[Nexus] Record receiver stopped unexpectedly.");
-            _bridge.ActiveStreamCommand = null;
+            _bridge.ClearInFlight();
             _bridge.IngestionStatus = "Error";
         }
         finally

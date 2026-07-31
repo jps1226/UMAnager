@@ -384,18 +384,25 @@ public sealed class LiveOrchestrator : BackgroundService
 
         var stuckFor = DateTime.UtcNow - since.Value;
         var activeCommand = _bridge.ActiveStreamCommand;
+        var inFlight = _bridge.InFlightCommands;
         _logger.LogWarning(
-            "[Orchestrator] Streaming-lock watchdog: ingest stuck 'Streaming' for {Mins:F0}m with no completion on {Command} — resetting to Idle and restarting Sidecar.",
-            stuckFor.TotalMinutes, activeCommand ?? "unknown command");
+            "[Orchestrator] Streaming-lock watchdog: ingest stuck 'Streaming' for {Mins:F0}m with no completion on {Command} (in flight: {InFlight}) — resetting to Idle and restarting Sidecar.",
+            stuckFor.TotalMinutes, activeCommand ?? "unknown command",
+            inFlight.Count > 0 ? string.Join(", ", inFlight) : "none");
 
-        if (string.Equals(activeCommand, "STREAM_DIFN", StringComparison.OrdinalIgnoreCase))
+        // Back off the weekly UM refresh if STREAM_DIFN was involved at all — not just if it happens to
+        // be the FIFO head. A stuck DIFN that isn't backed off gets re-enqueued every single tick, which
+        // turns this watchdog from a safety net into a permanent Sidecar kill/restart loop (2026-07-31).
+        // Checking the whole in-flight set rather than only the head makes the backoff robust even if
+        // head-tracking is ever off by one again.
+        if (_bridge.IsInFlight("STREAM_DIFN"))
         {
             await _appState.SetTimestampAsync(AppStateService.Keys.LastUmRefreshFailedAt, DateTime.UtcNow);
             _logger.LogWarning("[Orchestrator] STREAM_DIFN wedged; backing off weekly UM refresh for {Hours:F0}h.",
                 UmRefreshFailureBackoff.TotalHours);
         }
 
-        _bridge.ActiveStreamCommand = null;
+        _bridge.ClearInFlight();
         _bridge.IngestionStatus = "Idle";   // setter clears StreamingSinceUtc; lock is freed
         RestartSidecarAfterWatchdog(activeCommand ?? "unknown");
 
