@@ -108,12 +108,25 @@ static int Run(CancellationToken ct)
 
             if (cmd == "STREAM_DIFN")
             {
+                // from_time is the JV-Link cursor (yyyyMMddHHmmss JST) — the lastFileTimestamp
+                // returned by the previous JVOpen. option=1 (通常データ / delta) is REQUIRED for the
+                // routine weekly master refresh; option=4 (full 35-year setup) wedges the STA thread
+                // permanently since JRA-VAN's late-July 2026 repack (Oracle 2026-07-31).
+                var difnFromTime = doc.RootElement.TryGetProperty("from_time", out var dft)
+                    ? dft.GetString() ?? ""
+                    : "";
+                if (string.IsNullOrWhiteSpace(difnFromTime))
+                    difnFromTime = "00000000000000";
+
+                int difnOption = doc.RootElement.TryGetProperty("option", out var dop) ? dop.GetInt32() : 1;
+
                 try
                 {
-                    var (stored, skippedFiles) = DifnStreamHandler.StreamAsync(jvLink!, pipeClient, ct)
-                        .GetAwaiter().GetResult();
-                    pipeClient.SendStreamCompleteAsync(stored, skippedFiles, ct).GetAwaiter().GetResult();
-                    Console.WriteLine($"[Sidecar] STREAM_DIFN complete. Stored={stored}, SkippedFiles={skippedFiles}");
+                    var (stored, skippedFiles, lastFileTs) =
+                        DifnStreamHandler.StreamAsync(jvLink!, pipeClient, ct, "DIFN", difnFromTime, difnOption)
+                            .GetAwaiter().GetResult();
+                    pipeClient.SendStreamCompleteAsync(stored, skippedFiles, ct, lastFileTs).GetAwaiter().GetResult();
+                    Console.WriteLine($"[Sidecar] STREAM_DIFN complete. Stored={stored}, SkippedFiles={skippedFiles}, lastFileTs={lastFileTs}");
                 }
                 catch (Exception ex)
                 {
@@ -126,9 +139,12 @@ static int Run(CancellationToken ct)
                 // Bloodline DataSpec — carries HN (breeding-horse master) records that contain
                 // romaji names for HansyokuNum-keyed ancestors. Reuses the DIFN streaming
                 // machinery; only the JVOpen DataSpec changes.
+                // Deliberately stays on option=4 (one-shot historical setup): BLDN is a manual,
+                // run-once bloodline load, not a recurring job, so it never hits the weekly
+                // full-setup problem that forced DIFN onto option=1.
                 try
                 {
-                    var (stored, skippedFiles) = DifnStreamHandler.StreamAsync(jvLink!, pipeClient, ct, "BLDN")
+                    var (stored, skippedFiles, _) = DifnStreamHandler.StreamAsync(jvLink!, pipeClient, ct, "BLDN")
                         .GetAwaiter().GetResult();
                     pipeClient.SendStreamCompleteAsync(stored, skippedFiles, ct).GetAwaiter().GetResult();
                     Console.WriteLine($"[Sidecar] STREAM_BLDN complete. Stored={stored}, SkippedFiles={skippedFiles}");

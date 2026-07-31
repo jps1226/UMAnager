@@ -17,6 +17,14 @@ namespace UMAnager.Nexus.Services;
 
 public sealed class AppStateService
 {
+    // Seed VALUE (not a key) for the FIRST option=1 DIFN run, used only until a real
+    // lastFileTimestamp is stored under Keys.DifnFileCursor. No cursor was ever captured under the
+    // old option=4 scheme, so there is no exact resume point. Deliberately EARLIER than the last
+    // successful refresh (2026-07-24 ~11:42 JST): too-early only re-sends master records we already
+    // have and they UPSERT harmlessly, whereas too-late would silently skip updates. Overlap is the
+    // safe direction; a gap is not.
+    public const string DifnCursorBootstrap = "20260720000000";
+
     public static class Keys
     {
         // DateTime — wall-clock of last refresh trigger (used by the 4-hour throttle).
@@ -49,6 +57,12 @@ public sealed class AppStateService
         // DateTime — wall-clock of the last failed/hung weekly UM refresh. Used as a short backoff so
         // a stuck JVOpen(DIFN) does not retrigger every watchdog cycle overnight.
         public const string LastUmRefreshFailedAt = "last_um_refresh_failed_at";
+
+        // String — JV-Link cursor (yyyyMMddHHmmss JST) for the weekly DIFN master refresh: the
+        // lastFileTimestamp returned by the previous JVOpen. Passed as fromTime to the next
+        // option=1 call for gap-free delta syncing. Same role TokuFileCursor plays for TOKU.
+        // Never blank it — an empty cursor means "from the beginning" (see DifnCursorBootstrap).
+        public const string DifnFileCursor = "difn_file_cursor";
 
         // DateTime — wall-clock when JV-Link last reported rc=-504 (JRA-VAN server maintenance).
         // Set by the pipe server on a maintenance completion; cleared (Value="") on the next

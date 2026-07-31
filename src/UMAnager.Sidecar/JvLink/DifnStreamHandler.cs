@@ -1,9 +1,11 @@
 // ============================================================
 // FILE: DifnStreamHandler.cs
 // LAYER: Sidecar JV-Link stream handler
-// PURPOSE: JVOpen(dataSpec, option=4) for master-data streams — DIFN (horse/jockey/trainer
-//          masters) and BLDN (breeding-horse HN records). Sets the save path + ParentHWnd=0,
-//          downloads files, then JVGets-loops raw records back over the pipe.
+// PURPOSE: JVOpen(dataSpec, option) for master-data streams — DIFN (horse/jockey/trainer
+//          masters, option=1 cursor-based) and BLDN (breeding-horse HN records, option=4
+//          one-shot setup). Sets the save path + ParentHWnd=0, downloads files, then
+//          JVGets-loops raw records back over the pipe. Returns the advanced
+//          lastFileTimestamp for the Nexus to persist as the cursor.
 // KEY DEPENDENCIES: IJVLink, SidecarPipeClient.
 // LAST DOCUMENTED: 2026-06-02
 // ============================================================
@@ -22,9 +24,14 @@ internal static class DifnStreamHandler
     // Previously skipped but should be included in raw_staging for complete master data.
     private static readonly HashSet<string> SkipTypes = [];
 
-    public static async Task<(int Stored, int Skipped)> StreamAsync(
+    // fromTime/option default to the one-shot SETUP form (option=4, everything from 1991) because
+    // that is what BLDN's one-time bloodline load still wants. DIFN's routine weekly refresh MUST
+    // pass option=1 with the previous run's lastFileTimestamp — see the JVOpen comment below.
+    public static async Task<(int Stored, int Skipped, string LastFileTimestamp)> StreamAsync(
         IJVLink jvLink, SidecarPipeClient pipe, CancellationToken ct,
-        string dataSpec = "DIFN")
+        string dataSpec = "DIFN",
+        string fromTime = "19910101000000",
+        int option = 4)
     {
         int readcount = 0, downloadcount = 0;
 
@@ -61,16 +68,35 @@ internal static class DifnStreamHandler
 
         // DIFN = post-Aug 2023 Differential/Accumulation DataSpec (supports 10-byte breeding IDs).
         // BLDN = Bloodline (HN/SK/BT records) — same machinery, different DataSpec.
-        // fromdate "19910101000000" = full setup from the start of JRA digital records.
-        // option = 4 = JV_OP_SETUPLAST.
-        Console.WriteLine($"[Sidecar] Calling JVOpen({dataSpec}, 19910101000000, 4)...");
-        int rc = jvLink.JVOpen(dataSpec, "19910101000000", 4,
+        //
+        // option=1 (通常データ / normal delta) — what the ROUTINE weekly DIFN refresh must use.
+        //   fromTime acts as a strict CURSOR: pass the lastFileTimestamp returned by the previous
+        //   JVOpen for gap-free syncing.
+        // option=4 (dialog-less SETUP) — one-shot initial build only (BLDN's bloodline load).
+        //
+        // 2026-07-31 (Oracle): the weekly refresh used to call option=4 with fromTime=19910101000000
+        // — a FULL 35-year setup, every week. option=4 ignores fromTime for master records and forces
+        // a full recalculation. Before returning, JVOpen synchronously fetches the server file
+        // manifest and cross-references it against every file in the local C:\JRA-VAN\data cache; on a
+        // 35-year manifest that evaluation scales geometrically. After JRA-VAN's late-July server-side
+        // repack of the historical setup files it stopped yielding control back to managed code at all
+        // — JVOpen never returned, permanently wedging the Sidecar's single STA thread (there is no
+        // timeout property and no pre-flight call to abort it). Last success 2026-07-23.
+        Console.WriteLine($"[Sidecar] Calling JVOpen({dataSpec}, {fromTime}, option={option})...");
+        int rc = jvLink.JVOpen(dataSpec, fromTime, option,
                                 ref readcount, ref downloadcount, out var lastts);
         Console.WriteLine($"[Sidecar] JVOpen returned: rc={rc}");
+        if (rc == -1)
+        {
+            // No new data since the cursor — the normal outcome for a quiet week on option=1.
+            // Not an error: return without advancing so the caller keeps its existing cursor.
+            Console.WriteLine($"[Sidecar] No new {dataSpec} master data since {fromTime} (rc=-1).");
+            return (0, 0, fromTime);
+        }
         if (rc == JvReturnCodes.Maintenance)
         {
             Console.WriteLine($"[Sidecar] JRA-VAN server under maintenance (rc={rc}). Backing off.");
-            return (JvReturnCodes.MaintenanceStored, 0);
+            return (JvReturnCodes.MaintenanceStored, 0, fromTime); // no advance — preserve cursor
         }
         if (rc < 0)
             throw new InvalidOperationException($"JVOpen({dataSpec}) failed: rc={rc}");
@@ -284,10 +310,14 @@ internal static class DifnStreamHandler
 
         Console.WriteLine($"[Sidecar] ════════════════════════════════════════════════════════");
         Console.WriteLine($"[Sidecar] STREAM COMPLETE");
-        Console.WriteLine($"[Sidecar] Final: Stored={stored}, Skipped={skipped}");
+        Console.WriteLine($"[Sidecar] Final: Stored={stored}, Skipped={skipped}, lastFileTs={lastts}");
         Console.WriteLine($"[Sidecar] ════════════════════════════════════════════════════════");
         Console.Out.Flush();
 
-        return (stored, skipped);
+        // lastts is the cursor for the NEXT option=1 call. Guard against a blank/null out-param
+        // (seen on some rc paths) by falling back to the cursor we came in with — never advance to
+        // an empty string, which would reset the cursor and re-pull from scratch.
+        var advanced = string.IsNullOrWhiteSpace(lastts) ? fromTime : lastts;
+        return (stored, skipped, advanced);
     }
 }

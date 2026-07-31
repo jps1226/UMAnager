@@ -133,10 +133,16 @@ public sealed class JvLinkController : ControllerBase
         if (_bridge.IngestionStatus == "Streaming")
             return Conflict(new { error = "Ingestion already in progress." });
 
+        // Must mirror the orchestrator: option=1 (delta) from the stored cursor. Firing the old
+        // bare command would default the Sidecar to a full setup and re-wedge the STA thread.
+        var cursor = await _appState.GetStringAsync(AppStateService.Keys.DifnFileCursor);
+        if (string.IsNullOrWhiteSpace(cursor)) cursor = AppStateService.DifnCursorBootstrap;
+
         _bridge.StagedRecordCount = 0;  // Reset counter for new stream
         _bridge.IngestionStatus = "Streaming";
-        await _bridge.CommandQueue.Writer.WriteAsync("{\"command\":\"STREAM_DIFN\"}");
-        return Accepted(new { status = "DIFN stream command enqueued." });
+        await _bridge.CommandQueue.Writer.WriteAsync(
+            $"{{\"command\":\"STREAM_DIFN\",\"from_time\":\"{cursor}\",\"option\":1}}");
+        return Accepted(new { status = $"DIFN stream command enqueued (option=1, from {cursor})." });
     }
 
     [HttpPost("parse-records")]

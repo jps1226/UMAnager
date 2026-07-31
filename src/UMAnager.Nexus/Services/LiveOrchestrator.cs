@@ -50,6 +50,7 @@ public sealed class LiveOrchestrator : BackgroundService
     // enough for Jonathan/Iris to investigate while live race-card/odds/result fetches can continue.
     private static readonly TimeSpan UmRefreshFailureBackoff = TimeSpan.FromHours(12);
 
+
     private readonly Channel<bool> _forceTickChannel = Channel.CreateBounded<bool>(
         new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
 
@@ -592,11 +593,17 @@ public sealed class LiveOrchestrator : BackgroundService
         var lastRefresh = await _appState.GetTimestampAsync(AppStateService.Keys.LastUmRefresh);
         if (lastRefresh.HasValue && (DateTime.UtcNow - lastRefresh.Value).TotalDays < 7) return;
 
-        _logger.LogInformation("[Orchestrator] Weekly UM refresh due (last={Last}). Enqueueing STREAM_DIFN.",
-            lastRefresh?.ToString("O") ?? "never");
+        // option=1 (delta) with the saved cursor — NOT option=4. A weekly full setup is what wedged
+        // the Sidecar's STA thread permanently (Oracle 2026-07-31); see DifnStreamHandler's JVOpen.
+        var cursor = await _appState.GetStringAsync(AppStateService.Keys.DifnFileCursor);
+        if (string.IsNullOrWhiteSpace(cursor)) cursor = AppStateService.DifnCursorBootstrap;
+
+        _logger.LogInformation("[Orchestrator] Weekly UM refresh due (last={Last}). Enqueueing STREAM_DIFN option=1 from cursor {Cursor}.",
+            lastRefresh?.ToString("O") ?? "never", cursor);
         _bridge.StagedRecordCount = 0;
         _bridge.IngestionStatus   = "Streaming";
-        await _bridge.CommandQueue.Writer.WriteAsync("{\"command\":\"STREAM_DIFN\"}", ct);
+        await _bridge.CommandQueue.Writer.WriteAsync(
+            $"{{\"command\":\"STREAM_DIFN\",\"from_time\":\"{cursor}\",\"option\":1}}", ct);
     }
 
     private async Task NotifyRacePlanPopulatedAsync()

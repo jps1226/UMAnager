@@ -274,19 +274,47 @@ public sealed class NexusPipeServer : BackgroundService
                             }
                         }
 
+                        // Same cursor discipline for the weekly DIFN master refresh (option=1). Without
+                        // this the next run would fall back to the bootstrap seed forever and re-pull
+                        // the same weeks of master data every time.
+                        if (eventType == "STREAM_DIFN_COMPLETE"
+                            && recordCount >= 0
+                            && root.TryGetProperty("last_file_timestamp", out var dlts))
+                        {
+                            var difnCursor = dlts.GetString();
+                            if (!string.IsNullOrWhiteSpace(difnCursor))
+                            {
+                                await _appState.SetStringAsync(AppStateService.Keys.DifnFileCursor, difnCursor);
+                                _logger.LogInformation("[Nexus] DIFN file cursor advanced to {Cursor}", difnCursor);
+                            }
+                        }
+
                         // After DIFN stream completes, parse newly-staged UM records and stamp
                         // last_um_refresh so the weekly auto-refresh cadence resets correctly.
-                        if (eventType == "STREAM_DIFN_COMPLETE" && recordCount > 0)
+                        // A DIFN run SUCCEEDED whenever record_count >= 0 — and on option=1 (delta) a
+                        // quiet week legitimately returns ZERO records. Stamping last_um_refresh is
+                        // therefore gated on success, NOT on records existing: under the old option=4
+                        // full-setup there were always records, so >0 was indistinguishable from
+                        // success, but keeping that gate here would leave the weekly job "never
+                        // refreshed" after every empty delta and re-enqueue it on every single tick.
+                        // The parse is separate — it only has work to do when records actually landed.
+                        if (eventType == "STREAM_DIFN_COMPLETE" && recordCount >= 0)
                         {
+                            var hasNewRecords = recordCount > 0;
                             _ = Task.Run(async () =>
                             {
                                 using var scope = _scopeFactory.CreateScope();
-                                var svc = scope.ServiceProvider.GetRequiredService<DifnRecordParsingService>();
-                                await svc.ParseAllRecordsAsync(CancellationToken.None);
+                                if (hasNewRecords)
+                                {
+                                    var svc = scope.ServiceProvider.GetRequiredService<DifnRecordParsingService>();
+                                    await svc.ParseAllRecordsAsync(CancellationToken.None);
+                                }
                                 var appState = scope.ServiceProvider.GetRequiredService<AppStateService>();
                                 await appState.SetTimestampAsync(AppStateService.Keys.LastUmRefresh, DateTime.UtcNow);
                                 await appState.SetStringAsync(AppStateService.Keys.LastUmRefreshFailedAt, "");
-                                _logger.LogInformation("[Nexus] DIFN auto-parse complete, last_um_refresh stamped and failure backoff cleared.");
+                                _logger.LogInformation(
+                                    "[Nexus] DIFN refresh complete ({Records} new records{Parsed}); last_um_refresh stamped and failure backoff cleared.",
+                                    recordCount, hasNewRecords ? ", parsed" : ", nothing to parse");
                             });
                         }
 

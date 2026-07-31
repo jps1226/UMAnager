@@ -55,13 +55,15 @@ internal sealed class SidecarPipeClient
     public async Task SendRawRecordAsync(byte[] rawBytes, CancellationToken ct)
         => await new PipeEnvelope(PipeMessageType.RawRecord, rawBytes).WriteAsync(_pipe, ct);
 
-    public async Task SendStreamCompleteAsync(int recordCount, int skippedCount, CancellationToken ct)
+    public async Task SendStreamCompleteAsync(int recordCount, int skippedCount, CancellationToken ct,
+                                              string lastFileTimestamp = "")
     {
         var payload = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
         {
-            event_type    = "STREAM_DIFN_COMPLETE",
-            record_count  = recordCount,
-            skipped_count = skippedCount,
+            event_type          = "STREAM_DIFN_COMPLETE",
+            record_count        = recordCount,
+            skipped_count       = skippedCount,
+            last_file_timestamp = lastFileTimestamp,
         }));
         await new PipeEnvelope(PipeMessageType.Status, payload).WriteAsync(_pipe, ct);
     }
