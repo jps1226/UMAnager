@@ -11,6 +11,7 @@
 //          Honors the pause flag and only fetches when the Sidecar is connected.
 // LAST DOCUMENTED: 2026-06-02
 // ============================================================
+using System.Diagnostics;
 using System.Threading.Channels;
 using Microsoft.EntityFrameworkCore;
 using UMAnager.Nexus.Data;
@@ -41,9 +42,13 @@ public sealed class LiveOrchestrator : BackgroundService
     private readonly ILogger<LiveOrchestrator> _logger;
 
     // T1-3: if ingest sits in "Streaming" longer than this with no completion, the Sidecar is assumed
-    // hung (it never dropped the pipe, so the error path never fired). Reset the lock so fetches resume.
+    // hung (it never dropped the pipe, so the error path never fired). Reset the lock and restart Sidecar.
     // A normal stream completes in seconds-to-low-minutes; 10m is comfortably past any legitimate run.
     private static readonly TimeSpan StreamingWatchdogTimeout = TimeSpan.FromMinutes(10);
+
+    // A stuck weekly UM refresh should not be re-enqueued every watchdog cycle overnight. Back off long
+    // enough for Jonathan/Iris to investigate while live race-card/odds/result fetches can continue.
+    private static readonly TimeSpan UmRefreshFailureBackoff = TimeSpan.FromHours(12);
 
     private readonly Channel<bool> _forceTickChannel = Channel.CreateBounded<bool>(
         new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropOldest });
@@ -120,7 +125,7 @@ public sealed class LiveOrchestrator : BackgroundService
         // 0. Streaming-lock watchdog (T1-3) — recover from a Sidecar that hung mid-stream without
         //    dropping the pipe (so the error path never reset IngestionStatus). Runs before anything
         //    that guards on "Streaming", so a stuck lock is freed at the top of the tick.
-        CheckStreamingWatchdog();
+        await CheckStreamingWatchdogAsync();
 
         // 0b. Daily raw_staging retention (T1-2) — trim re-streamed duplicate UM/SE/RA rows so the
         //     5GB bloat can't rebuild. Internally gated to once/24h and skipped while streaming.
@@ -335,8 +340,9 @@ public sealed class LiveOrchestrator : BackgroundService
     // T1-3: free a stuck ingest lock. A hung Sidecar that never sends a completion (and never drops
     // the pipe) leaves IngestionStatus = "Streaming" forever, silently killing all fetches for the
     // rest of an unattended weekend. If we've been "Streaming" past the timeout, assume the stream is
-    // dead and reset to "Idle" so the next fetch can proceed.
-    private void CheckStreamingWatchdog()
+    // dead: reset the lock, restart Sidecar so the blocked COM call dies, and back off the weekly
+    // DIFN job if that was the command that wedged.
+    private async Task CheckStreamingWatchdogAsync()
     {
         var since = _bridge.StreamingSinceUtc;
 
@@ -352,12 +358,90 @@ public sealed class LiveOrchestrator : BackgroundService
         }
 
         var stuckFor = DateTime.UtcNow - since.Value;
+        var activeCommand = _bridge.ActiveStreamCommand;
         _logger.LogWarning(
-            "[Orchestrator] Streaming-lock watchdog: ingest stuck 'Streaming' for {Mins:F0}m with no completion — resetting to Idle.",
-            stuckFor.TotalMinutes);
+            "[Orchestrator] Streaming-lock watchdog: ingest stuck 'Streaming' for {Mins:F0}m with no completion on {Command} — resetting to Idle and restarting Sidecar.",
+            stuckFor.TotalMinutes, activeCommand ?? "unknown command");
+
+        if (string.Equals(activeCommand, "STREAM_DIFN", StringComparison.OrdinalIgnoreCase))
+        {
+            await _appState.SetTimestampAsync(AppStateService.Keys.LastUmRefreshFailedAt, DateTime.UtcNow);
+            _logger.LogWarning("[Orchestrator] STREAM_DIFN wedged; backing off weekly UM refresh for {Hours:F0}h.",
+                UmRefreshFailureBackoff.TotalHours);
+        }
+
+        _bridge.ActiveStreamCommand = null;
         _bridge.IngestionStatus = "Idle";   // setter clears StreamingSinceUtc; lock is freed
+        RestartSidecarAfterWatchdog(activeCommand ?? "unknown");
+
         _health.RecordFailure("streaming-watchdog",
-            $"Ingest stuck 'Streaming' {stuckFor.TotalMinutes:F0}m with no completion — auto-reset to Idle.");
+            $"Ingest stuck 'Streaming' {stuckFor.TotalMinutes:F0}m with no completion — auto-reset to Idle; Sidecar restarted.");
+    }
+
+    private void RestartSidecarAfterWatchdog(string activeCommand)
+    {
+        try
+        {
+            foreach (var p in Process.GetProcessesByName("UMAnager.Sidecar"))
+            {
+                try
+                {
+                    _logger.LogWarning("[Orchestrator] Killing stuck UMAnager.Sidecar PID {Pid} after watchdog ({Command}).",
+                        p.Id, activeCommand);
+                    p.Kill(entireProcessTree: true);
+                    p.WaitForExit(5000);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[Orchestrator] Failed to kill UMAnager.Sidecar PID {Pid}.", p.Id);
+                }
+                finally { p.Dispose(); }
+            }
+
+            var root = FindRepoRoot();
+            if (root is null)
+            {
+                _logger.LogError("[Orchestrator] Could not locate UMAnager repo root; Sidecar not restarted.");
+                return;
+            }
+
+            var sidecarExe = Path.Combine(root, "src", "UMAnager.Sidecar", "bin", "Release", "net8.0-windows", "win-x86", "UMAnager.Sidecar.exe");
+            if (!File.Exists(sidecarExe))
+            {
+                _logger.LogError("[Orchestrator] Sidecar exe missing; Sidecar not restarted: {Path}", sidecarExe);
+                return;
+            }
+
+            Directory.CreateDirectory(Path.Combine(root, "logs"));
+            var sidecarLog = Path.Combine(root, "logs", "sidecar.log");
+            var cmd = $@"cd /d ""{root}"" && ""{sidecarExe}"" >> ""{sidecarLog}"" 2>&1";
+            var proc = Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = "/c \"" + cmd + "\"",
+                WorkingDirectory = root,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+            _logger.LogWarning("[Orchestrator] Restarted Sidecar wrapper PID {Pid} after watchdog.", proc?.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Orchestrator] Sidecar watchdog restart failed.");
+        }
+    }
+
+    private static string? FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "launch-services.ps1"))
+                && Directory.Exists(Path.Combine(dir.FullName, "src")))
+                return dir.FullName;
+            dir = dir.Parent;
+        }
+        return null;
     }
 
     // T1-2: keep raw_staging from regrowing the duplicate bloat. JV-Link re-streams the whole horse
@@ -428,6 +512,14 @@ public sealed class LiveOrchestrator : BackgroundService
     private async Task MaybeEnqueueUmRefreshAsync(CancellationToken ct)
     {
         if (_bridge.IngestionStatus == "Streaming") return;
+
+        var lastFailure = await _appState.GetTimestampAsync(AppStateService.Keys.LastUmRefreshFailedAt);
+        if (lastFailure.HasValue && DateTime.UtcNow - lastFailure.Value < UmRefreshFailureBackoff)
+        {
+            _logger.LogWarning("[Orchestrator] Weekly UM refresh is still in backoff after a stuck STREAM_DIFN at {FailedAt}; skipping this tick.",
+                lastFailure.Value.ToString("O"));
+            return;
+        }
 
         var lastRefresh = await _appState.GetTimestampAsync(AppStateService.Keys.LastUmRefresh);
         if (lastRefresh.HasValue && (DateTime.UtcNow - lastRefresh.Value).TotalDays < 7) return;

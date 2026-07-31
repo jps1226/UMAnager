@@ -118,9 +118,24 @@ public sealed class NexusPipeServer : BackgroundService
                 _logger.LogWarning(ex, "[Nexus] Pipe session error. Restarting listener.");
                 _bridge.InitResult      = -1;
                 _bridge.JvLinkVersion   = "Disconnected";
+                _bridge.ActiveStreamCommand = null;
                 _bridge.IngestionStatus = "Idle";
                 await Task.Delay(3000, stoppingToken);
             }
+        }
+    }
+
+
+    private static string? TryGetCommandName(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("command", out var c) ? c.GetString() : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -131,6 +146,10 @@ public sealed class NexusPipeServer : BackgroundService
             await foreach (var json in _bridge.CommandQueue.Reader.ReadAllAsync(ct))
             {
                 if (!pipe.IsConnected) break;
+                var commandName = TryGetCommandName(json);
+                if (commandName?.StartsWith("STREAM_", StringComparison.OrdinalIgnoreCase) == true)
+                    _bridge.ActiveStreamCommand = commandName;
+
                 var envelope = new PipeEnvelope(PipeMessageType.Command, Encoding.UTF8.GetBytes(json));
                 await envelope.WriteAsync(pipe, ct);
                 _logger.LogInformation("[Nexus] Forwarded command to Sidecar: {Json}", json);
@@ -254,7 +273,8 @@ public sealed class NexusPipeServer : BackgroundService
                                 await svc.ParseAllRecordsAsync(CancellationToken.None);
                                 var appState = scope.ServiceProvider.GetRequiredService<AppStateService>();
                                 await appState.SetTimestampAsync(AppStateService.Keys.LastUmRefresh, DateTime.UtcNow);
-                                _logger.LogInformation("[Nexus] DIFN auto-parse complete, last_um_refresh stamped.");
+                                await appState.SetStringAsync(AppStateService.Keys.LastUmRefreshFailedAt, "");
+                                _logger.LogInformation("[Nexus] DIFN auto-parse complete, last_um_refresh stamped and failure backoff cleared.");
                             });
                         }
 
@@ -487,6 +507,7 @@ public sealed class NexusPipeServer : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "[Nexus] Record receiver stopped unexpectedly.");
+            _bridge.ActiveStreamCommand = null;
             _bridge.IngestionStatus = "Error";
         }
         finally

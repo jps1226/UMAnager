@@ -46,6 +46,10 @@ public sealed class AppStateService
         // DateTime — wall-clock of last successful UM (horse master) ingest.
         public const string LastUmRefresh = "last_um_refresh";
 
+        // DateTime — wall-clock of the last failed/hung weekly UM refresh. Used as a short backoff so
+        // a stuck JVOpen(DIFN) does not retrigger every watchdog cycle overnight.
+        public const string LastUmRefreshFailedAt = "last_um_refresh_failed_at";
+
         // DateTime — wall-clock when JV-Link last reported rc=-504 (JRA-VAN server maintenance).
         // Set by the pipe server on a maintenance completion; cleared (Value="") on the next
         // successful (record_count >= 0) stream. The orchestrator backs off to

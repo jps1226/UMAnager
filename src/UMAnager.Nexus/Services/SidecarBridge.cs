@@ -25,6 +25,10 @@ public sealed class SidecarBridge
 
     public int    StagedRecordCount { get; set; }
 
+    // Last STREAM_* command forwarded to the Sidecar while IngestionStatus is Streaming. This lets the
+    // watchdog distinguish a weekly master-data pull (STREAM_DIFN) from live odds/results/card fetches.
+    public string? ActiveStreamCommand { get; set; }
+
     // "Idle" | "Streaming" | "Complete" | "Error". The setter auto-stamps StreamingSinceUtc on the
     // Idle→Streaming edge and clears it when leaving Streaming, so the LiveOrchestrator watchdog can
     // detect a Sidecar that hung mid-stream WITHOUT ever sending a completion (which would otherwise
