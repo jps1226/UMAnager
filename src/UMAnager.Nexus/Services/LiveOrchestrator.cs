@@ -223,6 +223,11 @@ public sealed class LiveOrchestrator : BackgroundService
                 MaintenanceSinceUtc.Value, effectiveInterval);
         }
 
+        // The watchdog runs at the top of each tick, so long non-live sleeps must be capped while a
+        // stream is active. Otherwise a 10-minute watchdog cannot fire until the normal one-hour
+        // AWAITING_POSTS/RACES_POPULATED cadence wakes back up.
+        effectiveInterval = CapIntervalForStreamingWatchdog(effectiveInterval);
+
         NextTickEtaUtc = LastTickAtUtc.Value.Add(effectiveInterval);
         await WaitInterruptiblyAsync(effectiveInterval, ct);
     }
@@ -272,6 +277,26 @@ public sealed class LiveOrchestrator : BackgroundService
         if (untilFlip <= TimeSpan.Zero) return interval; // already inside the window; next tick will flip
 
         return untilFlip < interval ? untilFlip : interval;
+    }
+
+    private TimeSpan CapIntervalForStreamingWatchdog(TimeSpan interval)
+    {
+        if (_bridge.IngestionStatus != "Streaming" || _bridge.StreamingSinceUtc is null) return interval;
+
+        var elapsed = DateTime.UtcNow - _bridge.StreamingSinceUtc.Value;
+        var remaining = StreamingWatchdogTimeout - elapsed;
+        var watchdogInterval = remaining <= TimeSpan.Zero
+            ? TimeSpan.FromSeconds(1)
+            : remaining + TimeSpan.FromSeconds(5);
+
+        if (watchdogInterval < interval)
+        {
+            _logger.LogInformation("[Orchestrator] Stream active on {Command}; capping next tick to {Interval} for watchdog.",
+                _bridge.ActiveStreamCommand ?? "unknown command", watchdogInterval);
+            return watchdogInterval;
+        }
+
+        return interval;
     }
 
     private async Task<TimeSpan> GetIntervalForPhaseAsync(AppPhase phase)
