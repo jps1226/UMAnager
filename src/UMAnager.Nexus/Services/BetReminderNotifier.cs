@@ -14,7 +14,7 @@ public sealed class BetReminderNotifier
 {
     private const string SentStateKey = "bet_reminder_sent_slots";
     private static readonly TimeZoneInfo EasternZone =
-        TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        TimeZoneInfo.FindSystemTimeZoneById("Central Standard Time");
     private static readonly TimeZoneInfo TokyoZone =
         TimeZoneInfo.FindSystemTimeZoneById("Tokyo Standard Time");
 
