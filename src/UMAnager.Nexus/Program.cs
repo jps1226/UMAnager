@@ -61,6 +61,7 @@ builder.Services.AddSingleton<SidecarBridge>();
 builder.Services.AddSingleton<PipelineHealthService>();   // T1-1: pipeline health/alerting (singleton).
 builder.Services.AddSingleton<AppStateService>();
 builder.Services.AddSingleton<SettingsService>();
+builder.Services.AddSingleton<BetReminderNotifier>();
 builder.Services.AddSingleton<PhaseService>();
 builder.Services.AddSingleton<OddsFetchService>();
 builder.Services.AddSingleton<ResultsFetchService>();

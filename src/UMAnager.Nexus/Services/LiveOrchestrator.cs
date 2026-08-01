@@ -36,6 +36,7 @@ public sealed class LiveOrchestrator : BackgroundService
     private readonly IDiscordNotifier _discord;
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly AppStateService _appState;
+    private readonly BetReminderNotifier _betReminder;
     private readonly RaceCardRefreshService _raceCardRefresh;
     private readonly RaceCardRtFetchService _raceCardRtFetch;
     private readonly PipelineHealthService _health;
@@ -71,6 +72,7 @@ public sealed class LiveOrchestrator : BackgroundService
         IDiscordNotifier discord,
         IDbContextFactory<AppDbContext> dbFactory,
         AppStateService appState,
+        BetReminderNotifier betReminder,
         RaceCardRefreshService raceCardRefresh,
         RaceCardRtFetchService raceCardRtFetch,
         PipelineHealthService health,
@@ -84,6 +86,7 @@ public sealed class LiveOrchestrator : BackgroundService
         _discord         = discord;
         _dbFactory       = dbFactory;
         _appState        = appState;
+        _betReminder     = betReminder;
         _raceCardRefresh = raceCardRefresh;
         _raceCardRtFetch = raceCardRtFetch;
         _health          = health;
@@ -127,6 +130,10 @@ public sealed class LiveOrchestrator : BackgroundService
         //    dropping the pipe (so the error path never reset IngestionStatus). Runs before anything
         //    that guards on "Streaming", so a stuck lock is freed at the top of the tick.
         await CheckStreamingWatchdogAsync();
+
+        // Weekend-local reminder checks are independent of the current race phase and
+        // intentionally run before fetch work, so a quiet/pre-live tick can still notify.
+        await _betReminder.EvaluateAndNotifyAsync(DateTime.UtcNow, ct);
 
         // 0b. Daily raw_staging retention (T1-2) — trim re-streamed duplicate UM/SE/RA rows so the
         //     5GB bloat can't rebuild. Internally gated to once/24h and skipped while streaming.

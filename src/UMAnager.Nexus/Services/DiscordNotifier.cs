@@ -25,6 +25,7 @@ public interface IDiscordNotifier
     Task NotifyPostPositionsConfirmedAsync(string raceDate, int raceCount, CancellationToken ct = default);
     Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default);
+    Task<bool> NotifyBetReminderAsync(string raceDate, string slot, CancellationToken ct = default);
     Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default);
     Task NotifyTestAsync(CancellationToken ct = default);
 }
@@ -131,6 +132,11 @@ public sealed class DiscordNotifier : IDiscordNotifier
         }
         return SendAsync(body, ct);
     }
+
+    public Task<bool> NotifyBetReminderAsync(string raceDate, string slot, CancellationToken ct = default)
+        => SendAsync(
+            $":alarm_clock: **Bet reminder** — it’s {slot} and no bets are locked yet for the {raceDate} JST card.\n"
+          + "When you’re ready, open the War Room and apply/submit your bets.", ct);
 
     public Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default)
     {

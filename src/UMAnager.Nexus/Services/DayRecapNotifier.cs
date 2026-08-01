@@ -131,7 +131,10 @@ public sealed class DayRecapNotifier
                 var raceEntries = entriesByRace.GetValueOrDefault(r.RaceId) ?? new();
                 var ppByHorse = raceEntries.GroupBy(e => e.HorseId).ToDictionary(g => g.Key, g => g.First().PostPosition);
                 var runners = TemplateBetEvaluator.BuildRunners(r.RaceId, marks, ppByHorse);
-                if (runners.Count == 0) continue;
+                var hasFrozenLines = frozenLines.TryGetValue(r.RaceId, out var frozen) && frozen.Count > 0;
+                // Discipline mode has no manual marks; its applied bet is represented by
+                // the frozen bet lines. Keep the same fallback used by BetWinNotifier.
+                if (runners.Count == 0 && !hasFrozenLines) continue;
                 placed++;
 
                 int? pp1 = null, pp2 = null, pp3 = null;
@@ -146,8 +149,8 @@ public sealed class DayRecapNotifier
                 try { pdoc = JsonDocument.Parse(r.ResultsJson ?? "{}"); payouts = pdoc.RootElement; }
                 catch (JsonException) { }
                 // Applied races carry frozen lines → score them verbatim; else default template.
-                var outcome = frozenLines.TryGetValue(r.RaceId, out var fl) && fl.Count > 0
-                    ? TemplateBetEvaluator.EvaluateLines(fl, runners.Count, pp1, pp2, pp3, payouts)
+                var outcome = hasFrozenLines
+                    ? TemplateBetEvaluator.EvaluateLines(frozen!, runners.Count, pp1, pp2, pp3, payouts)
                     : TemplateBetEvaluator.Evaluate(runners, pp1, pp2, pp3, payouts);
                 pdoc?.Dispose();
 
