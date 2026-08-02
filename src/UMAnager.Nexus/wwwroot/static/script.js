@@ -8909,7 +8909,7 @@ const OREPRO_COMPANION_WINDOW_NAME = 'OreProCompanionWindow';
 let oreproLastSyncPayload = null;
 
 // Per-race OrePro apply/submit state, persisted server-side. Shape:
-// { "<jraRaceId>": { appliedAt, submitted, submittedAt, marksCount, lastMessage } }
+// { "<jraRaceId>": { appliedAt, submitted, status, attempts[], marksCount, lastMessage } }
 let globalOreProApplyState = {};
 
 // Subset of /api/settings that the frontend cares about for OrePro behavior.
@@ -8978,6 +8978,8 @@ function getOreProApplyBadge(raceId) {
     const st = globalOreProApplyState?.[raceId];
     if (!st) return '';
     if (st.submitted)  return ` <span class="orepro-apply-badge is-submitted" title="Submitted to OrePro at ${escapeHtml(st.submittedAt || '')}">📤 Submitted</span>`;
+    if (st.status === 'unknown') return ` <span class="orepro-apply-badge is-applied" title="OrePro submit outcome is unknown — verify before retrying">❔ Verify</span>`;
+    if (st.status === 'failed') return ` <span class="orepro-apply-badge is-applied" title="OrePro submit failed: ${escapeHtml(st.lastMessage || '')}">⚠️ Failed</span>`;
     if (st.appliedAt)  return ` <span class="orepro-apply-badge is-applied"   title="Marks applied to OrePro cart at ${escapeHtml(st.appliedAt)} but not submitted">📝 Applied</span>`;
     return '';
 }
@@ -10109,17 +10111,27 @@ async function applyAllDayVotesToOrePro() {
         if (okCount > 0) loadVoteHistory().then(renderVoteHistory); // Phase 30: refresh badges
         try { renderLiveViewPanel(); } catch (_) {}
 
-        const mode = failCount === 0 ? 'ok' : (okCount > 0 ? 'warn' : 'error');
-        setOreProSessionStatus(`Bulk apply complete for ${date}: ${okCount} ok, ${failCount} failed.`, mode);
+        // A retry can succeed for only part of an earlier failed batch. Keep the remaining
+        // failed/unknown races visible instead of letting the latest response hide them.
+        const unresolvedRaceIds = allIds.filter(r_id => {
+            const st = globalOreProApplyState?.[r_id];
+            return st && !st.submitted && (st.status === 'failed' || st.status === 'unknown');
+        });
+        const mode = failCount === 0 && unresolvedRaceIds.length === 0 ? 'ok' : (okCount > 0 ? 'warn' : 'error');
+        setOreProSessionStatus(`Bulk apply complete for ${date}: ${okCount} ok, ${failCount} failed, ${unresolvedRaceIds.length} still unresolved.`, mode);
 
         // The bulk run takes a few seconds and the operator usually tabs away — pop a
         // modal alert so they get a clear signal when it's done.
         const alertIcon = failCount === 0 ? '✅' : (okCount > 0 ? '⚠️' : '❌');
-        const alertTail = failCount === 0
+        const alertTail = failCount === 0 && unresolvedRaceIds.length === 0
             ? 'All votes submitted successfully.'
             : (okCount > 0
-                ? `${okCount} succeeded, ${failCount} failed (see diagnostics panel).`
-                : `All ${failCount} submission(s) failed (see diagnostics panel).`);
+                ? `${okCount} succeeded, ${failCount} failed; ${unresolvedRaceIds.length} remain unresolved (see diagnostics panel).`
+                : `All ${failCount} submission(s) failed; ${unresolvedRaceIds.length} remain unresolved (see diagnostics panel).`);
+        const unresolvedTail = unresolvedRaceIds.length
+            ? `\n\n⚠ Still unresolved from this or an earlier attempt — verify these in OrePro before retrying:\n` +
+              unresolvedRaceIds.map(raceLabel).map(l => `  • ${l}`).join('\n')
+            : '';
         // Phase 34: explicitly call out the marked races we SKIPPED because they can't form the
         // current preset — so the operator knows to handle them via custom bets.
         const skipTail = wontPlace.length
@@ -10133,7 +10145,7 @@ async function applyAllDayVotesToOrePro() {
             ? `\n\n⚠ ${sideBetWarningLines.length} race(s) placed but a side bet did NOT make it in — check these:\n` +
               sideBetWarningLines.map(l => `  • ${l}`).join('\n')
             : '';
-        window.alert(`${alertIcon} Apply Day Votes finished for ${date}.\n\n${alertTail}${skipTail}${sideBetTail}`);
+        window.alert(`${alertIcon} Apply Day Votes finished for ${date}.\n\n${alertTail}${unresolvedTail}${skipTail}${sideBetTail}`);
 
         // Drop any failure/side-bet-drop detail into the diagnostics panel so the operator can see
         // what didn't go through, even on an otherwise-"ok" run.

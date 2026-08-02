@@ -346,7 +346,7 @@ public sealed class OreProCustomBetService
         // Record shared apply-state (same key/shape as the marks path) keyed by the JRA 16-char id,
         // so the frontend's apply badges + Auto Bet Day's "already submitted → skip" both see it.
         if (submitAfter)
-            await RecordApplyStateAsync(rawRaceId, lines.Count, submitted, submitMessage, ct);
+            await RecordApplyStateAsync(rawRaceId, lines.Count, submitted, submitMessage, lines, ct);
 
         var finalStatus = !confirmed ? "warn"
                         : (submitAfter && !submitted) ? "warn"
@@ -416,7 +416,7 @@ public sealed class OreProCustomBetService
     /// frontend's "📤 Submitted" badges and Auto Bet Day's skip-already-submitted both work for
     /// custom-path bets. Keyed by the JRA 16-char race id (what the frontend keys on).
     /// </summary>
-    private async Task RecordApplyStateAsync(string jraRaceId, int lineCount, bool submitted, string? lastMessage, CancellationToken ct)
+    private async Task RecordApplyStateAsync(string jraRaceId, int lineCount, bool submitted, string? lastMessage, IReadOnlyList<BetLine> lines, CancellationToken ct)
     {
         try
         {
@@ -426,14 +426,41 @@ public sealed class OreProCustomBetService
             catch { dict = new(); }
 
             var now = DateTime.UtcNow.ToString("O");
+            var status = submitted ? "confirmed" : ((lastMessage ?? "").StartsWith("Submit skipped", StringComparison.OrdinalIgnoreCase) ? "unknown" : "failed");
+            var attempts = new List<JsonElement>();
+            if (dict.TryGetValue(jraRaceId, out var previous) && previous.ValueKind == JsonValueKind.Object &&
+                previous.TryGetProperty("attempts", out var previousAttempts) && previousAttempts.ValueKind == JsonValueKind.Array)
+                attempts.AddRange(previousAttempts.EnumerateArray().Select(x => x.Clone()));
+            attempts.Add(JsonSerializer.SerializeToElement(new
+            {
+                attemptedAt = now,
+                status,
+                submitted,
+                marksCount = lineCount,
+                message = lastMessage,
+                via = "custom",
+            }));
+            var betLines = lines.Select(l => new
+            {
+                ticket = l.Type switch { 1 => "win", 2 => "place", 5 => "wide", 7 => "trio", 8 => "trifecta", _ => "" },
+                method = l.Method == 0 ? "normal" : "box",
+                label = l.Type switch { 1 => "単勝", 2 => "複勝", 5 => "ワイド", 7 => "3連複", 8 => "3連単", _ => "" },
+                horses = l.Umaban.Split('-', StringSplitOptions.RemoveEmptyEntries).Select(x => new { pp = int.Parse(x) }).ToArray(),
+                comboCount = 1,
+                stakePerCombo = (double)l.Money,
+            }).Where(l => !string.IsNullOrEmpty(l.ticket)).ToArray();
             dict[jraRaceId] = JsonSerializer.SerializeToElement(new
             {
-                appliedAt   = now,
+                appliedAt = now,
                 submitted,
                 submittedAt = submitted ? now : (string?)null,
-                marksCount  = lineCount,   // line count for custom tickets (vs mark count for the marks path)
+                marksCount = lineCount,
                 lastMessage,
-                via         = "custom",
+                status,
+                attemptCount = attempts.Count,
+                attempts,
+                betLines,
+                via = "custom",
             });
             await _appState.SetStringAsync(OreProVoteApplyService.ApplyStateKey, JsonSerializer.Serialize(dict));
         }

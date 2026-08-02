@@ -85,7 +85,7 @@ public sealed class DayRecapNotifier
             .ToList();
         if (dateKeys.Count == 0) return;
 
-        var (marks, locked, frozenLines) = await LoadMarksAndLocksAsync();
+        var (marks, locked, frozenLines, submitted) = await LoadMarksAndLocksAsync();
 
         foreach (var dateKey in dateKeys)
         {
@@ -127,7 +127,12 @@ public sealed class DayRecapNotifier
             var winningLines = new List<string>();
             foreach (var r in dayRaces)
             {
-                if (!locked.Contains(r.RaceId)) continue;
+                if (!submitted.Contains(r.RaceId)) continue;
+                if (!locked.Contains(r.RaceId) && !frozenLines.ContainsKey(r.RaceId))
+                {
+                    _logger.LogWarning("[DayRecap] {RaceId} was submitted but has no frozen bet plan; excluding it from totals", r.RaceId);
+                    continue;
+                }
                 var raceEntries = entriesByRace.GetValueOrDefault(r.RaceId) ?? new();
                 var ppByHorse = raceEntries.GroupBy(e => e.HorseId).ToDictionary(g => g.Key, g => g.First().PostPosition);
                 var runners = TemplateBetEvaluator.BuildRunners(r.RaceId, marks, ppByHorse);
@@ -200,13 +205,14 @@ public sealed class DayRecapNotifier
 
 
     /// <summary>Load the marks dict (non-X) and the set of locked (placed) race-ids.</summary>
-    private async Task<(Dictionary<string, string> Marks, HashSet<string> Locked, Dictionary<string, List<TemplateBetEvaluator.BetLine>> FrozenLines)> LoadMarksAndLocksAsync()
+    private async Task<(Dictionary<string, string> Marks, HashSet<string> Locked, Dictionary<string, List<TemplateBetEvaluator.BetLine>> FrozenLines, HashSet<string> Submitted)> LoadMarksAndLocksAsync()
     {
         var marks = new Dictionary<string, string>();
         var locked = new HashSet<string>();
         var frozen = new Dictionary<string, List<TemplateBetEvaluator.BetLine>>();
+        var submitted = new HashSet<string>();
         var raw = await _state.GetStringAsync(MarksStateKey);
-        if (string.IsNullOrWhiteSpace(raw)) return (marks, locked, frozen);
+        if (string.IsNullOrWhiteSpace(raw)) return (marks, locked, frozen, submitted);
         try
         {
             using var doc = JsonDocument.Parse(raw);
@@ -237,7 +243,28 @@ public sealed class DayRecapNotifier
             }
         }
         catch (JsonException) { }
-        return (marks, locked, frozen);
+
+        var applyRaw = await _state.GetStringAsync(OreProVoteApplyService.ApplyStateKey);
+        if (!string.IsNullOrWhiteSpace(applyRaw))
+        {
+            try
+            {
+                var apply = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(applyRaw) ?? new();
+                foreach (var (raceId, entry) in apply)
+                {
+                    if (entry.ValueKind != JsonValueKind.Object) continue;
+                    if (entry.TryGetProperty("submitted", out var ok) && ok.ValueKind == JsonValueKind.True)
+                        submitted.Add(raceId);
+                    if (!frozen.ContainsKey(raceId) && entry.TryGetProperty("betLines", out var lines) && lines.ValueKind == JsonValueKind.Array)
+                    {
+                        var parsed = TemplateBetEvaluator.ParseFrozenLines(lines);
+                        if (parsed.Count > 0) frozen[raceId] = parsed;
+                    }
+                }
+            }
+            catch (JsonException) { }
+        }
+        return (marks, locked, frozen, submitted);
     }
 
     private async Task<HashSet<string>> LoadSentDatesAsync()

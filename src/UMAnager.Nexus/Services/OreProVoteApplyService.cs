@@ -961,6 +961,20 @@ public sealed class OreProVoteApplyService
             }
 
             var now = DateTime.UtcNow.ToString("O");
+            var status = submitFlow is null ? "applied" : (submitted ? "confirmed" : "failed");
+            var attempts = new List<JsonElement>();
+            if (dict.TryGetValue(jraRaceId, out var previous) && previous.ValueKind == JsonValueKind.Object &&
+                previous.TryGetProperty("attempts", out var previousAttempts) && previousAttempts.ValueKind == JsonValueKind.Array)
+                attempts.AddRange(previousAttempts.EnumerateArray().Select(x => x.Clone()));
+            attempts.Add(JsonSerializer.SerializeToElement(new
+            {
+                attemptedAt = now,
+                status,
+                submitted,
+                marksCount,
+                message = lastMsg,
+                via = "marks",
+            }));
             var entry = new
             {
                 appliedAt    = now,
@@ -968,6 +982,9 @@ public sealed class OreProVoteApplyService
                 submittedAt  = submitted ? now : (string?)null,
                 marksCount,
                 lastMessage  = lastMsg,
+                status,
+                attemptCount = attempts.Count,
+                attempts,
             };
             dict[jraRaceId] = JsonSerializer.SerializeToElement(entry);
 
