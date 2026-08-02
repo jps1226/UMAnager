@@ -1,11 +1,10 @@
 // ============================================================
 // FILE: DiscordNotifier.cs
 // LAYER: Service (IDiscordNotifier)
-// PURPOSE: Posts plain Discord webhook messages — phase change, race-plan/posts/odds available,
+// PURPOSE: Posts styled Discord webhook embeds — phase change, race-plan/posts/odds available,
 //          mark-hit win, day recap, orchestrator error, test ping. Defines the MarkHit record.
 // KEY DEPENDENCIES: IHttpClientFactory, SettingsService.
 // CAUTION: Webhook URL is read per-send from app_settings; if unset, every Notify* is a silent no-op.
-// LAST DOCUMENTED: 2026-06-02
 // ============================================================
 using System.Net.Http.Json;
 
@@ -18,9 +17,7 @@ public interface IDiscordNotifier
     Task NotifyPhaseChangedAsync(AppPhase from, AppPhase to, CancellationToken ct = default);
     Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default);
-    /// <returns>true only if the webhook POST actually reached Discord with a 2xx response. false if
-    /// the webhook is unset, or Discord rejected/failed the request (e.g. 429 rate-limit). Callers that
-    /// gate "already notified" bookkeeping on delivery MUST honour this — see BetWinNotifier.</returns>
+    /// <returns>true only if the webhook POST actually reached Discord with a 2xx response.</returns>
     Task<bool> NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, string? runningNetLine = null, CancellationToken ct = default);
     Task NotifyPostPositionsConfirmedAsync(string raceDate, int raceCount, CancellationToken ct = default);
     Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default);
@@ -31,15 +28,23 @@ public interface IDiscordNotifier
 }
 
 /// <summary>
-/// Posts plain Discord webhook messages. Webhook URL is read from app_settings on every send
-/// so changes from the settings UI take effect without a restart. If the URL is unset, all
-/// sends are silent no-ops.
+/// Posts Discord webhook embeds. The payload intentionally mirrors the finance dashboard's
+/// presentation: a concise mobile-friendly title, a colored embed, and named fields for detail.
+/// The webhook URL is read from app_settings on every send so settings changes take effect without
+/// a restart. If the URL is unset, all sends are silent no-ops.
 /// </summary>
 public sealed class DiscordNotifier : IDiscordNotifier
 {
+    private const int Blue = 0x3987E5;
+    private const int Green = 0x2ECC71;
+    private const int Amber = 0xE67E22;
+    private const int Red = 0xE74C3C;
+
     private readonly IHttpClientFactory _httpFactory;
     private readonly SettingsService _settings;
     private readonly ILogger<DiscordNotifier> _logger;
+
+    private sealed record EmbedField(string Name, string Value, bool Inline = false);
 
     public DiscordNotifier(IHttpClientFactory httpFactory, SettingsService settings, ILogger<DiscordNotifier> logger)
     {
@@ -48,8 +53,9 @@ public sealed class DiscordNotifier : IDiscordNotifier
         _logger      = logger;
     }
 
-    public Task NotifyPhaseChangedAsync(AppPhase from, AppPhase to, CancellationToken ct = default)
-        => SendAsync($":arrows_clockwise: **Phase**: `{from}` → `{to}`", ct);
+    public async Task NotifyPhaseChangedAsync(AppPhase from, AppPhase to, CancellationToken ct = default)
+        => await SendEmbedAsync($":arrows_clockwise: Phase: {from} → {to}", Blue,
+            new[] { new EmbedField("Phase transition", $"`{from}` → `{to}`") }, ct);
 
     private static readonly Dictionary<string, string> TrackNames = new()
     {
@@ -58,51 +64,45 @@ public sealed class DiscordNotifier : IDiscordNotifier
         ["09"] = "Hanshin", ["10"] = "Kokura",
     };
 
-    public Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default)
+    public async Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default)
     {
-        var names = tracks.Select(t => TrackNames.GetValueOrDefault(t, t)).ToList();
-        var trackList = names.Count switch
-        {
-            0 => "?",
-            1 => names[0],
-            2 => $"{names[0]} and {names[1]}",
-            _ => string.Join(", ", names[..^1]) + ", and " + names[^1],
-        };
-        return SendAsync($":checkered_flag: **Race plan loaded** for `{raceDate}`: {raceCount} races across {trackList}.", ct);
+        var trackList = FormatTracks(tracks);
+        await SendEmbedAsync($":checkered_flag: Race plan loaded — {raceDate}", Blue,
+            new[] { new EmbedField("Races", $"{raceCount} across {trackList}") }, ct);
     }
 
-    public Task NotifyPostPositionsConfirmedAsync(string raceDate, int raceCount, CancellationToken ct = default)
-        => SendAsync($":horse_racing: **Post positions confirmed** for `{raceDate}` — {raceCount} races locked in. Awaiting odds.", ct);
+    public async Task NotifyPostPositionsConfirmedAsync(string raceDate, int raceCount, CancellationToken ct = default)
+        => await SendEmbedAsync($":horse_racing: Post positions confirmed — {raceDate}", Blue,
+            new[] { new EmbedField("Card", $"{raceCount} races locked in. Awaiting odds.") }, ct);
 
-    public Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default)
+    public async Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default)
     {
-        var names = tracks.Select(t => TrackNames.GetValueOrDefault(t, t)).ToList();
-        var trackList = names.Count switch
-        {
-            0 => "?",
-            1 => names[0],
-            2 => $"{names[0]} and {names[1]}",
-            _ => string.Join(", ", names[..^1]) + ", and " + names[^1],
-        };
-        return SendAsync($":bar_chart: **Odds are live** for `{raceDate}` — {trackList}.", ct);
+        var trackList = FormatTracks(tracks);
+        await SendEmbedAsync($":bar_chart: Odds are live — {raceDate}", Blue,
+            new[] { new EmbedField("Tracks", trackList) }, ct);
     }
 
-    public Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default)
-        => SendAsync($":moneybag: **Bet card won** on `{raceId}` — {description} → ¥{payout:N0}", ct);
+    public async Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default)
+        => await SendEmbedAsync($":moneybag: Bet card won — {raceId}", Green,
+            new[] { new EmbedField("Result", $"{description}\nPayout: ¥{payout:N0}") }, ct);
 
     public Task<bool> NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, string? runningNetLine = null, CancellationToken ct = default)
     {
         var pills = string.Join(" · ", hitPills);
         var hitList = hits.OrderBy(h => h.Finish).ToList();
-        var content = $":trophy: **Win!** {raceLabel} — {pills}";
+        var fields = new List<EmbedField>
+        {
+            new("Winning lines", string.IsNullOrWhiteSpace(pills) ? "—" : pills),
+        };
         if (hitList.Count > 0)
         {
-            var detail = string.Join(" · ", hitList.Select(h => $"{h.Mark} {h.HorseName} ({Ordinal(h.Finish)})"));
-            content += $"\n      {detail}";
+            var detail = string.Join("\n", hitList.Select(h => $"{h.Mark} {h.HorseName} — {Ordinal(h.Finish)}"));
+            fields.Add(new EmbedField("Hit horses", Limit(detail)));
         }
-        if (!string.IsNullOrEmpty(runningNetLine))
-            content += $"\n      {runningNetLine}";
-        return SendAsync(content, ct);
+        if (!string.IsNullOrWhiteSpace(runningNetLine))
+            fields.Add(new EmbedField("Running result", Limit(runningNetLine)));
+
+        return SendEmbedAsync($":trophy: Win! — {raceLabel}", Green, fields, ct);
     }
 
     private static string Ordinal(int n) => n switch
@@ -111,47 +111,61 @@ public sealed class DiscordNotifier : IDiscordNotifier
         _ => $"{n}th"
     };
 
-    public Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default)
+    public async Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default)
     {
-        var summary = $":checkered_flag: **Day Recap {recap.DateKey}** — {recap.RacesMarked}/{recap.RacesTotal} bets placed";
-        var hits    = $"Won **{recap.RacesWon}** of **{recap.RacesMarked}** placed bets";
-        var total   = $":moneybag: Won: **¥{recap.TotalWonYen:N0}** · Staked: **¥{recap.TotalStakedYen:N0}**";
         var netSign = recap.NetYen >= 0 ? "+" : "−";
         var netEmoji = recap.NetYen >= 0 ? ":chart_with_upwards_trend:" : ":chart_with_downwards_trend:";
-        var net     = $"{netEmoji} **Net: {netSign}¥{Math.Abs(recap.NetYen):N0}**";
-
-        string body;
-        if (recap.WinningLines.Count > 0)
+        var fields = new List<EmbedField>
         {
-            var lines = string.Join("\n", recap.WinningLines.Select(l => $"• {l}"));
-            body = $"{summary}\n{hits}\n{total}\n{net}\n{lines}";
-        }
-        else
-        {
-            body = $"{summary}\n{hits}\n{total}\n{net}\n_(no hits today)_";
-        }
-        return SendAsync(body, ct);
+            new("Bets placed", $"{recap.RacesMarked}/{recap.RacesTotal}"),
+            new("Hit rate", $"{recap.RacesWon}/{recap.RacesMarked} bets won"),
+            new("Money", $"Won: ¥{recap.TotalWonYen:N0}\nStaked: ¥{recap.TotalStakedYen:N0}"),
+            new("Net", $"{netEmoji} {netSign}¥{Math.Abs(recap.NetYen):N0}"),
+        };
+        var lines = recap.WinningLines.Count > 0
+            ? string.Join("\n", recap.WinningLines.Select(l => $"• {l}"))
+            : "_(no hits today)_";
+        fields.Add(new EmbedField("Winning lines", Limit(lines)));
+        await SendEmbedAsync($":checkered_flag: Day recap — {recap.DateKey}", recap.NetYen >= 0 ? Green : Red, fields, ct);
     }
 
     public Task<bool> NotifyBetReminderAsync(string raceDate, string slot, CancellationToken ct = default)
-        => SendAsync(
-            $":alarm_clock: **Bet reminder** — it’s {slot} and no bets are locked yet for the {raceDate} JST card.\n"
-          + "When you’re ready, open the War Room and apply/submit your bets.", ct);
+        => SendEmbedAsync(":alarm_clock: Bet reminder", Amber,
+            new[]
+            {
+                new EmbedField("Card", $"{raceDate} JST"),
+                new EmbedField("Reminder", $"It’s {slot} and no bets are locked yet.\nWhen ready, open the War Room and apply/submit your bets."),
+            }, ct);
 
-    public Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default)
+    public async Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default)
     {
-        var detail = ex is null ? "" : $"\n```\n{ex.GetType().Name}: {ex.Message}\n```";
-        return SendAsync($":rotating_light: **Orchestrator error**: {message}{detail}", ct);
+        var detail = ex is null ? message : $"{message}\n`{ex.GetType().Name}: {ex.Message}`";
+        await SendEmbedAsync(":rotating_light: Orchestrator error", Red,
+            new[] { new EmbedField("Details", Limit(detail)) }, ct);
     }
 
-    public Task NotifyTestAsync(CancellationToken ct = default)
-        => SendAsync($":wave: **UMAnager test ping** — webhook is wired up. ({DateTime.UtcNow:HH:mm:ss} UTC)", ct);
+    public async Task NotifyTestAsync(CancellationToken ct = default)
+        => await SendEmbedAsync(":wave: UMAnager test ping", Blue,
+            new[] { new EmbedField("Status", $"Webhook is wired up.\n{DateTime.UtcNow:HH:mm:ss} UTC") }, ct);
 
-    /// <returns>true only if Discord accepted the message (2xx). false if the webhook is unset, or the
-    /// POST was rejected (e.g. HTTP 429 rate-limit) or threw. A non-2xx is NOT success — historically
-    /// this method returned void, so a 429 (or any rejection) was logged but invisible to callers, which
-    /// then marked the race "already notified" and silently dropped the ping (real incident, s60).</returns>
-    private async Task<bool> SendAsync(string content, CancellationToken ct)
+    private static string FormatTracks(IEnumerable<string> tracks)
+    {
+        var names = tracks.Select(t => TrackNames.GetValueOrDefault(t, t)).ToList();
+        return names.Count switch
+        {
+            0 => "?",
+            1 => names[0],
+            2 => $"{names[0]} and {names[1]}",
+            _ => string.Join(", ", names[..^1]) + ", and " + names[^1],
+        };
+    }
+
+    private static string Limit(string value, int max = 1024)
+        => value.Length <= max ? value : value[..(max - 1)] + "…";
+
+    /// <returns>true only if Discord accepted the embed (2xx). False if the webhook is unset,
+    /// rejected, rate-limited, or the request failed.</returns>
+    private async Task<bool> SendEmbedAsync(string title, int color, IEnumerable<EmbedField> fields, CancellationToken ct)
     {
         var url = await _settings.GetStringAsync(SettingsService.Keys.DiscordWebhookUrl);
         if (string.IsNullOrWhiteSpace(url)) return false;
@@ -159,7 +173,24 @@ public sealed class DiscordNotifier : IDiscordNotifier
         try
         {
             var http = _httpFactory.CreateClient(nameof(DiscordNotifier));
-            using var resp = await http.PostAsJsonAsync(url, new { content }, ct);
+            var payload = new
+            {
+                embeds = new[]
+                {
+                    new
+                    {
+                        title = Limit(title, 256),
+                        color,
+                        fields = fields.Select(f => new
+                        {
+                            name = Limit(f.Name, 256),
+                            value = Limit(f.Value),
+                            inline = f.Inline,
+                        }).Take(25).ToArray(),
+                    },
+                },
+            };
+            using var resp = await http.PostAsJsonAsync(url, payload, ct);
             if (!resp.IsSuccessStatusCode)
             {
                 var body = await resp.Content.ReadAsStringAsync(ct);
