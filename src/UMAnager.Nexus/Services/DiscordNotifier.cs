@@ -54,7 +54,7 @@ public sealed class DiscordNotifier : IDiscordNotifier
     }
 
     public async Task NotifyPhaseChangedAsync(AppPhase from, AppPhase to, CancellationToken ct = default)
-        => await SendEmbedAsync($":arrows_clockwise: Phase: {from} → {to}", Blue,
+        => await SendEmbedAsync($"🔄 Phase: {from} → {to}", Blue,
             new[] { new EmbedField("Phase transition", $"`{from}` → `{to}`") }, ct);
 
     private static readonly Dictionary<string, string> TrackNames = new()
@@ -67,23 +67,23 @@ public sealed class DiscordNotifier : IDiscordNotifier
     public async Task NotifyRacePlanPopulatedAsync(string raceDate, int raceCount, IEnumerable<string> tracks, CancellationToken ct = default)
     {
         var trackList = FormatTracks(tracks);
-        await SendEmbedAsync($":checkered_flag: Race plan loaded — {raceDate}", Blue,
+        await SendEmbedAsync($"🏁 Race plan loaded — {raceDate}", Blue,
             new[] { new EmbedField("Races", $"{raceCount} across {trackList}") }, ct);
     }
 
     public async Task NotifyPostPositionsConfirmedAsync(string raceDate, int raceCount, CancellationToken ct = default)
-        => await SendEmbedAsync($":horse_racing: Post positions confirmed — {raceDate}", Blue,
+        => await SendEmbedAsync($"🏇 Post positions confirmed — {raceDate}", Blue,
             new[] { new EmbedField("Card", $"{raceCount} races locked in. Awaiting odds.") }, ct);
 
     public async Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default)
     {
         var trackList = FormatTracks(tracks);
-        await SendEmbedAsync($":bar_chart: Odds are live — {raceDate}", Blue,
+        await SendEmbedAsync($"📊 Odds are live — {raceDate}", Blue,
             new[] { new EmbedField("Tracks", trackList) }, ct);
     }
 
     public async Task NotifyBetCardWonAsync(string raceId, string description, decimal payout, CancellationToken ct = default)
-        => await SendEmbedAsync($":moneybag: Bet card won — {raceId}", Green,
+        => await SendEmbedAsync($"💰 Bet card won — {raceId}", Green,
             new[] { new EmbedField("Result", $"{description}\nPayout: ¥{payout:N0}") }, ct);
 
     public Task<bool> NotifyMarkHitsAsync(string raceLabel, IEnumerable<string> hitPills, IEnumerable<MarkHit> hits, string? runningNetLine = null, CancellationToken ct = default)
@@ -102,7 +102,7 @@ public sealed class DiscordNotifier : IDiscordNotifier
         if (!string.IsNullOrWhiteSpace(runningNetLine))
             fields.Add(new EmbedField("Running result", Limit(runningNetLine)));
 
-        return SendEmbedAsync($":trophy: Win! — {raceLabel}", Green, fields, ct);
+        return SendEmbedAsync($"🏆 Win! — {raceLabel}", Green, fields, ct);
     }
 
     private static string Ordinal(int n) => n switch
@@ -114,7 +114,7 @@ public sealed class DiscordNotifier : IDiscordNotifier
     public async Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default)
     {
         var netSign = recap.NetYen >= 0 ? "+" : "−";
-        var netEmoji = recap.NetYen >= 0 ? ":chart_with_upwards_trend:" : ":chart_with_downwards_trend:";
+        var netEmoji = recap.NetYen >= 0 ? "📈" : "📉";
         var fields = new List<EmbedField>
         {
             new("Bets placed", $"{recap.RacesMarked}/{recap.RacesTotal}"),
@@ -126,11 +126,11 @@ public sealed class DiscordNotifier : IDiscordNotifier
             ? string.Join("\n", recap.WinningLines.Select(l => $"• {l}"))
             : "_(no hits today)_";
         fields.Add(new EmbedField("Winning lines", Limit(lines)));
-        await SendEmbedAsync($":checkered_flag: Day recap — {recap.DateKey}", recap.NetYen >= 0 ? Green : Red, fields, ct);
+        await SendEmbedAsync($"🏁 Day recap — {recap.DateKey}", recap.NetYen >= 0 ? Green : Red, fields, ct);
     }
 
     public Task<bool> NotifyBetReminderAsync(string raceDate, string slot, CancellationToken ct = default)
-        => SendEmbedAsync(":alarm_clock: Bet reminder", Amber,
+        => SendEmbedAsync("⏰ Bet reminder", Amber,
             new[]
             {
                 new EmbedField("Card", $"{raceDate} JST"),
@@ -140,12 +140,12 @@ public sealed class DiscordNotifier : IDiscordNotifier
     public async Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default)
     {
         var detail = ex is null ? message : $"{message}\n`{ex.GetType().Name}: {ex.Message}`";
-        await SendEmbedAsync(":rotating_light: Orchestrator error", Red,
+        await SendEmbedAsync("🚨 Orchestrator error", Red,
             new[] { new EmbedField("Details", Limit(detail)) }, ct);
     }
 
     public async Task NotifyTestAsync(CancellationToken ct = default)
-        => await SendEmbedAsync(":wave: UMAnager test ping", Blue,
+        => await SendEmbedAsync("👋 UMAnager test ping", Blue,
             new[] { new EmbedField("Status", $"Webhook is wired up.\n{DateTime.UtcNow:HH:mm:ss} UTC") }, ct);
 
     private static string FormatTracks(IEnumerable<string> tracks)
