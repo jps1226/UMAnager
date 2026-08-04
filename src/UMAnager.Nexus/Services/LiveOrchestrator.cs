@@ -410,6 +410,14 @@ public sealed class LiveOrchestrator : BackgroundService
                 UmRefreshFailureBackoff.TotalHours);
         }
 
+        // Race-card refresh runs independently every 15 minutes. Without its own failure stamp, a
+        // wedged option=2 TOKU JVOpen is retried after every watchdog restart indefinitely.
+        if (_bridge.IsInFlight("STREAM_TOKU"))
+        {
+            await _appState.SetTimestampAsync(AppStateService.Keys.LastRacePlanDownloadFailedAt, DateTime.UtcNow);
+            _logger.LogWarning("[Orchestrator] STREAM_TOKU wedged; backing off race-card refresh for 12h.");
+        }
+
         _bridge.ClearInFlight();
         _bridge.IngestionStatus = "Idle";   // setter clears StreamingSinceUtc; lock is freed
         RestartSidecarAfterWatchdog(activeCommand ?? "unknown");

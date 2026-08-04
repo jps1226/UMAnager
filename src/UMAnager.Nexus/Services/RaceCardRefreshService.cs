@@ -15,6 +15,9 @@ public sealed class RaceCardRefreshService : BackgroundService
 {
     private static readonly TimeSpan TickInterval     = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan RefreshThreshold = TimeSpan.FromHours(4);
+    // Mirrors the DIFN safety backoff: a blocked JVOpen cannot be cancelled, so avoid repeatedly
+    // relaunching Sidecar into the same known-bad TOKU call while we investigate the cause.
+    private static readonly TimeSpan FailureBackoff    = TimeSpan.FromHours(12);
 
     private readonly SidecarBridge   _bridge;
     private readonly AppStateService _appState;
@@ -52,6 +55,14 @@ public sealed class RaceCardRefreshService : BackgroundService
 
         if (_bridge.IngestionStatus is "Streaming" or "Maintenance")
             return $"Ingest busy ({_bridge.IngestionStatus}) — skipped.";
+
+        var lastFailure = await _appState.GetTimestampAsync(AppStateService.Keys.LastRacePlanDownloadFailedAt);
+        if (lastFailure.HasValue && DateTime.UtcNow - lastFailure.Value < FailureBackoff)
+        {
+            _logger.LogWarning("STREAM_TOKU is still in backoff after a watchdog reset at {FailedAt}; not re-enqueueing.",
+                lastFailure.Value.ToString("O"));
+            return "STREAM_TOKU is in a 12-hour backoff after a watchdog reset — command not sent.";
+        }
 
         // JV-Link Option=2 cursor: prior lastfiletimestamp from JVOpen, or "00000000000000" on first run.
         var fromTime = await _appState.GetStringAsync(AppStateService.Keys.TokuFileCursor)

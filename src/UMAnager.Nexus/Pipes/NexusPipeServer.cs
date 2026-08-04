@@ -318,6 +318,14 @@ public sealed class NexusPipeServer : BackgroundService
                             });
                         }
 
+                        // A successful TOKU response (including rc=-1/no new data) proves the
+                        // prior wedge is gone, so allow the normal 4-hour card-refresh cadence again.
+                        if (eventType == "STREAM_TOKU_COMPLETE" && recordCount >= 0)
+                        {
+                            await _appState.SetStringAsync(AppStateService.Keys.LastRacePlanDownloadFailedAt, "");
+                            _logger.LogInformation("[Nexus] TOKU refresh completed; watchdog backoff cleared.");
+                        }
+
                         // After TOKU stream completes, parse newly-staged RA + SE records so
                         // upcoming races appear in the UI. Then nudge the orchestrator to
                         // re-evaluate phase immediately — the tick that triggered this pull

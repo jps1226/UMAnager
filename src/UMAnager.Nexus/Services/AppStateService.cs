@@ -58,6 +58,11 @@ public sealed class AppStateService
         // a stuck JVOpen(DIFN) does not retrigger every watchdog cycle overnight.
         public const string LastUmRefreshFailedAt = "last_um_refresh_failed_at";
 
+        // DateTime — wall-clock of the last failed/hung race-card refresh. Prevents a wedged
+        // STREAM_TOKU from becoming an unattended Sidecar restart loop; cleared on a successful
+        // STREAM_TOKU completion.
+        public const string LastRacePlanDownloadFailedAt = "last_race_plan_download_failed_at";
+
         // String — JV-Link cursor (yyyyMMddHHmmss JST) for the weekly DIFN master refresh: the
         // lastFileTimestamp returned by the previous JVOpen. Passed as fromTime to the next
         // option=1 call for gap-free delta syncing. Same role TokuFileCursor plays for TOKU.
