@@ -13033,6 +13033,7 @@ async function loadOrchestratorSettings() {
         set('setting-odds-poll-interval-live',    s.odds_poll_interval_live);
         set('setting-live-window-minutes',        s.live_window_minutes);
         set('setting-discord-webhook-url',        s.discord_webhook_url);
+        set('setting-discord-alert-webhook-url',  s.discord_alert_webhook_url);
         set('setting-orepro-session-cookie',      s.orepro_session_cookie);
         set('setting-orepro-login-id',            s.orepro_login_id);
         set('setting-orepro-password',            s.orepro_password);

@@ -49,8 +49,13 @@ public sealed class SettingsService
         // phase interval so we probe gently instead of hammering a down server. (Oracle 2026-06-07.)
         public const string MaintenanceRetryInterval = "maintenance_retry_interval";
 
-        // String — Discord webhook URL for phase-change and bet-win notifications. Nullable.
+        // String — Discord webhook URL for normal UMAnager events: phases, race-plan updates,
+        // wins, recaps, reminders, and test pings. Nullable.
         public const string DiscordWebhookUrl = "discord_webhook_url";
+
+        // String — Discord webhook URL for operational failures: orchestrator/pipeline/service
+        // errors. Nullable; deliberately separate from normal racing events.
+        public const string DiscordAlertWebhookUrl = "discord_alert_webhook_url";
 
         // String — Raw "Cookie:" header value from the user's logged-in OrePro browser session.
         // User copies this from DevTools after logging in to orepro.netkeiba.com. Nullable.
@@ -119,6 +124,7 @@ public sealed class SettingsService
         public const int                PreliveRampWindowMinutes = 120;
         public static readonly TimeSpan MaintenanceRetryInterval = TimeSpan.FromMinutes(30);
         public const string?            DiscordWebhookUrl        = null;
+        public const string?            DiscordAlertWebhookUrl   = null;
         public const string?            OreProSessionCookie      = null;
         public const string?            OreProLoginId            = null;
         public const string?            OreProPassword           = null;
@@ -139,6 +145,8 @@ public sealed class SettingsService
     {
         using var ctx = _contextFactory.CreateDbContext();
         var row = await ctx.AppSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == key);
+        if (key == Keys.DiscordAlertWebhookUrl && string.IsNullOrWhiteSpace(row?.Value))
+            return Environment.GetEnvironmentVariable("UMANAGER_DISCORD_ALERT_WEBHOOK_URL");
         return row?.Value;
     }
 
@@ -256,6 +264,7 @@ public sealed class SettingsService
         AddIfMissing(Keys.LiveWindowMinutes,       Defaults.LiveWindowMinutes.ToString());
         AddIfMissing(Keys.MaintenanceRetryInterval, Defaults.MaintenanceRetryInterval.ToString());
         AddIfMissing(Keys.DiscordWebhookUrl,       Defaults.DiscordWebhookUrl);
+        AddIfMissing(Keys.DiscordAlertWebhookUrl,  Defaults.DiscordAlertWebhookUrl);
         AddIfMissing(Keys.OreProSessionCookie,     Defaults.OreProSessionCookie);
         AddIfMissing(Keys.OreProLoginId,           Defaults.OreProLoginId);
         AddIfMissing(Keys.OreProPassword,          Defaults.OreProPassword);

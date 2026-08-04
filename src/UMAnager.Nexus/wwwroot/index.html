@@ -634,7 +634,7 @@
 
                 <div class="settings-card settings-card-full">
                     <h4 class="settings-section-title">🎛️ Orchestrator (Phase 6)</h4>
-                    <div class="settings-helper-text">Polling cadences and Discord webhook. Live odds cadence has a 5-minute hard floor enforced server-side. Saves on blur.</div>
+                    <div class="settings-helper-text">Polling cadences and Discord destinations. Racing events and operational failures use separate channels. Saves on blur.</div>
                     <div class="settings-formula-grid">
                         <label title="How often to check for new race plans while waiting (HH:MM:SS).">Populate poll interval</label>
                         <input type="text" id="setting-populate-poll-interval" placeholder="01:00:00" onblur="saveOrchestratorSetting('populate_poll_interval', this.value)" class="settings-number-input" style="max-width:120px;">
@@ -648,8 +648,10 @@
                         <label title="Minutes before post time when a race enters the live window.">Live window (min)</label>
                         <input type="number" id="setting-live-window-minutes" min="1" max="480" step="5" onblur="saveOrchestratorSetting('live_window_minutes', this.value)" class="settings-number-input" style="max-width:120px;">
 
-                        <label title="Discord webhook URL for phase / race-plan / bet-win / error notifications. Leave blank to disable.">Discord webhook URL</label>
+                        <label title="Discord webhook URL for phases, race-plan updates, wins, recaps, and reminders.">Events webhook URL</label>
                         <input type="text" id="setting-discord-webhook-url" placeholder="https://discord.com/api/webhooks/..." onblur="saveOrchestratorSetting('discord_webhook_url', this.value)" class="settings-number-input" style="max-width:100%;">
+                        <label title="Discord webhook URL for orchestrator, pipeline, service, and database failures.">Alerts webhook URL</label>
+                        <input type="text" id="setting-discord-alert-webhook-url" placeholder="https://discord.com/api/webhooks/..." onblur="saveOrchestratorSetting('discord_alert_webhook_url', this.value)" class="settings-number-input" style="max-width:100%;">
                     </div>
                     <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
                         <button onclick="testDiscordWebhook()" class="settings-reset-btn">📣 Test Discord Webhook</button>

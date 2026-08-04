@@ -31,7 +31,7 @@ public interface IDiscordNotifier
 /// Posts Discord webhook embeds. The payload intentionally mirrors the finance dashboard's
 /// presentation: a concise mobile-friendly title, a colored embed, and named fields for detail.
 /// The webhook URL is read from app_settings on every send so settings changes take effect without
-/// a restart. If the URL is unset, all sends are silent no-ops.
+/// a restart. Normal events and operational failures may use separate URLs.
 /// </summary>
 public sealed class DiscordNotifier : IDiscordNotifier
 {
@@ -141,7 +141,7 @@ public sealed class DiscordNotifier : IDiscordNotifier
     {
         var detail = ex is null ? message : $"{message}\n`{ex.GetType().Name}: {ex.Message}`";
         await SendEmbedAsync("🚨 Orchestrator error", Red,
-            new[] { new EmbedField("Details", Limit(detail)) }, ct);
+            new[] { new EmbedField("Details", Limit(detail)) }, ct, SettingsService.Keys.DiscordAlertWebhookUrl);
     }
 
     public async Task NotifyTestAsync(CancellationToken ct = default)
@@ -165,9 +165,10 @@ public sealed class DiscordNotifier : IDiscordNotifier
 
     /// <returns>true only if Discord accepted the embed (2xx). False if the webhook is unset,
     /// rejected, rate-limited, or the request failed.</returns>
-    private async Task<bool> SendEmbedAsync(string title, int color, IEnumerable<EmbedField> fields, CancellationToken ct)
+    private async Task<bool> SendEmbedAsync(string title, int color, IEnumerable<EmbedField> fields,
+        CancellationToken ct, string? webhookKey = null)
     {
-        var url = await _settings.GetStringAsync(SettingsService.Keys.DiscordWebhookUrl);
+        var url = await _settings.GetStringAsync(webhookKey ?? SettingsService.Keys.DiscordWebhookUrl);
         if (string.IsNullOrWhiteSpace(url)) return false;
 
         try

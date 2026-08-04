@@ -32,6 +32,7 @@ public sealed class SettingsController : ControllerBase
         SettingsService.Keys.OddsPollIntervalLive,
         SettingsService.Keys.LiveWindowMinutes,
         SettingsService.Keys.DiscordWebhookUrl,
+        SettingsService.Keys.DiscordAlertWebhookUrl,
         SettingsService.Keys.OreProSessionCookie,
         SettingsService.Keys.OreProLoginId,
         SettingsService.Keys.OreProPassword,
