@@ -9815,7 +9815,6 @@ function looksLikeExpiredOreProSession(result, data) {
         || haystack.includes('session expired')
         || haystack.includes('cookie has expired')
         || haystack.includes('is likely expired')
-        || haystack.includes('not login');
 }
 
 // Phase 37 C — full-day DRY-RUN PREVIEW. Lists every eligible race's exact tickets — bet type, each

@@ -168,13 +168,14 @@ public sealed class OreProCustomBetService
 
         using var handler = new HttpClientHandler
         {
-            UseCookies = true,
+            UseCookies = false,
             CookieContainer = cookieJar,
             AutomaticDecompression = DecompressionMethods.All,
         };
         using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(25) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
         http.DefaultRequestHeaders.Add("Accept-Language", "ja,en;q=0.8");
+        http.DefaultRequestHeaders.TryAddWithoutValidation("Cookie", cookie);
 
         // ── Scrape the bet_id prefix parts from the shutuba page ─────────────────
         string shutubaHtml;
