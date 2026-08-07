@@ -467,6 +467,17 @@ public sealed class OreProVoteApplyService
         http.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
         http.DefaultRequestHeaders.Add("Accept-Language", "ja,en;q=0.8");
 
+        // Race-card HTML is public and cannot prove that writes/submits are authorized.
+        // Probe the account-only page used by OrePro authenticated APIs instead.
+        using var authResp = await http.GetAsync("https://orepro.netkeiba.com/mydata/", ct);
+        var authBody = await authResp.Content.ReadAsStringAsync(ct);
+        var authFinalUrl = authResp.RequestMessage?.RequestUri?.ToString() ?? "";
+        var authLooksLikeLogin = authFinalUrl.Contains("login", StringComparison.OrdinalIgnoreCase)
+                              || authBody.Contains("login_id", StringComparison.OrdinalIgnoreCase)
+                              || authBody.Contains("pswd", StringComparison.OrdinalIgnoreCase);
+        if (!authResp.IsSuccessStatusCode || authLooksLikeLogin)
+            return Result("expired", false, "OrePro account session is not authorized for betting APIs. Re-copy the full Cookie header from a currently logged-in OrePro browser session.");
+
         var raceId = (rawRaceId ?? "").Trim();
         try
         {
