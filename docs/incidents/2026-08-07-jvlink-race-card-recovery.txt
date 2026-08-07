@@ -23,3 +23,12 @@ Operational constraint
 - Do not treat new past/local dates in the UI as a successful JRA-card refresh.
 - Avoid repeated option-4 backfills during this incident; a request wedged without network or cache progress.
 - Success criterion: actual Aug 9 JRA races in the API upcoming-races payload.
+
+
+Resolution update (verified after the normal cursor-based refresh)
+- `STREAM_TOKU` completed with option=2 from cursor `20260803154540`.
+- Sidecar stored 3,040 records and advanced its last file timestamp to `20260807112834`.
+- Nexus staged 1,061 usable race-card records; 1,979 unused-type records were intentionally skipped.
+- `/api/races` now exposes 72 upcoming races dated 2026-08-08 and 2026-08-09.
+- Application phase advanced from `WAITING_FOR_RACES` to `AWAITING_ODDS`.
+- The weekend/Sunday race-card recovery is resolved.
