@@ -157,6 +157,15 @@ try {
     [void]($ws.ConnectAsync([Uri]$target.webSocketDebuggerUrl, [Threading.CancellationToken]::None).GetAwaiter().GetResult())
 
     [void](Send-CdpCommand -Ws $ws -Id 1 -Method 'Runtime.enable' -Params @{})
+    if ($Action -eq 'cookie') {
+        $cookieResp = Send-CdpCommand -Ws $ws -Id 2 -Method 'Network.getAllCookies' -Params @{}
+        $cookies = @($cookieResp.result.cookies | Where-Object {
+            $_.domain -match '(^|\\.)orepro\\.netkeiba\\.com$|(^|\\.)netkeiba\\.com$' -and $_.secure
+        })
+        if ($cookies.Count -eq 0) { Write-JsonAndExit -Code 1 -Status 'error' -Message 'No secure OrePro cookies found in the companion browser session.' }
+        $header = (($cookies | Sort-Object name -Unique | ForEach-Object { "$($_.name)=$($_.value)" }) -join '; ')
+        Write-JsonAndExit -Code 0 -Status 'ok' -Message 'OrePro browser session synchronized.' -Result @{ cookie = $header; cookieCount = $cookies.Count }
+    }
 
     $payloadBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PayloadJson))
 

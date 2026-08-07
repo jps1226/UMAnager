@@ -41,6 +41,21 @@ public sealed class OreProController : ControllerBase
         return Content(raw, "application/json");
     }
 
+    private async Task<bool> SyncCompanionCookieAsync(CancellationToken ct)
+    {
+        var script = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "orepro_apply_votes_companion.ps1"));
+        if (!System.IO.File.Exists(script)) return false;
+        var psi = new System.Diagnostics.ProcessStartInfo { FileName = "powershell.exe", UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+        psi.ArgumentList.Add("-NoProfile"); psi.ArgumentList.Add("-ExecutionPolicy"); psi.ArgumentList.Add("Bypass"); psi.ArgumentList.Add("-File"); psi.ArgumentList.Add(script); psi.ArgumentList.Add("-Action"); psi.ArgumentList.Add("cookie");
+        using var proc = System.Diagnostics.Process.Start(psi);
+        if (proc is null) return false;
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct); await proc.WaitForExitAsync(ct);
+        if (proc.ExitCode != 0) return false;
+        using var doc = JsonDocument.Parse(stdout);
+        if (!doc.RootElement.TryGetProperty("result", out var result) || !result.TryGetProperty("cookie", out var cookie)) return false;
+        var value = cookie.GetString(); if (string.IsNullOrWhiteSpace(value)) return false;
+        await _settings.SetStringAsync(SettingsService.Keys.OreProSessionCookie, value); return true;
+    }
     public sealed class CompanionWindowRequest
     {
         public string? action { get; set; }
@@ -54,6 +69,7 @@ public sealed class OreProController : ControllerBase
     [HttpPost("companion/window")]
     public async Task<IActionResult> CompanionWindow([FromBody] CompanionWindowRequest? body)
     {
+        _ = await SyncCompanionCookieAsync(CancellationToken.None);
         var cookie = (await _settings.GetStringAsync(SettingsService.Keys.OreProSessionCookie) ?? "").Trim();
         if (string.IsNullOrEmpty(cookie))
         {

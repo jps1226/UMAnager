@@ -324,7 +324,10 @@ public sealed class OreProCustomBetService
             cartRaw = await resp.Content.ReadAsStringAsync(ct);
             cartBetIds = ExtractCartBetIds(cartRaw);
             // Confirmed = every bet_id we tried to place is present in the cart read-back.
-            confirmed = betEntries.All(b => cartBetIds.Contains(b.bet_id));
+            var cartAddConfirmed = addResp.Contains("\"status\":\"OK\"", StringComparison.OrdinalIgnoreCase);
+            // OrePro may return data:null for action=get after a successful cart add.
+            // The add response is the authoritative confirmation that this ticket entered the cart.
+            confirmed = cartAddConfirmed && (cartBetIds.Length == 0 || betEntries.All(b => cartBetIds.Contains(b.bet_id)));
         }
         catch (Exception ex)
         {
