@@ -23,6 +23,7 @@ public interface IDiscordNotifier
     Task NotifyOddsAvailableAsync(string raceDate, IEnumerable<string> tracks, CancellationToken ct = default);
     Task NotifyDayRecapAsync(DayRecap recap, CancellationToken ct = default);
     Task<bool> NotifyBetReminderAsync(string raceDate, string slot, CancellationToken ct = default);
+    Task<bool> NotifyWeekendCardPreflightFailedAsync(string expectedSaturday, string expectedSunday, IEnumerable<string> availableDates, CancellationToken ct = default);
     Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default);
     Task NotifyTestAsync(CancellationToken ct = default);
 }
@@ -136,6 +137,18 @@ public sealed class DiscordNotifier : IDiscordNotifier
                 new EmbedField("Card", $"{raceDate} JST"),
                 new EmbedField("Reminder", $"It’s {slot} and no bets are locked yet.\nWhen ready, open the War Room and apply/submit your bets."),
             }, ct);
+
+    public Task<bool> NotifyWeekendCardPreflightFailedAsync(string expectedSaturday, string expectedSunday, IEnumerable<string> availableDates, CancellationToken ct = default)
+    {
+        var available = availableDates.Any() ? string.Join(", ", availableDates.OrderBy(d => d)) : "none";
+        return SendEmbedAsync("⚠️ Weekend race-card preflight failed", Amber,
+            new[]
+            {
+                new EmbedField("Expected", $"{expectedSaturday} and {expectedSunday} JST"),
+                new EmbedField("Available upcoming dates", available),
+                new EmbedField("Action", "Check JVLinkAgent, JRA-VAN DNS, and the TOKURACESNPN stream before live operations."),
+            }, ct, SettingsService.Keys.DiscordAlertWebhookUrl);
+    }
 
     public async Task NotifyOrchestratorErrorAsync(string message, Exception? ex = null, CancellationToken ct = default)
     {

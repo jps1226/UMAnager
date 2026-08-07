@@ -38,6 +38,9 @@ public sealed class SidecarBridge
     // hanging pull every tick — a permanent 10-minute Sidecar kill/restart loop.
     private readonly object _inFlightLock = new();
     private readonly Queue<string> _inFlight = new();
+    // Independent from IngestionStatus: pipe/status updates can clear that flag while a COM call is
+    // still executing. The watchdog must retain a clock for the FIFO head in that case.
+    private DateTime? _activeCommandSinceUtc;
 
     /// <summary>The STREAM_* command the Sidecar is currently executing (FIFO head), or null if idle.</summary>
     public string? ActiveStreamCommand
@@ -48,20 +51,38 @@ public sealed class SidecarBridge
     /// <summary>Record that a STREAM_* command has been handed to the Sidecar.</summary>
     public void MarkCommandForwarded(string command)
     {
-        lock (_inFlightLock) _inFlight.Enqueue(command);
+        lock (_inFlightLock)
+        {
+            _inFlight.Enqueue(command);
+            if (_inFlight.Count == 1) _activeCommandSinceUtc = DateTime.UtcNow;
+        }
+    }
+
+    /// <summary>UTC time the FIFO head began executing, even if IngestionStatus was cleared prematurely.</summary>
+    public DateTime? ActiveCommandSinceUtc
+    {
+        get { lock (_inFlightLock) return _activeCommandSinceUtc; }
     }
 
     /// <summary>Retire the oldest in-flight command on a STREAM_*_COMPLETE.</summary>
     public void MarkCommandCompleted()
     {
-        lock (_inFlightLock) { if (_inFlight.Count > 0) _inFlight.Dequeue(); }
+        lock (_inFlightLock)
+        {
+            if (_inFlight.Count > 0) _inFlight.Dequeue();
+            _activeCommandSinceUtc = _inFlight.Count > 0 ? DateTime.UtcNow : null;
+        }
     }
 
     /// <summary>Drop all in-flight tracking — the Sidecar died or the pipe session ended, so nothing it
     /// was working on will ever complete.</summary>
     public void ClearInFlight()
     {
-        lock (_inFlightLock) _inFlight.Clear();
+        lock (_inFlightLock)
+        {
+            _inFlight.Clear();
+            _activeCommandSinceUtc = null;
+        }
     }
 
     /// <summary>True if <paramref name="command"/> is anywhere in the in-flight queue, not just at the

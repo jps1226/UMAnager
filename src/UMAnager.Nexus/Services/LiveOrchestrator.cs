@@ -46,6 +46,7 @@ public sealed class LiveOrchestrator : BackgroundService
     // hung (it never dropped the pipe, so the error path never fired). Reset the lock and restart Sidecar.
     // A normal stream completes in seconds-to-low-minutes; 10m is comfortably past any legitimate run.
     private static readonly TimeSpan StreamingWatchdogTimeout = TimeSpan.FromMinutes(10);
+    private static readonly TimeZoneInfo EasternZone = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
 
     // A stuck weekly UM refresh should not be re-enqueued every watchdog cycle overnight. Back off long
     // enough for Jonathan/Iris to investigate while live race-card/odds/result fetches can continue.
@@ -130,6 +131,7 @@ public sealed class LiveOrchestrator : BackgroundService
         //    dropping the pipe (so the error path never reset IngestionStatus). Runs before anything
         //    that guards on "Streaming", so a stuck lock is freed at the top of the tick.
         await CheckStreamingWatchdogAsync();
+        await CheckWeekendCardPreflightAsync(ct);
 
         // Weekend-local reminder checks are independent of the current race phase and
         // intentionally run before fetch work, so a quiet/pre-live tick can still notify.
@@ -377,13 +379,14 @@ public sealed class LiveOrchestrator : BackgroundService
     // DIFN job if that was the command that wedged.
     private async Task CheckStreamingWatchdogAsync()
     {
-        var since = _bridge.StreamingSinceUtc;
+        // In-flight tracking is authoritative for a live COM call. IngestionStatus is still useful for
+        // normal flows, but a pipe/status update may clear it before a blocked JVOpen has returned.
+        var hasInFlight = _bridge.InFlightCommands.Count > 0;
+        var since = _bridge.ActiveCommandSinceUtc ?? _bridge.StreamingSinceUtc;
 
-        // Healthy tick: not mid-stream, or a stream still within the timeout. Record SUCCESS so the
-        // step reflects CURRENT health and recovers to green after an isolated intervention — the
-        // watchdog firing is the safety net WORKING, so it must not show "DOWN / last ok never"
-        // forever once things recover. (Only a stream that stays stuck across ticks now alerts.)
-        if (_bridge.IngestionStatus != "Streaming" || since is null
+        // Healthy tick: nothing is active, or the active stream is within the timeout. Record SUCCESS
+        // so the step recovers to green after an isolated intervention.
+        if ((!hasInFlight && _bridge.IngestionStatus != "Streaming") || since is null
             || DateTime.UtcNow - since.Value <= StreamingWatchdogTimeout)
         {
             _health.RecordSuccess("streaming-watchdog");
@@ -619,6 +622,43 @@ public sealed class LiveOrchestrator : BackgroundService
         _bridge.IngestionStatus   = "Streaming";
         await _bridge.CommandQueue.Writer.WriteAsync(
             $"{{\"command\":\"STREAM_DIFN\",\"from_time\":\"{cursor}\",\"option\":1}}", ct);
+    }
+
+    // Friday ET preflight: race cards should be present before the live weekend. The date guard makes
+    // this one alert per Friday and avoids treating stale local/NAR past races as a successful card load.
+    private async Task CheckWeekendCardPreflightAsync(CancellationToken ct)
+    {
+        var easternNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
+        if (easternNow.DayOfWeek != DayOfWeek.Friday || easternNow.TimeOfDay < TimeSpan.FromHours(12)) return;
+
+        var expectedSaturday = easternNow.Date.AddDays(1);
+        var expectedSunday = easternNow.Date.AddDays(2);
+        var alertKey = $"weekend_card_preflight_alerted_{easternNow:yyyy-MM-dd}";
+        if (!string.IsNullOrWhiteSpace(await _appState.GetStringAsync(alertKey))) return;
+
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var availableDates = await db.Races.AsNoTracking()
+            .Where(r => r.RaceDate >= expectedSaturday && r.RaceDate <= expectedSunday)
+            .Select(r => r.RaceDate)
+            .Distinct()
+            .OrderBy(d => d)
+            .ToListAsync(ct);
+        var available = availableDates.Select(d => d.ToString("yyyy-MM-dd")).ToList();
+        var saturdayKey = expectedSaturday.ToString("yyyy-MM-dd");
+        var sundayKey = expectedSunday.ToString("yyyy-MM-dd");
+        if (available.Contains(saturdayKey) && available.Contains(sundayKey)) return;
+
+        var delivered = await _discord.NotifyWeekendCardPreflightFailedAsync(saturdayKey, sundayKey, available, ct);
+        if (delivered)
+        {
+            await _appState.SetStringAsync(alertKey, DateTime.UtcNow.ToString("O"));
+            _logger.LogWarning("[Orchestrator] Weekend card preflight alert delivered; expected {Saturday}, {Sunday}; available: {Available}.",
+                saturdayKey, sundayKey, available.Count == 0 ? "none" : string.Join(", ", available));
+        }
+        else
+        {
+            _logger.LogWarning("[Orchestrator] Weekend card preflight failed but Discord alert was not delivered; will retry next tick.");
+        }
     }
 
     private async Task NotifyRacePlanPopulatedAsync()

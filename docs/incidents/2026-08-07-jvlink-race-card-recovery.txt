@@ -32,3 +32,11 @@ Resolution update (verified after the normal cursor-based refresh)
 - `/api/races` now exposes 72 upcoming races dated 2026-08-08 and 2026-08-09.
 - Application phase advanced from `WAITING_FOR_RACES` to `AWAITING_ODDS`.
 - The weekend/Sunday race-card recovery is resolved.
+
+
+Prevention safeguards deployed — 2026-08-07
+- Watchdog now follows the active in-flight command timestamp, not only the IngestionStatus flag.
+- Friday after 12:00 ET, a missing Saturday or Sunday upcoming card triggers a deduplicated Discord alert; it is marked handled only after Discord accepts the webhook.
+- Added read-only `tools/ops/Test-WeekendCardPreflight.ps1` for attended validation.
+- ProtonVPN Service and WireGuard are Manual and stopped; JRA-VAN DNS remains verified.
+- Release build: 0 warnings/errors. Tests: 13/13 passing. Live force-tick and preflight verified 72 Aug 8/9 upcoming races and RACES_POPULATED.
