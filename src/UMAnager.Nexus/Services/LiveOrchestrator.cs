@@ -634,8 +634,8 @@ public sealed class LiveOrchestrator : BackgroundService
         var easternNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, EasternZone);
         if (easternNow.DayOfWeek != DayOfWeek.Friday || easternNow.TimeOfDay < TimeSpan.FromHours(12)) return;
 
-        var expectedSaturday = easternNow.Date.AddDays(1);
-        var expectedSunday = easternNow.Date.AddDays(2);
+        var expectedSaturday = DateTime.SpecifyKind(easternNow.Date.AddDays(1), DateTimeKind.Utc);
+        var expectedSunday = DateTime.SpecifyKind(easternNow.Date.AddDays(2), DateTimeKind.Utc);
         var alertKey = $"weekend_card_preflight_alerted_{easternNow:yyyy-MM-dd}";
         if (!string.IsNullOrWhiteSpace(await _appState.GetStringAsync(alertKey))) return;
 
