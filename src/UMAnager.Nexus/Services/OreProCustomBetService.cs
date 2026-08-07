@@ -183,7 +183,7 @@ public sealed class OreProCustomBetService
             using var req = new HttpRequestMessage(HttpMethod.Get, $"{ShutubaUrl}?race_id={Uri.EscapeDataString(race12)}");
             req.Headers.Referrer = new Uri(BetReferer);
             req.Headers.Add("Origin", "https://orepro.netkeiba.com");
-            using var resp = await http.SendAsync(req, ct);
+            using var resp = await SendWithTraceAsync(http, req, ct);
             var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
             var charset = (resp.Content.Headers.ContentType?.CharSet ?? "").Trim().Trim('"');
             Encoding enc;
@@ -270,7 +270,7 @@ public sealed class OreProCustomBetService
             req.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
             req.Headers.Add("Origin", "https://orepro.netkeiba.com");
             req.Headers.Add("X-Requested-With", "XMLHttpRequest");
-            using var resp = await http.SendAsync(req, ct);
+            using var resp = await SendWithTraceAsync(http, req, ct);
             var txt = await resp.Content.ReadAsStringAsync(ct);
             easyModeOff = resp.IsSuccessStatusCode && txt.Contains("\"status\":\"OK\"", StringComparison.OrdinalIgnoreCase);
             if (!easyModeOff)
@@ -288,7 +288,7 @@ public sealed class OreProCustomBetService
             using var req = new HttpRequestMessage(HttpMethod.Get, addUrl);
             req.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
             req.Headers.Add("Origin", "https://orepro.netkeiba.com");
-            using var resp = await http.SendAsync(req, ct);
+            using var resp = await SendWithTraceAsync(http, req, ct);
             addResp = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode)
                 return Err($"OrePro add returned HTTP {(int)resp.StatusCode}. Body: {Trunc(addResp, 300)}");
@@ -317,7 +317,7 @@ public sealed class OreProCustomBetService
             };
             req.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
             req.Headers.Add("Origin", "https://orepro.netkeiba.com");
-            using var resp = await http.SendAsync(req, ct);
+            using var resp = await SendWithTraceAsync(http, req, ct);
             cartRaw = await resp.Content.ReadAsStringAsync(ct);
             cartBetIds = ExtractCartBetIds(cartRaw);
             // Confirmed = every bet_id we tried to place is present in the cart read-back.
@@ -385,6 +385,27 @@ public sealed class OreProCustomBetService
     /// Commits the cart for the given netkeiba race_id via api_post_mybet (action=update) — the
     /// same bet-agnostic commit the marks path uses. Returns ("ok", …) only on an explicit OK.
     /// </summary>
+    // Temporary diagnostic mode: records a redacted request/response sequence in nexus.log.
+    // Cookie, authorization, and session-bearing headers are deliberately excluded.
+    private async Task<HttpResponseMessage> SendWithTraceAsync(HttpClient http, HttpRequestMessage req, CancellationToken ct)
+    {
+        var headerText = string.Join(" | ", req.Headers
+            .Where(h => !h.Key.Equals("Cookie", StringComparison.OrdinalIgnoreCase)
+                     && !h.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase))
+            .Select(h => $"{h.Key}={string.Join(",", h.Value)}"));
+        var requestBody = req.Content is null ? "" : await req.Content.ReadAsStringAsync(ct);
+        _logger.LogInformation("[OREPRO_TRACE] REQUEST {Method} {Url} HEADERS {Headers} BODY {Body}",
+            req.Method, req.RequestUri, headerText, Trunc(RedactTrace(requestBody), 1600));
+
+        var response = await http.SendAsync(req, ct);
+        var responseBody = response.Content is null ? "" : await response.Content.ReadAsStringAsync(ct);
+        _logger.LogInformation("[OREPRO_TRACE] RESPONSE {Status} {Url} BODY {Body}",
+            (int)response.StatusCode, req.RequestUri, Trunc(RedactTrace(responseBody), 1600));
+        return response;
+    }
+
+    private static string RedactTrace(string value)
+        => Regex.Replace(value ?? "", "(?i)(cookie|set-cookie|authorization|nkauth|token|session|password)\\s*[:=]\\s*[^&;\\s,}]+", "$1=[REDACTED]");
     private async Task<(string status, string message)> TrySubmitAsync(HttpClient http, string race12, CancellationToken ct)
     {
         var callback = $"jQuery{Random.Shared.NextInt64(100000000000000, 999999999999999)}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
@@ -414,7 +435,7 @@ public sealed class OreProCustomBetService
             generatorReq.Headers.Add("X-Requested-With", "XMLHttpRequest");
             generatorReq.Headers.Accept.ParseAdd("text/javascript, application/javascript, application/ecmascript, application/x-ecmascript, */*; q=0.01");
             generatorReq.Content.Headers.ContentType!.CharSet = "UTF-8";
-            using var generatorResp = await http.SendAsync(generatorReq, ct);
+            using var generatorResp = await SendWithTraceAsync(http, generatorReq, ct);
             if (!generatorResp.IsSuccessStatusCode)
                 return ("warn", $"OrePro bet generator returned HTTP {(int)generatorResp.StatusCode}.");
         }
@@ -425,7 +446,7 @@ public sealed class OreProCustomBetService
             req.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
             req.Headers.Add("Origin", "https://orepro.netkeiba.com");
             req.Headers.Add("X-Requested-With", "XMLHttpRequest");
-            using var resp = await http.SendAsync(req, ct);
+            using var resp = await SendWithTraceAsync(http, req, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode)
                 return ("error", $"Submit HTTP {(int)resp.StatusCode}. Body: {Trunc(body, 200)}");
