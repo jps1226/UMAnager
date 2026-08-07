@@ -57,6 +57,10 @@ public sealed class SettingsService
         // errors. Nullable; deliberately separate from normal racing events.
         public const string DiscordAlertWebhookUrl = "discord_alert_webhook_url";
 
+        // Secret Uptime Kuma Push URL for Friday weekend-card readiness. Stored in app_settings,
+        // never in source control. Empty disables the optional Kuma integration.
+        public const string UptimeKumaWeekendPreflightPushUrl = "uptime_kuma_weekend_preflight_push_url";
+
         // String — Raw "Cookie:" header value from the user's logged-in OrePro browser session.
         // User copies this from DevTools after logging in to orepro.netkeiba.com. Nullable.
         public const string OreProSessionCookie = "orepro_session_cookie";
@@ -125,6 +129,7 @@ public sealed class SettingsService
         public static readonly TimeSpan MaintenanceRetryInterval = TimeSpan.FromMinutes(30);
         public const string?            DiscordWebhookUrl        = null;
         public const string?            DiscordAlertWebhookUrl   = null;
+        public const string?            UptimeKumaWeekendPreflightPushUrl = null;
         public const string?            OreProSessionCookie      = null;
         public const string?            OreProLoginId            = null;
         public const string?            OreProPassword           = null;
@@ -265,6 +270,7 @@ public sealed class SettingsService
         AddIfMissing(Keys.MaintenanceRetryInterval, Defaults.MaintenanceRetryInterval.ToString());
         AddIfMissing(Keys.DiscordWebhookUrl,       Defaults.DiscordWebhookUrl);
         AddIfMissing(Keys.DiscordAlertWebhookUrl,  Defaults.DiscordAlertWebhookUrl);
+        AddIfMissing(Keys.UptimeKumaWeekendPreflightPushUrl, Defaults.UptimeKumaWeekendPreflightPushUrl);
         AddIfMissing(Keys.OreProSessionCookie,     Defaults.OreProSessionCookie);
         AddIfMissing(Keys.OreProLoginId,           Defaults.OreProLoginId);
         AddIfMissing(Keys.OreProPassword,          Defaults.OreProPassword);

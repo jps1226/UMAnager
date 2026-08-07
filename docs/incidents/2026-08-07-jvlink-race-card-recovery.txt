@@ -40,3 +40,10 @@ Prevention safeguards deployed — 2026-08-07
 - Added read-only `tools/ops/Test-WeekendCardPreflight.ps1` for attended validation.
 - ProtonVPN Service and WireGuard are Manual and stopped; JRA-VAN DNS remains verified.
 - Release build: 0 warnings/errors. Tests: 13/13 passing. Live force-tick and preflight verified 72 Aug 8/9 upcoming races and RACES_POPULATED.
+
+
+Uptime Kuma reporting deployed — 2026-08-07
+- Created watchdog Uptime Kuma Push monitor: `UMAnager — Weekend Card Preflight` (weekly Friday readiness check).
+- Configured Push URL only in UMAnager app settings; it is not committed or logged.
+- Friday-after-noon ET preflight state changes report `up` only with both expected Saturday/Sunday cards; any missing card reports `down`, with retry on Kuma delivery failure.
+- Verified direct UMAnager→Kuma down/up integration probe: both HTTP 200, Kuma final status up.

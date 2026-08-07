@@ -40,6 +40,7 @@ public sealed class LiveOrchestrator : BackgroundService
     private readonly RaceCardRefreshService _raceCardRefresh;
     private readonly RaceCardRtFetchService _raceCardRtFetch;
     private readonly PipelineHealthService _health;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<LiveOrchestrator> _logger;
 
     // T1-3: if ingest sits in "Streaming" longer than this with no completion, the Sidecar is assumed
@@ -77,6 +78,7 @@ public sealed class LiveOrchestrator : BackgroundService
         RaceCardRefreshService raceCardRefresh,
         RaceCardRtFetchService raceCardRtFetch,
         PipelineHealthService health,
+        IHttpClientFactory httpClientFactory,
         ILogger<LiveOrchestrator> logger)
     {
         _phase           = phase;
@@ -91,6 +93,7 @@ public sealed class LiveOrchestrator : BackgroundService
         _raceCardRefresh = raceCardRefresh;
         _raceCardRtFetch = raceCardRtFetch;
         _health          = health;
+        _httpClientFactory = httpClientFactory;
         _logger          = logger;
     }
 
@@ -646,7 +649,19 @@ public sealed class LiveOrchestrator : BackgroundService
         var available = availableDates.Select(d => d.ToString("yyyy-MM-dd")).ToList();
         var saturdayKey = expectedSaturday.ToString("yyyy-MM-dd");
         var sundayKey = expectedSunday.ToString("yyyy-MM-dd");
-        if (available.Contains(saturdayKey) && available.Contains(sundayKey)) return;
+        var passed = available.Contains(saturdayKey) && available.Contains(sundayKey);
+
+        // Kuma receives one heartbeat per preflight state change. A failed send leaves the state unset,
+        // so the next tick retries; the Push URL itself stays in app_settings, never in the repo.
+        var kumaStateKey = $"weekend_card_preflight_kuma_state_{easternNow:yyyy-MM-dd}";
+        var wantedKumaState = passed ? "up" : "down";
+        if (await _appState.GetStringAsync(kumaStateKey) != wantedKumaState
+            && await ReportWeekendCardPreflightToKumaAsync(wantedKumaState, saturdayKey, sundayKey, available, ct))
+        {
+            await _appState.SetStringAsync(kumaStateKey, wantedKumaState);
+        }
+
+        if (passed) return;
 
         var delivered = await _discord.NotifyWeekendCardPreflightFailedAsync(saturdayKey, sundayKey, available, ct);
         if (delivered)
@@ -658,6 +673,35 @@ public sealed class LiveOrchestrator : BackgroundService
         else
         {
             _logger.LogWarning("[Orchestrator] Weekend card preflight failed but Discord alert was not delivered; will retry next tick.");
+        }
+    }
+
+    private async Task<bool> ReportWeekendCardPreflightToKumaAsync(string status, string saturday, string sunday, IReadOnlyCollection<string> available, CancellationToken ct)
+    {
+        var pushUrl = await _settings.GetStringAsync(SettingsService.Keys.UptimeKumaWeekendPreflightPushUrl);
+        if (string.IsNullOrWhiteSpace(pushUrl)) return true; // Optional integration is not configured.
+
+        var message = status == "up"
+            ? $"Weekend cards ready: {saturday}, {sunday}"
+            : $"Missing weekend card(s); expected {saturday}, {sunday}; available: {(available.Count == 0 ? "none" : string.Join(", ", available))}";
+        var separator = pushUrl.Contains('?') ? "&" : "?";
+        var requestUri = $"{pushUrl}{separator}status={status}&msg={Uri.EscapeDataString(message)}&ping={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+
+        try
+        {
+            using var response = await _httpClientFactory.CreateClient("UptimeKuma").GetAsync(requestUri, ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("[Orchestrator] Uptime Kuma preflight heartbeat returned HTTP {StatusCode}; will retry next tick.", (int)response.StatusCode);
+                return false;
+            }
+            _logger.LogInformation("[Orchestrator] Uptime Kuma weekend-card preflight reported {Status}.", status);
+            return true;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            _logger.LogWarning(ex, "[Orchestrator] Uptime Kuma preflight heartbeat failed; will retry next tick.");
+            return false;
         }
     }
 

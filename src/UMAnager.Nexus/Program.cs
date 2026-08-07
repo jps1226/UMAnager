@@ -67,6 +67,7 @@ builder.Services.AddSingleton<OddsFetchService>();
 builder.Services.AddSingleton<ResultsFetchService>();
 builder.Services.AddSingleton<LiveBroadcastService>();
 builder.Services.AddHttpClient(nameof(DiscordNotifier));
+builder.Services.AddHttpClient("UptimeKuma", client => client.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<IDiscordNotifier, DiscordNotifier>();
 builder.Services.AddScoped<BetWinNotifier>();
 builder.Services.AddScoped<ClaudeRecapWriter>();
