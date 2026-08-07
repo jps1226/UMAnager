@@ -168,7 +168,13 @@ public sealed class OreProCustomBetService
 
         using var handler = new HttpClientHandler
         {
-            UseCookies = false,
+            // Must stay true. With UseCookies=false the handler ignores CookieContainer entirely and
+            // sends NO Cookie header — a3b4c24 flipped this to false while setting the header by hand,
+            // then 0ba9b4c removed those manual headers to fix a duplication and left this at false.
+            // Result: every request went out anonymous, so OrePro answered "not login" on every
+            // authenticated endpoint (cart add still returned OK — anonymous carts are allowed — while
+            // the read-back saw a different throwaway session and came back data:null). Found s66.
+            UseCookies = true,
             CookieContainer = cookieJar,
             AutomaticDecompression = DecompressionMethods.All,
         };
@@ -324,10 +330,12 @@ public sealed class OreProCustomBetService
             cartRaw = await resp.Content.ReadAsStringAsync(ct);
             cartBetIds = ExtractCartBetIds(cartRaw);
             // Confirmed = every bet_id we tried to place is present in the cart read-back.
-            var cartAddConfirmed = addResp.Contains("\"status\":\"OK\"", StringComparison.OrdinalIgnoreCase);
-            // OrePro may return data:null for action=get after a successful cart add.
-            // The add response is the authoritative confirmation that this ticket entered the cart.
-            confirmed = cartAddConfirmed && (cartBetIds.Length == 0 || betEntries.All(b => cartBetIds.Contains(b.bet_id)));
+            // Do NOT weaken this to trust the add response instead. b321920 did exactly that
+            // ("data:null is fine as long as the add said OK") to work around the anonymous-session
+            // bug above — but data:null IS the signal that nothing landed, and treating it as success
+            // makes the app report a placed bet that does not exist. The read-back is the only
+            // independent proof; keep it authoritative.
+            confirmed = betEntries.All(b => cartBetIds.Contains(b.bet_id));
         }
         catch (Exception ex)
         {
