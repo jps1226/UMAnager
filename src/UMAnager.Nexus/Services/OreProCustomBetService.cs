@@ -317,6 +317,9 @@ public sealed class OreProCustomBetService
             };
             req.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
             req.Headers.Add("Origin", "https://orepro.netkeiba.com");
+            req.Headers.Add("X-Requested-With", "XMLHttpRequest");
+            req.Headers.Accept.ParseAdd("application/json, text/javascript, */*; q=0.01");
+            req.Content.Headers.ContentType!.CharSet = "UTF-8";
             using var resp = await SendWithTraceAsync(http, req, ct);
             cartRaw = await resp.Content.ReadAsStringAsync(ct);
             cartBetIds = ExtractCartBetIds(cartRaw);
