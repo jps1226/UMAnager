@@ -543,6 +543,12 @@ public sealed class OreProVoteApplyService
     /// </summary>
     public async Task<JsonElement> LoginAsync(string? loginIdOverride, string? passwordOverride, string? verifyRaceId, CancellationToken ct)
     {
+        // Verify the existing cookie first. A valid manual session must not be replaced by a false credential failure.
+        var existing = await CheckCookieOnceAsync(verifyRaceId, ct);
+        var existingLoggedIn = existing.TryGetProperty("loggedIn", out var existingLi)
+                            && existingLi.ValueKind == JsonValueKind.True;
+        if (existingLoggedIn)
+            return Result("ok", true, "Existing OrePro session is already valid; no refresh was needed.");
         var loginId = (loginIdOverride ?? await _settings.GetStringAsync(SettingsService.Keys.OreProLoginId) ?? "").Trim();
         var password = passwordOverride ?? await _settings.GetStringAsync(SettingsService.Keys.OreProPassword) ?? "";
         if (string.IsNullOrEmpty(loginId) || string.IsNullOrEmpty(password))
