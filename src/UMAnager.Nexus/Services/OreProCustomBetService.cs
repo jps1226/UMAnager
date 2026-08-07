@@ -175,7 +175,6 @@ public sealed class OreProCustomBetService
         using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(25) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
         http.DefaultRequestHeaders.Add("Accept-Language", "ja,en;q=0.8");
-        http.DefaultRequestHeaders.TryAddWithoutValidation("Cookie", cookie);
 
         // ── Scrape the bet_id prefix parts from the shutuba page ─────────────────
         string shutubaHtml;
@@ -184,7 +183,6 @@ public sealed class OreProCustomBetService
             using var req = new HttpRequestMessage(HttpMethod.Get, $"{ShutubaUrl}?race_id={Uri.EscapeDataString(race12)}");
             req.Headers.Referrer = new Uri(BetReferer);
             req.Headers.Add("Origin", "https://orepro.netkeiba.com");
-            req.Headers.TryAddWithoutValidation("Cookie", cookie);
             using var resp = await http.SendAsync(req, ct);
             var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
             var charset = (resp.Content.Headers.ContentType?.CharSet ?? "").Trim().Trim('"');
@@ -271,7 +269,6 @@ public sealed class OreProCustomBetService
             };
             req.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
             req.Headers.Add("Origin", "https://orepro.netkeiba.com");
-            req.Headers.TryAddWithoutValidation("Cookie", cookie);
             req.Headers.Add("X-Requested-With", "XMLHttpRequest");
             using var resp = await http.SendAsync(req, ct);
             var txt = await resp.Content.ReadAsStringAsync(ct);
@@ -291,7 +288,6 @@ public sealed class OreProCustomBetService
             using var req = new HttpRequestMessage(HttpMethod.Get, addUrl);
             req.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
             req.Headers.Add("Origin", "https://orepro.netkeiba.com");
-            req.Headers.TryAddWithoutValidation("Cookie", cookie);
             using var resp = await http.SendAsync(req, ct);
             addResp = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode)
@@ -321,7 +317,6 @@ public sealed class OreProCustomBetService
             };
             req.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
             req.Headers.Add("Origin", "https://orepro.netkeiba.com");
-            req.Headers.TryAddWithoutValidation("Cookie", cookie);
             using var resp = await http.SendAsync(req, ct);
             cartRaw = await resp.Content.ReadAsStringAsync(ct);
             cartBetIds = ExtractCartBetIds(cartRaw);
