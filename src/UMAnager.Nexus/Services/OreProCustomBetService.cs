@@ -387,7 +387,8 @@ public sealed class OreProCustomBetService
     /// </summary>
     private async Task<(string status, string message)> TrySubmitAsync(HttpClient http, string race12, CancellationToken ct)
     {
-        const string url = "https://orepro.netkeiba.com/bet/api_post_mybet.html";
+        var callback = $"jQuery{Random.Shared.NextInt64(100000000000000, 999999999999999)}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+        var url = $"https://orepro.netkeiba.com/bet/api_post_mybet.html?callback={callback}";
         var form = new[]
         {
             new KeyValuePair<string,string>("input",   "UTF-8"),
@@ -397,7 +398,30 @@ public sealed class OreProCustomBetService
         };
         try
         {
+        var generatorUrl = $"https://orepro.netkeiba.com/bet/api_post_bet_generator.html?callback={callback}";
+        using (var generatorReq = new HttpRequestMessage(HttpMethod.Post, generatorUrl)
+        {
+            Content = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string,string>("input", "UTF-8"),
+                new KeyValuePair<string,string>("output", "jsonp"),
+                new KeyValuePair<string,string>("race_id", race12),
+            })
+        })
+        {
+            generatorReq.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
+            generatorReq.Headers.Add("Origin", "https://orepro.netkeiba.com");
+            generatorReq.Headers.Add("X-Requested-With", "XMLHttpRequest");
+            generatorReq.Headers.Accept.ParseAdd("text/javascript, application/javascript, application/ecmascript, application/x-ecmascript, */*; q=0.01");
+            generatorReq.Content.Headers.ContentType!.CharSet = "UTF-8";
+            using var generatorResp = await http.SendAsync(generatorReq, ct);
+            if (!generatorResp.IsSuccessStatusCode)
+                return ("warn", $"OrePro bet generator returned HTTP {(int)generatorResp.StatusCode}.");
+        }
+
             using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = new FormUrlEncodedContent(form) };
+            req.Headers.Accept.ParseAdd("text/javascript, application/javascript, application/ecmascript, application/x-ecmascript, */*; q=0.01");
+            req.Content.Headers.ContentType!.CharSet = "UTF-8";
             req.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
             req.Headers.Add("Origin", "https://orepro.netkeiba.com");
             req.Headers.Add("X-Requested-With", "XMLHttpRequest");
