@@ -196,6 +196,7 @@ public sealed class OreProVoteApplyService
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, shutubaUrl);
                 req.Headers.Referrer = new Uri(BetReferer);
+                req.Headers.Add("Origin", "https://orepro.netkeiba.com");
                 using var resp = await http.SendAsync(req, ct);
                 shutubaStatus = (int)resp.StatusCode;
                 var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
@@ -280,6 +281,7 @@ public sealed class OreProVoteApplyService
                     Content = new FormUrlEncodedContent(form)
                 };
                 req.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={oreproRaceId}");
+                req.Headers.Add("Origin", "https://orepro.netkeiba.com");
                 using var resp = await http.SendAsync(req, ct);
                 var text = await resp.Content.ReadAsStringAsync(ct);
 
@@ -474,6 +476,7 @@ public sealed class OreProVoteApplyService
                 var url = $"{ShutubaUrl}?race_id={Uri.EscapeDataString(oreproRaceId)}";
                 using var req = new HttpRequestMessage(HttpMethod.Get, url);
                 req.Headers.Referrer = new Uri(BetReferer);
+                req.Headers.Add("Origin", "https://orepro.netkeiba.com");
                 using var resp = await http.SendAsync(req, ct);
                 var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
                 var charset = (resp.Content.Headers.ContentType?.CharSet ?? "").Trim().Trim('"');
@@ -897,6 +900,7 @@ public sealed class OreProVoteApplyService
                 })
             };
             req.Headers.Referrer = new Uri(BetReferer);
+            req.Headers.Add("Origin", "https://orepro.netkeiba.com");
             req.Headers.Add("X-Requested-With", "XMLHttpRequest");
             using var resp = await http.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode)
