@@ -1,0 +1,25 @@
+UMAnager JV-Link weekend race-card recovery — 2026-08-07
+
+Scope
+- Missing phase notifications and missing weekend/Sunday JRA cards.
+- UI Aug 5 card was confirmed stale local/NAR past-race data, not a current/upcoming JRA race card.
+
+Actions completed
+- Backed up the existing JV-Link program files and service/uninstall registry information.
+- Rebooted the UMAnager VM.
+- Installed the official JRA SYSTEM SERVICE-signed JV-Link installer in place.
+- Fully closed ProtonVPN and WireGuard while isolating JRA-VAN connectivity.
+- Verified JRA-VAN CDN DNS resolution after the repair/network cleanup.
+- Restarted JVLinkAgent.
+- Relaunched Nexus and Sidecar together in desktop Session 1.
+- Cleared a wedged option-4 TOKURACESNPN request with a controlled Nexus/Sidecar restart.
+
+Verified result
+- The earlier immediate JVOpen rc=-413 failure no longer occurred.
+- DIFN/master-data stream completed successfully: 3,700 records received; 2,949 staged; cursor advanced to 20260806190143.
+- Race-card/TOKURACESNPN remains unresolved: /api/races has no upcoming races, phase remains WAITING_FOR_RACES, and Aug 9 has not appeared in upcoming_races_by_date.
+
+Operational constraint
+- Do not treat new past/local dates in the UI as a successful JRA-card refresh.
+- Avoid repeated option-4 backfills during this incident; a request wedged without network or cache progress.
+- Success criterion: actual Aug 9 JRA races in the API upcoming-races payload.
