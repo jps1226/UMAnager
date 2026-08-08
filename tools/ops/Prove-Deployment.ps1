@@ -33,7 +33,7 @@ $record = [ordered]@{
     repo_git_diff_head_empty = $null
     repo_status_short = @()
     binary_matches_worktree = $null
-    worktree_matches_head = $null
+    project_source_matches_head = $null
     process_loaded_this_dll = $null
     verdict = 'INDETERMINATE'
     missing_inputs = @()
@@ -99,7 +99,7 @@ try {
         $dllTime = [DateTime]::Parse($record.dll_mtime)
         $record.binary_matches_worktree = ($sourceTime -le $dllTime)
     }
-    if ($null -ne $record.project_git_diff_head_empty) { $record.worktree_matches_head = $record.project_git_diff_head_empty }
+    if ($null -ne $record.project_git_diff_head_empty) { $record.project_source_matches_head = $record.project_git_diff_head_empty }
     if ($record.process.Count -eq 1 -and $record.dll_mtime -and $record.process[0].creation_time) {
         $processTime = [DateTime]::Parse($record.process[0].creation_time)
         $dllTime = [DateTime]::Parse($record.dll_mtime)
@@ -109,7 +109,7 @@ try {
     if ($record.missing_inputs.Count -eq 0) {
         if (-not $record.binary_matches_worktree) { $record.verdict = 'BINARY_PREDATES_SOURCE' }
         elseif (-not $record.process_loaded_this_dll) { $record.verdict = 'PROCESS_PREDATES_BINARY' }
-        elseif (-not $record.worktree_matches_head) { $record.verdict = 'MATCHES_WORKTREE_NOT_HEAD' }
+        elseif (-not $record.project_source_matches_head) { $record.verdict = 'MATCHES_WORKTREE_NOT_HEAD' }
         else { $record.verdict = 'DEPLOYED_MATCHES_HEAD' }
     }
 }
