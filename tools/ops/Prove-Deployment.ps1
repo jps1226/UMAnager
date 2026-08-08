@@ -109,7 +109,7 @@ try {
     if ($record.missing_inputs.Count -eq 0) {
         if (-not $record.binary_matches_worktree) { $record.verdict = 'BINARY_PREDATES_SOURCE' }
         elseif (-not $record.process_loaded_this_dll) { $record.verdict = 'PROCESS_PREDATES_BINARY' }
-        elseif (-not $record.project_source_matches_head) { $record.verdict = 'MATCHES_WORKTREE_NOT_HEAD' }
+        elseif (-not $record.project_source_matches_head) { $record.verdict = 'DEPLOYED_MATCHES_PROJECT_SOURCE_NOT_HEAD' }
         else { $record.verdict = 'DEPLOYED_MATCHES_HEAD' }
     }
 }
