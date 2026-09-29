@@ -10883,32 +10883,41 @@ function renderLiveViewPanel() {
     loadOreProSessionStatus();
 }
 
+let statsPeriodDays = 365;
+let statsRecaps = null;
+
 function switchMainView(view) {
     if (view === 'voting') currentMainView = 'voting';
     else if (view === 'horse') currentMainView = 'horse';
+    else if (view === 'stats') currentMainView = 'stats';
     else currentMainView = 'races';
 
-    const schedules  = document.getElementById('schedules-container');
-    const liveView   = document.getElementById('live-view-container');
-    const horseView  = document.getElementById('horse-view-container');
-    const racesBtn   = document.getElementById('main-view-races');
-    const votingBtn  = document.getElementById('main-view-voting');
-    const horseBtn   = document.getElementById('main-view-horse');
+    const schedules = document.getElementById('schedules-container');
+    const liveView = document.getElementById('live-view-container');
+    const horseView = document.getElementById('horse-view-container');
+    const statsView = document.getElementById('stats-view-container');
+    const racesBtn = document.getElementById('main-view-races');
+    const votingBtn = document.getElementById('main-view-voting');
+    const horseBtn = document.getElementById('main-view-horse');
+    const statsBtn = document.getElementById('main-view-stats');
     if (!schedules || !liveView || !racesBtn || !votingBtn) return;
 
     const isVoting = currentMainView === 'voting';
-    const isHorse  = currentMainView === 'horse';
+    const isHorse = currentMainView === 'horse';
+    const isStats = currentMainView === 'stats';
 
-    schedules.style.display = (isVoting || isHorse) ? 'none' : 'block';
-    liveView.style.display  = isVoting ? 'flex' : 'none';
+    schedules.style.display = (isVoting || isHorse || isStats) ? 'none' : 'block';
+    liveView.style.display = isVoting ? 'flex' : 'none';
     if (horseView) horseView.style.display = isHorse ? 'block' : 'none';
+    if (statsView) statsView.style.display = isStats ? 'block' : 'none';
 
     const watchlistPanel = document.getElementById('weekend-watchlist-panel');
     if (watchlistPanel) watchlistPanel.style.display = (isVoting || isHorse) ? 'none' : '';
 
-    racesBtn.classList.toggle('is-active', !isVoting && !isHorse);
+    racesBtn.classList.toggle('is-active', !isVoting && !isHorse && !isStats);
     votingBtn.classList.toggle('is-active', isVoting);
     if (horseBtn) horseBtn.classList.toggle('is-active', isHorse);
+    if (statsBtn) statsBtn.classList.toggle('is-active', isStats);
     document.body.classList.toggle('voting-mode', isVoting);
 
     syncVotingViewAvailability();
@@ -10916,6 +10925,99 @@ function switchMainView(view) {
     updateWinningVotesFocusButton();
 
     if (isVoting) { renderLiveViewPanel(); refreshSunkCostStat(); }
+    if (isStats) loadStatsView();
+}
+
+function statsRaceDate(raceId) {
+    const raw = String(raceId || '').slice(0, 8);
+    if (!/^\d{8}$/.test(raw)) return null;
+    const y = Number(raw.slice(0, 4)), m = Number(raw.slice(4, 6)), d = Number(raw.slice(6, 8));
+    const date = new Date(Date.UTC(y, m - 1, d));
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+function statsDayKey(date) { return date.toISOString().slice(0, 10); }
+function statsMoney(value) { return `${Number(value || 0) < 0 ? '−' : ''}¥${Math.abs(Number(value || 0)).toLocaleString()}`; }
+function statsDateLabel(date) { return date.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); }
+function statsCompactMoney(value) {
+    const n = Math.abs(Number(value || 0));
+    const prefix = Number(value || 0) < 0 ? '−' : '';
+    return n >= 1000000 ? `${prefix}¥${(n / 1000000).toFixed(1)}m` : n >= 1000 ? `${prefix}¥${Math.round(n / 1000)}k` : `${prefix}¥${n}`;
+}
+function setStatsPeriod(days) {
+    statsPeriodDays = Number(days) || 0;
+    document.querySelectorAll('[data-stats-days]').forEach(button => button.classList.toggle('is-active', Number(button.dataset.statsDays) === statsPeriodDays));
+    renderStatsView();
+}
+async function loadStatsView() {
+    const host = document.getElementById('stats-view-content');
+    if (!host) return;
+    if (!statsRecaps) {
+        host.innerHTML = '<div class="stats-loading">Loading settled results…</div>';
+        try {
+            const response = await fetch('/api/sunk-cost/per-race', { cache: 'no-store' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            statsRecaps = await response.json();
+        } catch (error) {
+            host.innerHTML = `<div class="stats-error">Could not load historical results: ${escapeHtml(String(error.message || error))}</div>`;
+            return;
+        }
+    }
+    renderStatsView();
+}
+function statsChartHtml(days) {
+    if (!days.length) return '';
+    const width = 700, height = 205, left = 52, right = 8, top = 12, bottom = 24;
+    let running = 0;
+    const points = days.map((day, index) => ({ ...day, index, cumulative: running += day.net }));
+    const values = points.map(p => p.cumulative).concat([0]);
+    let low = Math.min(...values), high = Math.max(...values);
+    if (low === high) { low -= 1; high += 1; }
+    const padding = Math.max((high - low) * 0.12, 1000);
+    low -= padding; high += padding;
+    const x = i => left + (points.length === 1 ? (width - left - right) / 2 : i * (width - left - right) / (points.length - 1));
+    const y = value => top + (high - value) * (height - top - bottom) / (high - low);
+    const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.cumulative).toFixed(1)}`).join(' ');
+    const area = `${path} L${x(points.length - 1).toFixed(1)},${y(0).toFixed(1)} L${x(0).toFixed(1)},${y(0).toFixed(1)} Z`;
+    const grid = [0, 1, 2, 3].map(i => { const value = high - i * (high - low) / 3; return `<line class="stats-chart-gridline" x1="${left}" y1="${y(value)}" x2="${width - right}" y2="${y(value)}"/><text class="stats-chart-axis" x="0" y="${y(value) + 3}">${escapeHtml(statsCompactMoney(value))}</text>`; }).join('');
+    const labels = [0, Math.floor((points.length - 1) / 2), points.length - 1].filter((value, index, all) => all.indexOf(value) === index).map(i => `<text class="stats-chart-axis" x="${x(i)}" y="${height - 4}" text-anchor="middle">${escapeHtml(statsDateLabel(points[i].date).replace(/ \d{4}$/, ''))}</text>`).join('');
+    const last = points[points.length - 1];
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Cumulative net across selected settled race days"><defs><linearGradient id="stats-chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#1dd1a1" stop-opacity=".25"/><stop offset="1" stop-color="#1dd1a1" stop-opacity="0"/></linearGradient></defs>${grid}<line class="stats-chart-gridline" x1="${left}" y1="${y(0)}" x2="${width - right}" y2="${y(0)}" stroke="#526174"/> <path class="stats-chart-area" d="${area}"/><path class="stats-chart-line" d="${path}"/><circle class="stats-chart-dot" cx="${x(points.length - 1)}" cy="${y(last.cumulative)}" r="4"/>${labels}</svg>`;
+}
+function renderStatsView() {
+    const host = document.getElementById('stats-view-content');
+    if (!host || !Array.isArray(statsRecaps)) return;
+    const settled = statsRecaps.map(recap => ({ ...recap, date: statsRaceDate(recap.RaceId) })).filter(recap => recap.HasResults === true && recap.date);
+    if (!settled.length) { host.innerHTML = '<div class="stats-empty">No settled placed-bet results are available yet.</div>'; return; }
+    const newest = new Date(Math.max(...settled.map(recap => recap.date.getTime())));
+    const cutoff = new Date(newest);
+    if (statsPeriodDays > 0) cutoff.setUTCDate(cutoff.getUTCDate() - statsPeriodDays + 1);
+    const scoped = settled.filter(recap => !statsPeriodDays || recap.date >= cutoff);
+    const dayMap = new Map();
+    scoped.forEach(recap => {
+        const key = statsDayKey(recap.date);
+        const day = dayMap.get(key) || { key, date: recap.date, races: 0, hits: 0, staked: 0, won: 0, net: 0 };
+        day.races++; day.hits += Number(recap.Won || 0) > 0 ? 1 : 0; day.staked += Number(recap.Staked || 0); day.won += Number(recap.Won || 0); day.net += Number(recap.Net || 0);
+        dayMap.set(key, day);
+    });
+    const daysAsc = [...dayMap.values()].sort((a, b) => a.date - b.date);
+    const daysDesc = [...daysAsc].reverse();
+    const totalStaked = scoped.reduce((sum, recap) => sum + Number(recap.Staked || 0), 0);
+    const totalWon = scoped.reduce((sum, recap) => sum + Number(recap.Won || 0), 0);
+    const totalNet = totalWon - totalStaked;
+    const hits = scoped.filter(recap => Number(recap.Won || 0) > 0).length;
+    const bestDay = daysAsc.reduce((best, day) => day.net > best.net ? day : best, daysAsc[0]);
+    const positiveDays = daysAsc.filter(day => day.net > 0).length;
+    const netClass = totalNet >= 0 ? 'is-positive' : 'is-negative';
+    const rows = daysDesc.slice(0, 12).map(day => `<tr><td>${escapeHtml(statsDateLabel(day.date))}</td><td>${day.races}</td><td>${day.hits} / ${day.races}</td><td>${statsMoney(day.staked)}</td><td class="${day.net >= 0 ? 'stats-positive' : 'stats-negative'}">${statsMoney(day.net)}</td></tr>`).join('');
+    host.innerHTML = `<div class="stats-summary-grid">
+        <div class="stats-summary-card"><div class="stats-summary-label">Net result</div><div class="stats-summary-value ${netClass}">${statsMoney(totalNet)}</div><div class="stats-summary-sub">${scoped.length.toLocaleString()} settled placed races</div></div>
+        <div class="stats-summary-card"><div class="stats-summary-label">Returned / staked</div><div class="stats-summary-value ${totalWon >= totalStaked ? 'is-positive' : 'is-negative'}">${totalStaked ? (totalWon / totalStaked * 100).toFixed(1) : '0.0'}%</div><div class="stats-summary-sub">${statsMoney(totalWon)} returned</div></div>
+        <div class="stats-summary-card"><div class="stats-summary-label">Hit rate</div><div class="stats-summary-value">${scoped.length ? (hits / scoped.length * 100).toFixed(1) : '0.0'}%</div><div class="stats-summary-sub">${hits.toLocaleString()} hit races</div></div>
+        <div class="stats-summary-card"><div class="stats-summary-label">Race days</div><div class="stats-summary-value">${daysAsc.length}</div><div class="stats-summary-sub">Latest: ${escapeHtml(statsDateLabel(newest))}</div></div>
+    </div>
+    <div class="stats-grid"><section class="stats-panel"><div class="stats-panel-head"><div><h4>Cumulative net</h4><span>Selected settled race days · yen</span></div></div><div class="stats-chart">${statsChartHtml(daysAsc)}</div></section>
+    <section class="stats-panel"><div class="stats-panel-head"><div><h4>Period snapshot</h4><span>Actual recap totals</span></div></div><div class="stats-detail-list"><div class="stats-detail-row"><span>Staked</span><span>${statsMoney(totalStaked)}</span></div><div class="stats-detail-row"><span>Returned</span><span>${statsMoney(totalWon)}</span></div><div class="stats-detail-row"><span>Positive race days</span><span>${positiveDays} / ${daysAsc.length}</span></div><div class="stats-detail-row"><span>Best day</span><span class="${bestDay.net >= 0 ? 'stats-positive' : 'stats-negative'}">${statsMoney(bestDay.net)} · ${escapeHtml(statsDateLabel(bestDay.date))}</span></div></div></section></div>
+    <section class="stats-panel stats-ledger"><div class="stats-panel-head"><div><h4>Race-day ledger</h4><span>Most recent settled days in this period</span></div></div><div class="stats-table-wrap"><table class="stats-table"><thead><tr><th>Race day (JST)</th><th>Races</th><th>Hits</th><th>Staked</th><th>Net</th></tr></thead><tbody>${rows}</tbody></table></div><div class="stats-footnote">A race counts as a hit when its authoritative recap returned more than ¥0. Pending races are excluded. Race dates are JST calendar dates parsed from the JRA race ID.</div></section>`;
 }
 
 // ── Phase 31: Horse Deep-Dive Tab ──────────────────────────────────────────
