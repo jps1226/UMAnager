@@ -37,6 +37,7 @@
             <button id="main-view-voting" onclick="switchMainView('voting')" class="toolbar-btn toolbar-btn-muted">🧾 Bets</button>
             <button id="main-view-horse" onclick="switchMainView('horse')" class="toolbar-btn toolbar-btn-muted">🔍 Horse</button>
         </div>
+        <button id="main-view-stats" onclick="switchMainView('stats')" class="toolbar-btn toolbar-btn-muted stats-view-tab">📈 Stats</button>
     </div>
 
     <div class="sidebar-scroll">
@@ -319,6 +320,21 @@
                 </div>
             </div>
         </div>
+    </div>
+    <div id="stats-view-container" class="stats-view-shell" style="display:none;">
+        <div class="stats-view-head">
+            <div>
+                <h3>📈 Historical performance</h3>
+                <p>Settled placed-bet results only. This view is read-only and never changes current-day bets.</p>
+            </div>
+            <div class="stats-period-control" role="group" aria-label="Stats period">
+                <button type="button" data-stats-days="30" onclick="setStatsPeriod(30)">30d</button>
+                <button type="button" data-stats-days="90" onclick="setStatsPeriod(90)">90d</button>
+                <button type="button" data-stats-days="365" onclick="setStatsPeriod(365)" class="is-active">12m</button>
+                <button type="button" data-stats-days="0" onclick="setStatsPeriod(0)">All</button>
+            </div>
+        </div>
+        <div id="stats-view-content" class="stats-view-content"><div class="stats-loading">Loading settled results…</div></div>
     </div>
     <div id="live-view-container" class="voting-main-shell" style="display:none;">
         <div class="voting-main-head">
