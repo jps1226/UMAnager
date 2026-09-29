@@ -68,12 +68,16 @@ builder.Services.AddSingleton<ResultsFetchService>();
 builder.Services.AddSingleton<LiveBroadcastService>();
 builder.Services.AddHttpClient(nameof(DiscordNotifier));
 builder.Services.AddHttpClient("UptimeKuma", client => client.Timeout = TimeSpan.FromSeconds(10));
+// Public profile reconciliation is deliberately unauthenticated and has no OrePro write capability.
+builder.Services.AddHttpClient("OreProPublicAudit", client => client.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddSingleton<IDiscordNotifier, DiscordNotifier>();
 builder.Services.AddScoped<BetWinNotifier>();
 builder.Services.AddScoped<ClaudeRecapWriter>();
 builder.Services.AddScoped<DayRecapNotifier>();
 builder.Services.AddSingleton<VoteHistoryService>();
 builder.Services.AddSingleton<SunkCostService>();
+builder.Services.AddSingleton<OreProDailyVerificationService>();
+builder.Services.AddHostedService<OreProDailyVerificationWorker>();
 builder.Services.AddSingleton<OreProVoteApplyService>();
 builder.Services.AddSingleton<OreProCustomBetService>();
 builder.Services.AddSingleton<LiveOrchestrator>();

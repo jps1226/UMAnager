@@ -69,6 +69,10 @@ public sealed class SettingsService
         // Some sites bind sessions to UA fingerprints; matching it avoids stale-session errors.
         public const string OreProUserAgent = "orepro_user_agent";
 
+        // Public numeric OrePro profile ID used ONLY for unauthenticated, read-only daily
+        // reconciliation. This deliberately does not reuse the account cookie or credentials.
+        public const string OreProPublicProfileId = "orepro_public_profile_id";
+
         // String — netkeiba/OrePro login id (email or member id) + password, used to
         // re-mint orepro_session_cookie server-side when it expires (no browser needed).
         // STORED IN PLAINTEXT in app_settings — the operator opted into this for one-tap /
@@ -134,6 +138,8 @@ public sealed class SettingsService
         public const string?            OreProLoginId            = null;
         public const string?            OreProPassword           = null;
         public const string             OreProUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+        // Jonathan's public OrePro profile, supplied for unauthenticated reconciliation.
+        public const string             OreProPublicProfileId    = "20021241";
         public const string             OreProNavToCompleteAfterSubmit = "false";
         public const string             DisplayLocalTime               = "false";
         public const int                BetEstimateStakeYen            = 100;
@@ -275,6 +281,7 @@ public sealed class SettingsService
         AddIfMissing(Keys.OreProLoginId,           Defaults.OreProLoginId);
         AddIfMissing(Keys.OreProPassword,          Defaults.OreProPassword);
         AddIfMissing(Keys.OreProUserAgent,         Defaults.OreProUserAgent);
+        AddIfMissing(Keys.OreProPublicProfileId,   Defaults.OreProPublicProfileId);
         AddIfMissing(Keys.OreProNavToCompleteAfterSubmit, Defaults.OreProNavToCompleteAfterSubmit);
         AddIfMissing(Keys.DisplayLocalTime,               Defaults.DisplayLocalTime);
         AddIfMissing(Keys.BetEstimateStakeYen,            Defaults.BetEstimateStakeYen.ToString());
