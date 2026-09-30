@@ -53,13 +53,15 @@ public sealed class OreProVoteApplyService
     private readonly SettingsService _settings;
     private readonly AppStateService _appState;
     private readonly VoteHistoryService _voteHistory;
+    private readonly OreProBetAuditService _audit;
 
-    public OreProVoteApplyService(ILogger<OreProVoteApplyService> logger, SettingsService settings, AppStateService appState, VoteHistoryService voteHistory)
+    public OreProVoteApplyService(ILogger<OreProVoteApplyService> logger, SettingsService settings, AppStateService appState, VoteHistoryService voteHistory, OreProBetAuditService audit)
     {
         _logger      = logger;
         _settings    = settings;
         _appState    = appState;
         _voteHistory = voteHistory;
+        _audit       = audit;
     }
 
     /// <summary>
@@ -156,6 +158,33 @@ public sealed class OreProVoteApplyService
         if (!payload.TryGetProperty("races", out var racesEl) || racesEl.ValueKind != JsonValueKind.Array)
         {
             return ErrorJson("Payload had no races array.", payload);
+        }
+
+        // Server-side safety net: the browser performs the same check, but the API must not
+        // begin a batch merely because a client-side preflight was skipped or failed open.
+        // CheckCookieAsync may refresh an expired session using the stored credentials; it never
+        // touches the OrePro cart or submits a bet. Use the first requested race for the stronger
+        // shutuba/account check.
+        if (!dryRun)
+        {
+            var preflightRaceId = racesEl.EnumerateArray()
+                .Select(r => r.TryGetProperty("race_id", out var id) ? id.GetString() ?? "" : "")
+                .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id));
+            try
+            {
+                var session = await CheckCookieAsync(preflightRaceId, ct);
+                var loggedIn = session.TryGetProperty("loggedIn", out var li) && li.ValueKind == JsonValueKind.True;
+                if (!loggedIn)
+                {
+                    var message = session.TryGetProperty("message", out var msg) ? msg.GetString() : null;
+                    return ErrorJson($"OrePro preflight failed — no bets were attempted. {message ?? "Session is not authorized for betting."}", payload);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "OrePro preflight failed before apply batch");
+                return ErrorJson($"OrePro preflight could not be completed — no bets were attempted. {ex.Message}", payload);
+            }
         }
 
         // Phase 37: the marks path needs easy-mode (簡単投票) ON so OrePro's generator builds the
@@ -366,6 +395,15 @@ public sealed class OreProVoteApplyService
 
             // Persist apply/submit state so the UI can show a badge after refresh.
             await RecordApplyStateAsync(raceId, resolved.Count, submitFlow, ct);
+            await _audit.RecordAttemptAsync(
+                raceId,
+                route: "marks",
+                intended: new { requestedMarks = requested, resolvedMarks = resolved, pricingSource = "OrePro marks generator preview" },
+                oreProEvidence: new { cartResponse = cartJson, betPreviewLines = previewLines, submitFlow },
+                submitted: submitFlow is not null && finalStatus == "ok",
+                status: finalStatus,
+                message: finalMessage,
+                ct);
 
             // Phase 30: record votes to vote_history so repeat runners show "Voted N×" badge.
             var votesToRecord = ExtractHorseIdsFromMarks(race, resolved);
@@ -555,14 +593,20 @@ public sealed class OreProVoteApplyService
     /// device. Returns { status, loggedIn, message }. On success the fresh cookie is persisted and
     /// then verified against a real shutuba page (the same reliable check the Settings button uses).
     /// </summary>
-    public async Task<JsonElement> LoginAsync(string? loginIdOverride, string? passwordOverride, string? verifyRaceId, CancellationToken ct)
+    public async Task<JsonElement> LoginAsync(string? loginIdOverride, string? passwordOverride, string? verifyRaceId, CancellationToken ct, bool forceRefresh = false)
     {
-        // Verify the existing cookie first. A valid manual session must not be replaced by a false credential failure.
-        var existing = await CheckCookieOnceAsync(verifyRaceId, ct);
-        var existingLoggedIn = existing.TryGetProperty("loggedIn", out var existingLi)
-                            && existingLi.ValueKind == JsonValueKind.True;
-        if (existingLoggedIn)
-            return Result("ok", true, "Existing OrePro session is already valid; no refresh was needed.");
+        // An explicit operator login must refresh the session even if the existing cookie
+        // passes the read-only check: OrePro can serve race cards while rejecting write
+        // endpoints with {status:NG, reason:not login}. Automatic re-login keeps the old
+        // conservative behavior unless forceRefresh is requested by the login button.
+        if (!forceRefresh)
+        {
+            var existing = await CheckCookieOnceAsync(verifyRaceId, ct);
+            var existingLoggedIn = existing.TryGetProperty("loggedIn", out var existingLi)
+                                && existingLi.ValueKind == JsonValueKind.True;
+            if (existingLoggedIn)
+                return Result("ok", true, "Existing OrePro session is already valid; no refresh was needed.");
+        }
         var loginId = (loginIdOverride ?? await _settings.GetStringAsync(SettingsService.Keys.OreProLoginId) ?? "").Trim();
         var password = passwordOverride ?? await _settings.GetStringAsync(SettingsService.Keys.OreProPassword) ?? "";
         if (string.IsNullOrEmpty(loginId) || string.IsNullOrEmpty(password))

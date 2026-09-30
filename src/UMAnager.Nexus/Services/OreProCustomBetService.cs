@@ -56,12 +56,14 @@ public sealed class OreProCustomBetService
     private readonly ILogger<OreProCustomBetService> _logger;
     private readonly SettingsService _settings;
     private readonly AppStateService _appState;
+    private readonly OreProBetAuditService _audit;
 
-    public OreProCustomBetService(ILogger<OreProCustomBetService> logger, SettingsService settings, AppStateService appState)
+    public OreProCustomBetService(ILogger<OreProCustomBetService> logger, SettingsService settings, AppStateService appState, OreProBetAuditService audit)
     {
         _logger   = logger;
         _settings = settings;
         _appState = appState;
+        _audit    = audit;
     }
 
     private sealed record BetLine(int Type, int Method, string Umaban, int Money);
@@ -369,6 +371,28 @@ public sealed class OreProCustomBetService
         var finalStatus = !confirmed ? "warn"
                         : (submitAfter && !submitted) ? "warn"
                         : "ok";
+
+        await _audit.RecordAttemptAsync(
+            rawRaceId,
+            route: "custom",
+            intended: new
+            {
+                lines = lines.Select(l => new { type = l.Type, method = l.Method, umaban = l.Umaban, money = l.Money }),
+                expectedBetIds = betEntries.Select(b => b.bet_id).ToArray()
+            },
+            oreProEvidence: new
+            {
+                easyModeOff,
+                addResponse = Trunc(addResp, 300),
+                cartConfirmed = confirmed,
+                cartBetIds,
+                submitStatus,
+                submitMessage
+            },
+            submitted,
+            status: finalStatus,
+            message: submitAfter ? submitMessage : "Custom ticket staged but submit was not requested.",
+            ct);
 
         // Carry forward any session rotation from this run — the next OrePro call (another race in
         // the same Apply Day Votes batch) reads the stored cookie fresh and must not miss it.

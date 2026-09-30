@@ -78,6 +78,7 @@ builder.Services.AddSingleton<VoteHistoryService>();
 builder.Services.AddSingleton<SunkCostService>();
 builder.Services.AddSingleton<OreProDailyVerificationService>();
 builder.Services.AddHostedService<OreProDailyVerificationWorker>();
+builder.Services.AddSingleton<OreProBetAuditService>();
 builder.Services.AddSingleton<OreProVoteApplyService>();
 builder.Services.AddSingleton<OreProCustomBetService>();
 builder.Services.AddSingleton<LiveOrchestrator>();

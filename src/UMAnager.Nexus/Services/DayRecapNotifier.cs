@@ -41,6 +41,7 @@ public sealed class DayRecapNotifier
     private readonly IDiscordNotifier _discord;
     private readonly ClaudeRecapWriter _claudeRecap;
     private readonly OreProDailyVerificationService _oreProVerification;
+    private readonly OreProBetAuditService _oreProBetAudit;
     private readonly ILogger<DayRecapNotifier> _logger;
 
     public DayRecapNotifier(
@@ -50,6 +51,7 @@ public sealed class DayRecapNotifier
         IDiscordNotifier discord,
         ClaudeRecapWriter claudeRecap,
         OreProDailyVerificationService oreProVerification,
+        OreProBetAuditService oreProBetAudit,
         ILogger<DayRecapNotifier> logger)
     {
         _dbFactory = dbFactory;
@@ -58,6 +60,7 @@ public sealed class DayRecapNotifier
         _discord = discord;
         _claudeRecap = claudeRecap;
         _oreProVerification = oreProVerification;
+        _oreProBetAudit = oreProBetAudit;
         _logger = logger;
     }
 
@@ -119,6 +122,7 @@ public sealed class DayRecapNotifier
             // Independent end-of-day accounting check. This uses Jonathan's public OrePro profile
             // only — no session, cart, or write endpoint — and persists match/mismatch evidence
             // before the local recap is treated as a completed day.
+            await _oreProBetAudit.FinalizeDayAsync(date, ct);
             await _oreProVerification.VerifyAsync(date, ct);
 
             // Load EVERY entry of the day (the evaluator needs marked horses' post positions,
