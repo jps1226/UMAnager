@@ -43,6 +43,7 @@ public sealed class OreProCustomBetService
     private const string ShutubaUrl     = "https://orepro.netkeiba.com/bet/shutuba.html";
     private const string BetReferer     = "https://orepro.netkeiba.com/bet/race_list.html";
     private const string UserSettingUrl = "https://orepro.netkeiba.com/mydata/api_post_user_setting.html";
+    private const string ReceiptUrl     = "https://orepro.netkeiba.com/bet/bet_complete.html";
 
     // 式別 / 方式 valid ranges (see header). Kept here so a bad payload is rejected before we
     // ever touch OrePro with a malformed bet_id.
@@ -363,6 +364,13 @@ public sealed class OreProCustomBetService
             submitMessage = "Submit skipped — cart read-back did not confirm the lines.";
         }
 
+        // A cart read-back before submit is not proof of what OrePro ultimately committed. Capture
+        // the post-submit receipt page and the same cart bucket again, read-only, while this exact
+        // authenticated session is still alive. This is audit evidence only; it never alters a ticket.
+        object? postSubmitEvidence = submitted
+            ? await CapturePostSubmitEvidenceAsync(http, race12, ct)
+            : null;
+
         // Record shared apply-state (same key/shape as the marks path) keyed by the JRA 16-char id,
         // so the frontend's apply badges + Auto Bet Day's "already submitted → skip" both see it.
         if (submitAfter)
@@ -387,7 +395,8 @@ public sealed class OreProCustomBetService
                 cartConfirmed = confirmed,
                 cartBetIds,
                 submitStatus,
-                submitMessage
+                submitMessage,
+                postSubmitEvidence
             },
             submitted,
             status: finalStatus,
@@ -416,12 +425,76 @@ public sealed class OreProCustomBetService
             cartBetIds,
             addResponse = Trunc(addResp, 300),
             cartRaw     = Trunc(cartRaw, 800),
+            postSubmitEvidence,
         });
     }
 
     /// <summary>
-    /// Commits the cart for the given netkeiba race_id via api_post_mybet (action=update) — the
-    /// same bet-agnostic commit the marks path uses. Returns ("ok", …) only on an explicit OK.
+    /// Captures what OrePro exposes immediately after a successful submit. The receipt GET and cart
+    /// GET are both read-only. They deliberately run in the same CookieContainer as submit so a later
+    /// session refresh cannot hide the evidence from this attempt.
+    /// </summary>
+    private async Task<object> CapturePostSubmitEvidenceAsync(HttpClient http, string race12, CancellationToken ct)
+    {
+        int? receiptHttp = null;
+        string receiptBody = "";
+        try
+        {
+            using var receipt = new HttpRequestMessage(HttpMethod.Get, $"{ReceiptUrl}?race_id={race12}");
+            receipt.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
+            using var response = await SendWithTraceAsync(http, receipt, ct);
+            receiptHttp = (int)response.StatusCode;
+            receiptBody = await response.Content.ReadAsStringAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            receiptBody = $"receipt read failed: {ex.Message}";
+        }
+
+        int? cartHttp = null;
+        string[] postSubmitCartBetIds = Array.Empty<string>();
+        string postSubmitCartRaw = "";
+        try
+        {
+            using var cart = new HttpRequestMessage(HttpMethod.Post, CartUrl)
+            {
+                Content = new FormUrlEncodedContent(new[]
+                {
+                    new KeyValuePair<string,string>("input",  "UTF-8"),
+                    new KeyValuePair<string,string>("output", "json"),
+                    new KeyValuePair<string,string>("action", "get"),
+                    new KeyValuePair<string,string>("group",  $"orebet_{race12}"),
+                })
+            };
+            cart.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
+            cart.Headers.Add("Origin", "https://orepro.netkeiba.com");
+            cart.Headers.Add("X-Requested-With", "XMLHttpRequest");
+            using var response = await SendWithTraceAsync(http, cart, ct);
+            cartHttp = (int)response.StatusCode;
+            postSubmitCartRaw = await response.Content.ReadAsStringAsync(ct);
+            postSubmitCartBetIds = ExtractCartBetIds(postSubmitCartRaw);
+        }
+        catch (Exception ex)
+        {
+            postSubmitCartRaw = $"post-submit cart read failed: {ex.Message}";
+        }
+
+        return new
+        {
+            receiptHttp,
+            receiptBody = Trunc(receiptBody, 2_000),
+            cartHttp,
+            postSubmitCartBetIds,
+            postSubmitCartRaw = Trunc(postSubmitCartRaw, 2_000),
+        };
+    }
+
+    /// <summary>
+    /// Commits the already-confirmed custom cart for the given netkeiba race_id via
+    /// api_post_mybet (action=update). Do NOT call api_post_bet_generator here: that endpoint
+    /// regenerates the marks-derived automatic ticket and can replace the custom cart immediately
+    /// before this generic commit. The marks route owns generation; the custom route owns only its
+    /// explicit custom ticket IDs. Returns ("ok", …) only on an explicit OK.
     /// </summary>
     // Temporary diagnostic mode: records a redacted request/response sequence in nexus.log.
     // Cookie, authorization, and session-bearing headers are deliberately excluded.
@@ -457,27 +530,6 @@ public sealed class OreProCustomBetService
         };
         try
         {
-        var generatorUrl = $"https://orepro.netkeiba.com/bet/api_post_bet_generator.html?callback={callback}";
-        using (var generatorReq = new HttpRequestMessage(HttpMethod.Post, generatorUrl)
-        {
-            Content = new FormUrlEncodedContent(new[]
-            {
-                new KeyValuePair<string,string>("input", "UTF-8"),
-                new KeyValuePair<string,string>("output", "jsonp"),
-                new KeyValuePair<string,string>("race_id", race12),
-            })
-        })
-        {
-            generatorReq.Headers.Referrer = new Uri($"{ShutubaUrl}?race_id={race12}");
-            generatorReq.Headers.Add("Origin", "https://orepro.netkeiba.com");
-            generatorReq.Headers.Add("X-Requested-With", "XMLHttpRequest");
-            generatorReq.Headers.Accept.ParseAdd("text/javascript, application/javascript, application/ecmascript, application/x-ecmascript, */*; q=0.01");
-            generatorReq.Content.Headers.ContentType!.CharSet = "UTF-8";
-            using var generatorResp = await SendWithTraceAsync(http, generatorReq, ct);
-            if (!generatorResp.IsSuccessStatusCode)
-                return ("warn", $"OrePro bet generator returned HTTP {(int)generatorResp.StatusCode}.");
-        }
-
             using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = new FormUrlEncodedContent(form) };
             req.Headers.Accept.ParseAdd("text/javascript, application/javascript, application/ecmascript, application/x-ecmascript, */*; q=0.01");
             req.Content.Headers.ContentType!.CharSet = "UTF-8";
