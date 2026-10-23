@@ -4,6 +4,26 @@ function bootMark(label) {
 }
 bootMark('scriptStart'); // earliest point this script can run: end of HTML parse + script.js download
 
+let isPreviewMode = false;
+async function detectRuntimeMode() {
+    try {
+        const response = await fetch('/api/runtime-mode', { cache: 'no-store' });
+        const mode = await response.json();
+        if (!mode.preview) return;
+        isPreviewMode = true;
+        document.body.classList.add('preview-mode');
+        const banner = document.getElementById('preview-readonly-banner');
+        if (banner) banner.hidden = false;
+        const settings = document.querySelector('.settings-icon-btn');
+        if (settings) settings.disabled = true;
+        const voting = document.getElementById('main-view-voting');
+        if (voting) voting.disabled = true;
+    } catch (_) {
+        // Production remains usable if the optional runtime-mode endpoint is unavailable.
+    }
+}
+void detectRuntimeMode();
+
 // QOL: collapsible sidebar (desktop only — see style.css .sidebar-collapse-toggle / body.sidebar-collapsed).
 // Restored here, at the top of the file, so it applies as early as possible and avoids a flash of the
 // expanded sidebar on load.

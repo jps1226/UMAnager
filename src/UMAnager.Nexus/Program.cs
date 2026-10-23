@@ -31,6 +31,10 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 
 builder.WebHost.UseStaticWebAssets();
 
+// Preview is a deliberately read-only Nexus instance. It shares race-card data with
+// production but must never own live jobs, the JV-Link pipe, or database migrations.
+var isPreview = builder.Environment.IsEnvironment("Preview");
+
 builder.Services.AddMemoryCache();
 builder.Services.AddControllers()
     .AddJsonOptions(o => o.JsonSerializerOptions.PropertyNamingPolicy = null);
@@ -77,9 +81,7 @@ builder.Services.AddSingleton<SunkCostService>();
 builder.Services.AddSingleton<OreProVoteApplyService>();
 builder.Services.AddSingleton<OreProCustomBetService>();
 builder.Services.AddSingleton<LiveOrchestrator>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveOrchestrator>());
 builder.Services.AddSingleton<RaceCardRefreshService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<RaceCardRefreshService>());
 builder.Services.AddSingleton<RaceCardRtFetchService>();
 builder.Services.AddScoped<DifnRecordParsingService>();
 builder.Services.AddScoped<BreedingHorseBackfillService>();
@@ -92,10 +94,17 @@ builder.Services.AddScoped<SeCodeBackfillService>();
 builder.Services.AddScoped<OddsApplyService>();
 builder.Services.AddSingleton<SirePerformanceService>();
 builder.Services.AddSingleton<JockeyTrainerStatsService>();
-builder.Services.AddHostedService<NexusPipeServer>();
+if (!isPreview)
+{
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveOrchestrator>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<RaceCardRefreshService>());
+    builder.Services.AddHostedService<NexusPipeServer>();
+}
 
 var app = builder.Build();
 
+if (!isPreview)
+{
 await app.Services.GetRequiredService<SettingsService>().SeedDefaultsAsync();
 
 // Race-class column (Oracle Q20). Inline ALTER matches the NameEn/OddsJson pattern.
@@ -232,12 +241,41 @@ catch (Exception ex)
 {
     app.Logger.LogError(ex, "[Startup] sire_performance MV bootstrap failed (non-fatal).");
 }
+}
 
 app.UseResponseCompression();
+if (isPreview)
+{
+    app.Use(async (context, next) =>
+    {
+        context.Response.Headers["X-UMAnager-Mode"] = "preview-read-only";
+        var path = context.Request.Path;
+        var blockedService = path.StartsWithSegments("/api/jvlink") ||
+                             path.StartsWithSegments("/api/orchestrator") ||
+                             path.StartsWithSegments("/api/orepro") ||
+                             path.StartsWithSegments("/api/gch");
+        var mutation = HttpMethods.IsPost(context.Request.Method) ||
+                       HttpMethods.IsPut(context.Request.Method) ||
+                       HttpMethods.IsPatch(context.Request.Method) ||
+                       HttpMethods.IsDelete(context.Request.Method);
+        if (blockedService || mutation)
+        {
+            context.Response.StatusCode = StatusCodes.Status409Conflict;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = "Preview is read-only. Live services, JV-Link, OrePro, and all changes are disabled."
+            });
+            return;
+        }
+        await next();
+    });
+}
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.MapControllers();
-app.MapHub<LiveHub>("/hubs/live");
+app.MapGet("/api/runtime-mode", () => Results.Ok(new { preview = isPreview, mode = isPreview ? "preview-read-only" : "production" }));
+if (!isPreview)
+    app.MapHub<LiveHub>("/hubs/live");
 
-app.Run("http://0.0.0.0:5000");
+app.Run(isPreview ? "http://0.0.0.0:5001" : "http://0.0.0.0:5000");

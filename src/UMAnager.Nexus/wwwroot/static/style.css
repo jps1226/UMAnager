@@ -3362,3 +3362,28 @@ tr.hh-modal-highlight:hover > td { background: #32486a !important; }
     .horse-history-table th:nth-child(n+5),
     .horse-history-table td:nth-child(n+5) { display: none; }
 }
+/* Preview is intentionally visually distinct and removes the controls that could
+   imply an available write path. Server middleware remains the actual safeguard. */
+.preview-readonly-banner {
+    position: sticky;
+    top: 0;
+    z-index: 10000;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 14px;
+    background: #4d3211;
+    border-bottom: 1px solid #d7a03b;
+    color: #ffe5b0;
+    font-size: 13px;
+}
+
+.preview-readonly-banner strong { letter-spacing: .06em; }
+.preview-readonly-banner span { color: #f3d9a7; }
+
+body.preview-mode .settings-icon-btn,
+body.preview-mode #main-view-voting,
+body.preview-mode .voting-dash-actions,
+body.preview-mode #voting-sunk-cost button {
+    display: none !important;
+}
