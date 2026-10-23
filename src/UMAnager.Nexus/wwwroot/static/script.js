@@ -5295,35 +5295,68 @@ const COLD_FRESH_LO = 61, COLD_FRESH_HI = 120;
 // Built straight into the row (see buildTableBody's Horse cell) so it survives every re-render/reprice.
 //   💧 fresh — a longshot (rank ≥9) back from a 61–120 day break, NOT switching to dirt → place candidate (H7).
 //   🚫 dirt  — switching ONTO dirt at mid/long odds (rank ≥4) → a fade; the market underrates it (H8).
-// s54: predicted running style on the UPCOMING card — Lead/Press/Close/Deep inferred from the
-// horse's LAST start's corner positions (backend field Last_Perf = that run's PerformanceJson).
-// A handicapping read on paper ("this one usually leads"). Thresholds mirror horseRunStyle() in
-// the profile; kept separate so the card pill has its own "predicted, from last start" tooltip.
+// Pace Map v1: classify a horse from up to six prior starts, weighted toward comparable surface.
+// This is a race-reading aid only: it changes no marks, score, or bet behaviour.
+function paceProfileForRow(r_id, row) {
+    const history = Array.isArray(row.Pace_History) ? row.Pace_History : [];
+    const todaySurface = String(globalRaceInfo[r_id]?.surface || '').toLowerCase();
+    const samples = history.map(run => {
+        let perf = run?.performance;
+        if (typeof perf === 'string') { try { perf = JSON.parse(perf); } catch { return null; } }
+        const corners = Array.isArray(perf?.corners) ? perf.corners.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+        const fieldSize = Number(run?.field_size);
+        if (!corners.length || fieldSize < 2) return null;
+        return { early: (corners[0] - 1) / (fieldSize - 1), comparable: String(run?.surface || '').toLowerCase() === todaySurface };
+    }).filter(Boolean);
+    const comparable = samples.filter(s => s.comparable);
+    const chosen = comparable.length ? comparable : samples;
+    if (!chosen.length) return null;
+    const early = chosen.reduce((sum, s) => sum + s.early, 0) / chosen.length;
+    const label = early <= 0.15 ? 'Lead' : early <= 0.35 ? 'Press' : early <= 0.70 ? 'Close' : 'Deep';
+    const color = { Lead: '#ff6b9d', Press: '#ffc04a', Close: '#6cc6ff', Deep: '#b596ff' }[label];
+    return { label, color, samples: chosen.length, comparable: comparable.length > 0 };
+}
+
+function paceForecastForRace(r_id) {
+    const profiles = (globalRaceEntries[r_id] || []).map(row => ({ row, profile: paceProfileForRow(r_id, row) })).filter(x => x.profile);
+    const early = profiles.filter(x => x.profile.label === 'Lead' || x.profile.label === 'Press');
+    const label = early.length >= 3 ? 'Contested' : early.length <= 1 ? 'Soft' : 'Normal';
+    const confidence = profiles.length >= 8 ? 'High' : profiles.length >= 5 ? 'Medium' : 'Low';
+    return { profiles, early, label, confidence, fieldSize: (globalRaceEntries[r_id] || []).length };
+}
+
+function paceSummaryBadge(r_id) {
+    const forecast = paceForecastForRace(r_id);
+    if (!forecast.profiles.length) return '<span class="pace-summary pace-unclear" title="No usable corner-position history for this field.">Pace: unclear</span>';
+    const cls = `pace-${forecast.label.toLowerCase()}`;
+    const title = `Pace Map preview — ${forecast.label.toLowerCase()} pace: ${forecast.early.length} projected early runners; ${forecast.profiles.length}/${forecast.fieldSize} horses have usable prior corner-position data. Informational only; it changes no picks or bets.`;
+    return `<span class="pace-summary ${cls}" title="${escapeHtml(title)}">Pace: ${forecast.label} · ${forecast.early.length} early · ${forecast.confidence}</span>`;
+}
+
+function paceMapHtml(r_id) {
+    const forecast = paceForecastForRace(r_id);
+    if (!forecast.profiles.length) return `<div class="pace-map pace-map-unclear"><strong>Pace Map</strong><span>Unclear — no usable prior corner-position history in this field.</span></div>`;
+    const groups = { Lead: [], Press: [], Close: [], Deep: [] };
+    forecast.profiles.forEach(({ row, profile }) => groups[profile.label].push({ row, profile }));
+    const groupHtml = Object.entries(groups).map(([label, rows]) => {
+        if (!rows.length) return '';
+        const names = rows.map(({ row, profile }) => `<span class="pace-runner"><b>${escapeHtml(String(row.PP || '?'))}</b> ${escapeHtml(row.Horse || '')}<small>${profile.samples} run${profile.samples === 1 ? '' : 's'}${profile.comparable ? '' : ' · mixed surface'}</small></span>`).join('');
+        return `<div class="pace-lane pace-lane-${label.toLowerCase()}"><strong>${label}</strong><div>${names}</div></div>`;
+    }).join('');
+    return `<details class="pace-map" onclick="event.stopPropagation()"><summary><span>Pace Map</span><b>${forecast.label}</b><small>${forecast.early.length} early · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence} confidence</small></summary><p>Forecast from prior corner positions. It is a reading aid, not a pick or bet recommendation.</p>${groupHtml}</details>`;
+}
+
+// Existing horse-name chip. Pace Map v1 upgrades it from last-start-only to the same multi-run profile
+// used in the race-level summary, while preserving an honest low-sample label.
 function predictedStylePill(r_id, row) {
-    const perf = row.Last_Perf;
-    if (!perf) return '';
-    let p = perf;
-    if (typeof perf === 'string') { try { p = JSON.parse(perf); } catch { return ''; } }
-    if (!p || !Array.isArray(p.corners)) return '';
-    const pos = p.corners.map(c => parseInt(c, 10)).filter(n => Number.isFinite(n) && n > 0);
-    if (!pos.length) return '';
-    const early = pos[0];
-    // Normalize early position by field size. The last run's own field size isn't on the card, so use
-    // THIS race's field size as a proxy (JRA fields are similar enough for a reading-aid read); without
-    // it, blank early corners in sprints make everyone look like a deep closer.
-    const fieldN = (globalRaceEntries[r_id] || []).length;
-    const n = fieldN > 1 ? fieldN : Math.max(...pos);
-    const ratio = early / n;
-    let label, color;
-    if (early <= 1)        { label = 'Lead';  color = '#ff6b9d'; }
-    else if (ratio <= 0.30){ label = 'Press'; color = '#ffc04a'; }
-    else if (ratio <= 0.66){ label = 'Close'; color = '#6cc6ff'; }
-    else                   { label = 'Deep';  color = '#ff7b6b'; }
-    const tip = `Predicted running style from its last start — ${label}. Lead = front-runner · Press = stalker · ` +
-        'Close = off-pace · Deep = deep closer (from the horse’s corner positions last time).';
+    const profile = paceProfileForRow(r_id, row);
+    if (!profile) return '';
+    const { label, color, samples, comparable } = profile;
+    const tip = `Pace Map profile from ${samples} prior ${comparable ? 'same-surface ' : ''}run${samples === 1 ? '' : 's'}: ${label}. ` +
+        'Lead = front-runner · Press = stalker · Close = off-pace · Deep = held up. Informational only.';
     const base = 'display:inline-block;font-size:0.7em;font-weight:700;padding:0 6px;border-radius:8px;' +
                  'vertical-align:middle;white-space:nowrap;';
-    return `<span class="run-style-pill" title="${escapeHtml(tip)}" style="${base}color:${color};border:1px solid ${color}66;background:${color}1a;">${label}</span>`;
+    return `<span class="run-style-pill" title="${escapeHtml(tip)}" style="${base}color:${color};border:1px solid ${color}66;background:${color}1a;">${label} · ${samples}</span>`;
 }
 
 function coldValuePillForRow(r_id, row) {
@@ -5786,6 +5819,8 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         });
 
         const rowsHtml = buildTableBody(r_id, globalRaceEntries[r_id]);
+        const paceSummaryHtml = raceIsSettledForAutopsy(r_id) ? '' : paceSummaryBadge(r_id);
+        const paceMapPanelHtml = raceIsSettledForAutopsy(r_id) ? '' : paceMapHtml(r_id);
 
         let headerClass = "race-header";
         if (hasWatch) headerClass += " has-watch";
@@ -5854,7 +5889,7 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
 
         html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
             <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
-                <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> <span id="header-meta-${r_id}">${raceStatusEmoji(race)} ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName}${raceSurfaceDistChip(race.info)} ${winBadgesHtml}</span>
+                <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> <span id="header-meta-${r_id}">${raceStatusEmoji(race)} ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName}${raceSurfaceDistChip(race.info)} ${winBadgesHtml} ${paceSummaryHtml}</span>
 
                 ${historyBtnHtml}
                 ${autopsyBtnHtml}
@@ -5878,6 +5913,7 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
             </h3>
             <div id="content-${r_id}" class="race-content ${collapsedClass}">
                 <div id="bets-strip-${r_id}">${sideBetStripHtml(r_id)}</div>
+                ${paceMapPanelHtml}
                 <table class="${dateTimeline === 'past' && (appConfig.ui?.cleanPastRaceCards ?? true) ? 'past-race' : ''}">
                     <thead id="thead-${r_id}">${buildTableHeaderRow(r_id)}</thead>
                     <tbody id="tbody-${r_id}">${rowsHtml}</tbody>

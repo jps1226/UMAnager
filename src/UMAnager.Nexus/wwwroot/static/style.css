@@ -1325,6 +1325,41 @@ th {
     color: #ff4b4b;
     background-color: #2a2c36; /* Solid lighter grey (No RGBA!) */
 }
+
+/* Pace Map v1: a compact race-level read plus a voluntary detail panel. These colours describe
+   projected race shape, not a betting recommendation. */
+.pace-summary {
+    display: inline-block; margin-left: 7px; padding: 1px 7px; border-radius: 10px;
+    font-size: 0.72em; font-weight: 700; white-space: nowrap; vertical-align: middle;
+    border: 1px solid #4a5262; color: #dce4f2; background: #252c39;
+}
+.pace-summary.pace-contested { color: #ffd889; border-color: #a6792b; background: #3b2d18; }
+.pace-summary.pace-soft { color: #aee9ff; border-color: #2f86a8; background: #10303a; }
+.pace-summary.pace-normal { color: #dce4f2; border-color: #536176; background: #252c39; }
+.pace-summary.pace-unclear { color: #9aa5b5; border-style: dashed; }
+.pace-map {
+    margin: 7px 0 9px; padding: 8px 10px; border: 1px solid #394454; border-radius: 7px;
+    background: #171b23; color: #dce4f2;
+}
+.pace-map summary { cursor: pointer; display: flex; align-items: baseline; gap: 8px; list-style: none; }
+.pace-map summary::-webkit-details-marker { display: none; }
+.pace-map summary::before { content: '▸'; color: #aab6c8; }
+.pace-map[open] summary::before { content: '▾'; }
+.pace-map summary > span { font-weight: 700; }
+.pace-map summary > b { color: #ffd889; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.04em; }
+.pace-map summary > small { color: #9eabbc; font-size: 0.78em; }
+.pace-map > p { margin: 7px 0 8px 18px; color: #aeb9c8; font-size: 0.78em; }
+.pace-lane { display: grid; grid-template-columns: 66px minmax(0, 1fr); gap: 7px; padding: 5px 0; border-top: 1px solid #28313e; }
+.pace-lane > strong { font-size: 0.76em; align-self: center; }
+.pace-lane-lead > strong { color: #ff9aba; }
+.pace-lane-press > strong { color: #ffd16e; }
+.pace-lane-close > strong { color: #8ad5ff; }
+.pace-lane-deep > strong { color: #c5aeff; }
+.pace-lane > div { display: flex; flex-wrap: wrap; gap: 4px; }
+.pace-runner { display: inline-flex; align-items: baseline; gap: 3px; padding: 2px 5px; border-radius: 5px; background: #242c38; font-size: 0.78em; }
+.pace-runner b { color: #b6c8de; }
+.pace-runner small { color: #8f9caf; font-size: 0.9em; }
+.pace-map-unclear { display: flex; gap: 8px; color: #aeb9c8; font-size: 0.8em; }
 /* When collapsed AND contains a tracked horse, light it up! */
 .race-header.collapsed.has-bld {
     background-color: #332d00; 

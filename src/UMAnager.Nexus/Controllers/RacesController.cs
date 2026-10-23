@@ -224,7 +224,7 @@ public sealed class RacesController : ControllerBase
                         .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                         .FirstOrDefaultAsync();
                     var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                    etag = $"\"races-v14-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                    etag = $"\"races-v15-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                     _cache.Set(EtagCacheKey, etag,
                         new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
                 }
@@ -350,9 +350,12 @@ public sealed class RacesController : ControllerBase
                 .ToDictionary(
                     g => g.Key,
                     g => g.OrderByDescending(x => x.RaceDate)
-                          // s54: also carry the run's PerformanceJson (corner positions) so the card can
-                          // show the horse's PREDICTED running style (front-runner/closer) from its last start.
-                          .Select(x => (x.RaceDate, Surface: x.Surface ?? "", x.Distance, Perf: x.PerformanceJson ?? ""))
+                          // Pace Map v1: retain each prior run's field size with its corner positions.
+                          // The frontend uses only starts strictly before the viewed race and normalizes
+                          // early position by the field that the horse actually faced.
+                          .Select(x => (x.RaceDate, Surface: x.Surface ?? "", x.Distance,
+                                        FieldSize: fieldSizeByRace.TryGetValue(x.RaceId, out var n) ? n : 0,
+                                        Perf: x.PerformanceJson ?? ""))
                           .ToList()
                 );
 
@@ -491,16 +494,29 @@ public sealed class RacesController : ControllerBase
                         string lastSurface = "";
                         int? lastDistance = null;
                         string lastPerf = "";
+                        var paceHistory = new List<object>();
                         if (priorRunsByHorse.TryGetValue(e.HorseId ?? "", out var priorRuns))
                         {
                             foreach (var pr in priorRuns) // already desc by date → first match = most recent
                             {
                                 if (pr.RaceDate >= race.RaceDate) continue;
-                                daysSinceLast = (int)(race.RaceDate - pr.RaceDate).TotalDays;
-                                lastSurface = pr.Surface;
-                                lastDistance = pr.Distance;
-                                lastPerf = pr.Perf; // corner positions of the last start → predicted run style
-                                break;
+                                if (paceHistory.Count < 6 && !string.IsNullOrWhiteSpace(pr.Perf))
+                                {
+                                    paceHistory.Add(new
+                                    {
+                                        surface = pr.Surface,
+                                        distance = pr.Distance,
+                                        field_size = pr.FieldSize,
+                                        performance = pr.Perf
+                                    });
+                                }
+                                if (daysSinceLast == null)
+                                {
+                                    daysSinceLast = (int)(race.RaceDate - pr.RaceDate).TotalDays;
+                                    lastSurface = pr.Surface;
+                                    lastDistance = pr.Distance;
+                                    lastPerf = pr.Perf; // corner positions of the last start → predicted run style
+                                }
                             }
                         }
 
@@ -610,6 +626,9 @@ public sealed class RacesController : ControllerBase
                             Last_Distance = lastDistance,
                             // s54: last start's PerformanceJson (corners/l3f) → frontend infers predicted run style.
                             Last_Perf = lastPerf,
+                            // Pace Map v1: up to six pre-race runs. This is informational only; it
+                            // does not change marks, engine scores, or betting behaviour.
+                            Pace_History = paceHistory,
                             Finish = e.FinishPos?.ToString() ?? "",
                             // SE 異常区分 1/2/3 (取消/除外) → horse removed from betting; the frontend
                             // bet-line synthesizer (buildRaceBetLines) shrinks the ticket. Only set
