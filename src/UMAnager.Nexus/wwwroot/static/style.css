@@ -1977,6 +1977,20 @@ tr:hover .score-explain-trigger { opacity: 1; }
 .rd-payout span { display: flex; justify-content: space-between; gap: 8px; }
 .rd-payout em { color: #dceaf5; font-style: normal; }
 .rd-pending-result { border-style: dashed; }
+.rd-position-compare { overflow: auto; border-bottom: 1px solid #29313b; }
+.rd-position-head, .rd-position-row { display: grid; grid-template-columns: 26px minmax(105px, 1.35fr) minmax(110px, 1fr) minmax(130px, 1.15fr) 48px; min-width: 470px; gap: 7px; align-items: center; padding: 7px 9px; }
+.rd-position-head { border-bottom: 1px solid #303944; background: #1a1c23; color: #778496; font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.rd-position-row { border-bottom: 1px solid #29313b; color: #c9d3de; font-size: 11px; }
+.rd-position-row:last-child { border-bottom: 0; }
+.rd-position-pp { display: grid; place-items: center; width: 21px; height: 21px; border-radius: 3px; background: #3d6184; color: #eff6ff; font-size: 10px; }
+.rd-position-horse { overflow: hidden; color: #e7edf5; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.rd-position-forecast { color: #d9e6f2; font-weight: 700; }
+.rd-position-forecast small { display: block; margin-top: 2px; color: #8091a3; font-size: 9px; font-weight: 400; }
+.rd-position-corners { color: #b9f0c9; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rd-position-finish { color: #ffd889; font-weight: 800; }
+.rd-position-note, .rd-position-empty { padding: 8px 10px; color: #8796a6; font-size: 10px; line-height: 1.4; }
+.rd-position-empty { color: #98a5b5; }
+@media (max-width: 700px) { .rd-position-compare { margin: 0; } }
 @media (max-width: 700px) {
     .race-autopsy-modal .rd-panel { width: 97vw; max-height: 92vh; }
     .rd-body { padding: 10px 11px 12px; }

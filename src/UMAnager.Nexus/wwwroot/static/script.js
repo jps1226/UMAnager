@@ -4625,6 +4625,35 @@ function reviewMarketHtml(raceId) {
     return `<div class="rd-market-summary"><div class="rd-favourite"><b>Market favourite</b><span>${escapeHtml(favourite.name)}</span><em>${favourite.odds.toFixed(1)}x${Number.isFinite(favourite.fav) ? ` · ${favourite.fav}F` : ''}</em></div><div class="rd-market-caption">Change compares the current card odds with UMAnager’s prior stored odds snapshot.</div>${movement('Shortened', shorten, 'shorten')}${movement('Drifted', drift, 'drift')}</div>`;
 }
 
+function positionComparisonHtml(raceId) {
+    const laneNames = { Lead: 'Leader', Press: 'On-pace', Close: 'Midfield', Deep: 'Back-marker' };
+    const ordinal = value => {
+        const n = Number(value);
+        if (!Number.isFinite(n) || n <= 0) return '—';
+        const mod10 = n % 10, mod100 = n % 100;
+        return `${n}${mod10 === 1 && mod100 !== 11 ? 'st' : mod10 === 2 && mod100 !== 12 ? 'nd' : mod10 === 3 && mod100 !== 13 ? 'rd' : 'th'}`;
+    };
+    const rows = (globalRaceEntries[raceId] || []).map(row => {
+        let actual = row.Actual_Performance ?? row.ActualPerformance ?? '';
+        if (typeof actual === 'string') { try { actual = JSON.parse(actual); } catch { actual = null; } }
+        const corners = Array.isArray(actual?.corners) ? actual.corners.map(value => {
+            const n = Number(value);
+            return Number.isFinite(n) && n > 0 ? n : null;
+        }) : [];
+        return { row, corners, profile: paceProfileForRow(raceId, row) };
+    }).filter(item => item.corners.some(Boolean));
+    if (!rows.length) {
+        return `<div class="rd-position-empty">Corner positions are not stored for this settled race. New result records will appear here after the JV corner-capture change is deployed and receives a settled SE update.</div>`;
+    }
+    rows.sort((a, b) => (Number(a.row.Finish) || 999) - (Number(b.row.Finish) || 999) || (Number(a.row.PP) || 999) - (Number(b.row.PP) || 999));
+    const body = rows.map(({ row, corners, profile }) => {
+        const prediction = profile ? `${laneNames[profile.label] || profile.label}<small>${profile.samples} prior ${profile.samples === 1 ? 'run' : 'runs'}${profile.comparable ? '' : ' · mixed surface'}</small>` : 'No profile';
+        const actual = corners.map(ordinal).join(' → ');
+        return `<div class="rd-position-row"><b class="rd-position-pp">${escapeHtml(String(row.PP || '?'))}</b><span class="rd-position-horse">${escapeHtml(row.Horse || 'Unknown')}</span><span class="rd-position-forecast">${prediction}</span><span class="rd-position-corners">${escapeHtml(actual)}</span><span class="rd-position-finish">${escapeHtml(ordinal(row.Finish))}</span></div>`;
+    }).join('');
+    return `<div class="rd-position-compare"><div class="rd-position-head"><span></span><span>Runner</span><span>Predicted position</span><span>Actual corners</span><span>Finish</span></div>${body}</div><div class="rd-position-note">Prediction is recomputed from starts strictly before this race date. It is a historical replay, not a pre-off snapshot; actual corners are the settled JV record.</div>`;
+}
+
 function racePayoutsHtml(info) {
     const raw = info.results_json || info.ResultsJson;
     if (!raw) return '';
@@ -4653,7 +4682,7 @@ function renderRaceReview(raceId) {
         `Pace: ${forecast.label} · ${forecast.early.length} projected early · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence} confidence.`;
     const masthead = `<div class="rd-masthead"><b>${escapeHtml(raceName)}</b><span>${escapeHtml(conditions || 'Race details unavailable')}</span><small>${markCount ? `${markCount} mark${markCount === 1 ? '' : 's'}` : 'No marks'} · ${isRaceLocked(raceId) ? 'locked' : 'not locked'} · ${settled ? 'settled' : 'race card active'}</small></div>`;
     const resultsHtml = settled
-        ? `<section id="race-details-results" class="rd-section"><div class="rd-section-label">Result & learning</div>${reviewOutcomeHtml(raceId)}${racePayoutsHtml(info)}</section>`
+        ? `<section id="race-details-results" class="rd-section"><div class="rd-section-label">Result & learning</div>${reviewOutcomeHtml(raceId)}<div class="rd-section-label">Predicted position vs actual corners</div>${positionComparisonHtml(raceId)}${racePayoutsHtml(info)}</section>`
         : `<section id="race-details-results" class="rd-section rd-pending-result"><div class="rd-section-label">Result</div><div class="rd-empty">No result yet. Finish order, official payouts, and the existing “Why It Won” explanation appear here after settlement.</div></section>`;
     const tab = ['race', 'pace', 'market', 'result'].includes(raceAutopsyState.tab) ? raceAutopsyState.tab : 'race';
     const tabButton = (key, label) => `<button class="rd-tab${tab === key ? ' is-active' : ''}" onclick="setRaceReviewTab('${key}')">${label}</button>`;
