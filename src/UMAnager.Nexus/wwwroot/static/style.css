@@ -1900,6 +1900,34 @@ tr:hover .score-explain-trigger { opacity: 1; }
 }
 .race-autopsy-modal .ra-empty, .race-autopsy-modal .ra-empty-sm { color: #888; font-size: 12px; padding: 6px 0; }
 
+/* Race Review: one read-only learning modal. The primary card keeps race-day actions. */
+.race-autopsy-modal .rr-panel { width: min(720px, 94vw); padding: 14px 0 0; }
+.race-autopsy-modal .rr-panel .ra-head { padding: 0 16px 9px; margin-bottom: 0; }
+.rr-tabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid #2a2e35; overflow-x: auto; }
+.rr-tab { border: 0; border-bottom: 2px solid transparent; background: transparent; color: #8e9aaa; padding: 9px 10px 8px; cursor: pointer; font-size: 11px; white-space: nowrap; }
+.rr-tab:hover { color: #dbe7f5; }
+.rr-tab.is-active { color: #dbe7f5; border-bottom-color: #6cc6ff; font-weight: 700; }
+.rr-content { padding: 13px 16px 15px; }
+.rr-story { border-left: 3px solid #6cc6ff; background: rgba(108,198,255,0.07); border-radius: 3px; padding: 9px 11px; }
+.rr-story-title { color: #e6f4ff; font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.rr-story-copy { color: #c3d0de; line-height: 1.45; }
+.rr-callout { margin-top: 11px; padding: 8px 10px; border: 1px solid #394454; border-radius: 4px; color: #aeb9c8; line-height: 1.45; font-size: 11px; }
+.rr-callout strong { color: #e1e9f3; }
+.rr-pending { color: #9eabbc; border: 1px solid #465264; border-radius: 10px; padding: 2px 7px; font-size: 10px; }
+.rr-empty-state { display: flex; flex-direction: column; gap: 5px; padding: 20px 4px; color: #aeb9c8; }
+.rr-empty-state strong { color: #e6e6e6; }
+.rr-table-wrap { overflow: auto; max-height: 48vh; }
+.rr-field-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.rr-field-table th { position: sticky; top: 0; background: #1c1f24; color: #778395; text-align: left; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; }
+.rr-field-table th, .rr-field-table td { padding: 7px 6px; border-bottom: 1px solid #29313b; white-space: nowrap; }
+.rr-field-table td:nth-child(2) { color: #e1e8f0; font-weight: 600; }
+.btn-race-review { margin-left: 8px; }
+@media (max-width: 600px) {
+    .race-autopsy-modal .rr-panel { width: 96vw; max-height: 92vh; }
+    .rr-content { padding: 11px 12px 13px; }
+    .rr-tab { padding-left: 8px; padding-right: 8px; }
+}
+
 /* --- SIRE FIT % (Phase 9) ---
    Compact win-rate pill in the SF column. Color tiers:
    strong ≥15%, mid 9–14%, weak <9%, none = below 10-start sample threshold. */
