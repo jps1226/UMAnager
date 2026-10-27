@@ -4595,12 +4595,24 @@ function renderRaceReview(raceId) {
     const settled = raceIsSettledForAutopsy(raceId);
     const tab = ['story', 'pace', 'field', 'outcome'].includes(raceAutopsyState.tab) ? raceAutopsyState.tab : 'story';
     const tabs = [
-        ['story', 'Race story'], ['pace', 'Pace Map'], ['field', 'Field'], ['outcome', settled ? 'Outcome' : 'Outcome (pending)']
+        ['story', 'Overview'], ['pace', 'Pace'], ['field', 'Field & market'], ['outcome', 'Results']
     ].map(([id, label]) => `<button class="rr-tab${tab === id ? ' is-active' : ''}" onclick="setRaceReviewTab('${id}')">${label}</button>`).join('');
     const forecastLine = !forecast.profiles.length ? 'Pace forecast is unclear: the field has no usable prior corner-position history.' :
         `${forecast.label} pace forecast · ${forecast.early.length} projected early runners · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence.toLowerCase()} confidence.`;
-    const story = `<div class="rr-story"><div class="rr-story-title">${settled ? 'A race to review' : 'Pre-race reading view'}</div><div class="rr-story-copy">${forecastLine}</div></div>
-        <div class="rr-callout"><strong>${settled ? 'Verification is intentionally not claimed yet.' : 'Forecast only.'}</strong> ${settled ? 'UMAnager currently retains the pre-race inputs used for the Pace Map, but not an immutable forecast snapshot plus a normalized actual-pace measure. This Preview keeps those separate rather than quietly using hindsight.' : 'This modal explains the field shape from prior runs. It does not make selections, change marks, or recommend a bet.'}</div>`;
+    const raceName = localizeRaceName(info.race_name) || localizeRaceClass(info.race_class) || 'Race details';
+    const conditions = [
+        info.time ? `${info.time} JST` : null,
+        info.surface ? `${String(info.surface).replace(/^./, c => c.toUpperCase())}${info.distance ? ` ${info.distance}m` : ''}` : (info.distance ? `${info.distance}m` : null),
+        `${forecast.fieldSize} runners`
+    ].filter(Boolean).join(' · ');
+    const markCount = countRaceMarks(raceId);
+    const story = `<div class="rr-overview-grid">
+            <div class="rr-overview-tile"><span>Race</span><b>${escapeHtml(raceName)}</b><small>${escapeHtml(conditions || 'Race details unavailable')}</small></div>
+            <div class="rr-overview-tile"><span>Status</span><b>${settled ? 'Settled' : 'Pre-race / live'}</b><small>${settled ? 'Result details are available in Results.' : 'Working controls remain on the main card.'}</small></div>
+            <div class="rr-overview-tile"><span>Your card</span><b>${markCount ? `${markCount} mark${markCount === 1 ? '' : 's'}` : 'No marks'}</b><small>${isRaceLocked(raceId) ? 'Locked' : 'Not locked'} · editing stays on the main card</small></div>
+        </div>
+        <div class="rr-story"><div class="rr-story-title">Pace at a glance</div><div class="rr-story-copy">${forecastLine}</div></div>
+        <div class="rr-callout"><strong>How to use this modal:</strong> Overview is the quick briefing; Pace explains the forecast; Field & market is the deeper runner view; Results becomes the post-race learning record. It is available before, during, and after the race without moving working controls off the main card.</div>`;
     const contents = {
         story,
         pace: `<div class="ra-section-label">Forecast from prior starts</div>${paceMapHtml(raceId)}<div class="rr-callout"><strong>What is missing:</strong> actual-pace verification needs a saved forecast snapshot and a defined post-race early-position measure. That is a separate data feature, not invented from a settled card.</div>`,

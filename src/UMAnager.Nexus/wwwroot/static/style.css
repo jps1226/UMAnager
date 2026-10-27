@@ -1908,6 +1908,11 @@ tr:hover .score-explain-trigger { opacity: 1; }
 .rr-tab:hover { color: #dbe7f5; }
 .rr-tab.is-active { color: #dbe7f5; border-bottom-color: #6cc6ff; font-weight: 700; }
 .rr-content { padding: 13px 16px 15px; }
+.rr-overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-bottom: 11px; }
+.rr-overview-tile { display: flex; min-width: 0; flex-direction: column; gap: 3px; padding: 8px 9px; border: 1px solid #34404d; border-radius: 5px; background: rgba(255,255,255,0.025); }
+.rr-overview-tile > span { color: #8794a5; font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.rr-overview-tile > b { overflow: hidden; color: #e1e8f0; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.rr-overview-tile > small { color: #9da9b8; font-size: 10px; line-height: 1.3; }
 .rr-story { border-left: 3px solid #6cc6ff; background: rgba(108,198,255,0.07); border-radius: 3px; padding: 9px 11px; }
 .rr-story-title { color: #e6f4ff; font-size: 13px; font-weight: 700; margin-bottom: 4px; }
 .rr-story-copy { color: #c3d0de; line-height: 1.45; }
@@ -1936,6 +1941,7 @@ tr:hover .score-explain-trigger { opacity: 1; }
 @media (max-width: 600px) {
     .race-autopsy-modal .rr-panel { width: 96vw; max-height: 92vh; }
     .rr-content { padding: 11px 12px 13px; }
+    .rr-overview-grid { grid-template-columns: 1fr; }
     .rr-tab { padding-left: 8px; padding-right: 8px; }
 }
 
