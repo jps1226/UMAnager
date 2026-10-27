@@ -1900,6 +1900,34 @@ tr:hover .score-explain-trigger { opacity: 1; }
 }
 .race-autopsy-modal .ra-empty, .race-autopsy-modal .ra-empty-sm { color: #888; font-size: 12px; padding: 6px 0; }
 
+/* Race Details is a dense, single-scroll extension of the race card — not a second dashboard. */
+.race-autopsy-modal .rd-panel { width: min(980px, 96vw); max-height: 90vh; padding: 14px 0 0; }
+.race-autopsy-modal .rd-panel .ra-head { padding: 0 16px 9px; margin-bottom: 0; }
+.rd-body { display: grid; gap: 10px; padding: 12px 16px 15px; }
+.rd-section { border: 1px solid #303944; border-radius: 5px; overflow: hidden; }
+.rd-section-label { padding: 7px 9px; border-bottom: 1px solid #303944; color: #8592a2; background: #191d24; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.rd-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; }
+.rd-facts > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; padding: 8px 9px; border-right: 1px solid #303944; color: #cbd5e0; font-size: 11px; line-height: 1.35; }
+.rd-facts > span:last-child { border-right: 0; }
+.rd-facts b { color: #778496; font-size: 9px; letter-spacing: .05em; text-transform: uppercase; }
+.rd-pace-summary { padding: 8px 10px 0; color: #c7d5e4; font-size: 11px; font-weight: 700; }
+.rd-section .pace-map { margin: 7px 10px 9px; }
+.rd-table-wrap { max-height: 42vh; overflow: auto; }
+.rd-field-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 11px; }
+.rd-field-table th { position: sticky; top: 0; z-index: 1; padding: 7px 6px; border-bottom: 1px solid #303944; background: #1a1c23; color: #778496; font-size: 9px; letter-spacing: .05em; text-align: left; text-transform: uppercase; }
+.rd-field-table td { padding: 7px 6px; border-bottom: 1px solid #29313b; color: #c9d3de; white-space: nowrap; }
+.rd-field-table tbody tr:hover td { background: rgba(108,198,255,0.06); }
+.rd-field-table .rd-runner-name { color: #e7edf5; font-weight: 700; }
+.rd-empty { padding: 12px 10px; color: #98a5b5; font-size: 11px; }
+.rd-pending-result { border-style: dashed; }
+@media (max-width: 700px) {
+    .race-autopsy-modal .rd-panel { width: 97vw; max-height: 92vh; }
+    .rd-body { padding: 10px 11px 12px; }
+    .rd-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .rd-facts > span:nth-child(2) { border-right: 0; }
+    .rd-facts > span:nth-child(-n+2) { border-bottom: 1px solid #303944; }
+}
+
 /* Race Review: one read-only learning modal. The primary card keeps race-day actions. */
 .race-autopsy-modal .rr-panel { width: min(720px, 94vw); padding: 14px 0 0; }
 .race-autopsy-modal .rr-panel .ra-head { padding: 0 16px 9px; margin-bottom: 0; }

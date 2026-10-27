@@ -4551,14 +4551,18 @@ function reviewFieldHtml(raceId) {
     if (!rows.length) return '<div class="ra-empty">No runners are available for this race.</div>';
     const cells = rows.map(row => {
         const profile = paceProfileForRow(raceId, row);
-        const style = profile ? `${profile.label} · ${profile.samples}` : 'Unknown';
+        const style = profile ? `${profile.label} · ${profile.samples}` : '—';
         const odds = Number(row.Odds);
         const oddsText = Number.isFinite(odds) && odds > 0 ? odds.toFixed(1) + '×' : '—';
+        const fav = row.Fav || '—';
         const finish = Number(row.Finish || row.Finish_Pos || row.FinishPos);
-        return `<tr><td>${escapeHtml(String(row.PP || '—'))}</td><td>${escapeHtml(String(row.Horse || '—'))}</td><td>${escapeHtml(style)}</td><td>${oddsText}</td><td>${Number.isFinite(finish) && finish > 0 ? finish : '—'}</td></tr>`;
+        const last3 = row.Last3 || '—';
+        const record = row.Record || '—';
+        const jockey = row.Jockey || '—';
+        const pedigree = [row.Sire, row.Dam].filter(Boolean).join(' / ') || '—';
+        return `<tr><td>${escapeHtml(String(row.PP || '—'))}</td><td class="rd-runner-name">${escapeHtml(String(row.Horse || '—'))}</td><td>${escapeHtml(String(jockey))}</td><td>${oddsText}</td><td>${escapeHtml(String(fav))}</td><td>${escapeHtml(style)}</td><td>${escapeHtml(String(last3))}</td><td>${escapeHtml(String(record))}</td><td>${escapeHtml(String(pedigree))}</td><td>${Number.isFinite(finish) && finish > 0 ? finish : '—'}</td></tr>`;
     }).join('');
-    return `<div class="rr-table-wrap"><table class="rr-field-table"><thead><tr><th>#</th><th>Horse</th><th>Prior style</th><th>Odds</th><th>Finish</th></tr></thead><tbody>${cells}</tbody></table></div>
-        <div class="ra-foot">This is a review copy. The working field table, marks, and race-day controls stay on the main card.</div>`;
+    return `<div class="rd-table-wrap"><table class="rd-field-table"><thead><tr><th>#</th><th>Runner</th><th>Jockey</th><th>Odds</th><th>Fav</th><th>Style</th><th>Last 3</th><th>Record</th><th>Pedigree</th><th>Fin</th></tr></thead><tbody>${cells}</tbody></table></div>`;
 }
 
 function reviewOutcomeHtml(raceId) {
@@ -4593,12 +4597,6 @@ function renderRaceReview(raceId) {
     const title = `${trackName(info.place) || ''} R${info.race_number || ''}`.trim();
     const forecast = paceForecastForRace(raceId);
     const settled = raceIsSettledForAutopsy(raceId);
-    const tab = ['story', 'pace', 'field', 'outcome'].includes(raceAutopsyState.tab) ? raceAutopsyState.tab : 'story';
-    const tabs = [
-        ['story', 'Overview'], ['pace', 'Pace'], ['field', 'Field & market'], ['outcome', 'Results']
-    ].map(([id, label]) => `<button class="rr-tab${tab === id ? ' is-active' : ''}" onclick="setRaceReviewTab('${id}')">${label}</button>`).join('');
-    const forecastLine = !forecast.profiles.length ? 'Pace forecast is unclear: the field has no usable prior corner-position history.' :
-        `${forecast.label} pace forecast · ${forecast.early.length} projected early runners · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence.toLowerCase()} confidence.`;
     const raceName = localizeRaceName(info.race_name) || localizeRaceClass(info.race_class) || 'Race details';
     const conditions = [
         info.time ? `${info.time} JST` : null,
@@ -4606,20 +4604,20 @@ function renderRaceReview(raceId) {
         `${forecast.fieldSize} runners`
     ].filter(Boolean).join(' · ');
     const markCount = countRaceMarks(raceId);
-    const story = `<div class="rr-overview-grid">
-            <div class="rr-overview-tile"><span>Race</span><b>${escapeHtml(raceName)}</b><small>${escapeHtml(conditions || 'Race details unavailable')}</small></div>
-            <div class="rr-overview-tile"><span>Status</span><b>${settled ? 'Settled' : 'Pre-race / live'}</b><small>${settled ? 'Result details are available in Results.' : 'Working controls remain on the main card.'}</small></div>
-            <div class="rr-overview-tile"><span>Your card</span><b>${markCount ? `${markCount} mark${markCount === 1 ? '' : 's'}` : 'No marks'}</b><small>${isRaceLocked(raceId) ? 'Locked' : 'Not locked'} · editing stays on the main card</small></div>
-        </div>
-        <div class="rr-story"><div class="rr-story-title">Pace at a glance</div><div class="rr-story-copy">${forecastLine}</div></div>
-        <div class="rr-callout"><strong>How to use this modal:</strong> Overview is the quick briefing; Pace explains the forecast; Field & market is the deeper runner view; Results becomes the post-race learning record. It is available before, during, and after the race without moving working controls off the main card.</div>`;
-    const contents = {
-        story,
-        pace: `<div class="ra-section-label">Forecast from prior starts</div>${paceMapHtml(raceId)}<div class="rr-callout"><strong>What is missing:</strong> actual-pace verification needs a saved forecast snapshot and a defined post-race early-position measure. That is a separate data feature, not invented from a settled card.</div>`,
-        field: reviewFieldHtml(raceId),
-        outcome: reviewOutcomeHtml(raceId)
-    };
-    m.innerHTML = `<div class="ra-panel rr-panel"><div class="ra-head"><div class="ra-title">Race Review — ${escapeHtml(title)}</div>${settled ? '<span class="ra-bucket">Settled</span>' : '<span class="rr-pending">Read only</span>'}<button class="ra-close" onclick="closeRaceAutopsy()" title="Close">✕</button></div><div class="rr-tabs">${tabs}</div><div class="rr-content">${contents[tab]}</div></div>`;
+    const forecastLine = !forecast.profiles.length ? 'Pace: unclear — no usable prior corner-position history in this field.' :
+        `Pace: ${forecast.label} · ${forecast.early.length} projected early · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence} confidence.`;
+    const setupHtml = `<div class="rd-facts"><span><b>Race</b>${escapeHtml(raceName)}</span><span><b>Post</b>${escapeHtml(info.time ? `${info.time} JST` : 'TBA')}</span><span><b>Course</b>${escapeHtml(conditions || '—')}</span><span><b>Your card</b>${markCount ? `${markCount} mark${markCount === 1 ? '' : 's'}` : 'No marks'} · ${isRaceLocked(raceId) ? 'locked' : 'open'}</span></div>`;
+    const resultsHtml = settled
+        ? `<section class="rd-section"><div class="rd-section-label">Result & learning</div>${reviewOutcomeHtml(raceId)}</section>`
+        : `<section class="rd-section rd-pending-result"><div class="rd-section-label">Result</div><div class="rd-empty">No result yet. This area becomes the finish order and existing “Why It Won” explanation after settlement.</div></section>`;
+    m.innerHTML = `<div class="ra-panel rd-panel"><div class="ra-head"><div class="ra-title">Race Details — ${escapeHtml(title)}</div>${settled ? '<span class="ra-bucket">Settled</span>' : '<span class="rr-pending">Read only</span>'}<button class="ra-close" onclick="closeRaceAutopsy()" title="Close">✕</button></div>
+        <div class="rd-body">
+            <section class="rd-section"><div class="rd-section-label">Race setup</div>${setupHtml}</section>
+            <section class="rd-section"><div class="rd-section-label">Pace map</div><div class="rd-pace-summary">${escapeHtml(forecastLine)}</div>${paceMapHtml(raceId)}</section>
+            <section class="rd-section"><div class="rd-section-label">Runner details</div>${reviewFieldHtml(raceId)}</section>
+            ${resultsHtml}
+            <div class="ra-foot">Race Details is read-only. Marks, locks, tickets, and race-day controls stay on the main card.</div>
+        </div></div>`;
     m.style.display = 'flex';
 }
 
@@ -5968,15 +5966,15 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         // Race Review is available both before and after the result: it is the deep learning view,
         // while action controls remain on this card.
         let autopsyBtnHtml = '';
-        let reviewLabel = '🧭 Race Review';
+        let reviewLabel = '🧭 Race Details';
         let reviewColor = '#6cc6ff';
-        let reviewTitle = 'Open the read-only Race Review: pace forecast, field context, and (when settled) the result autopsy.';
+        let reviewTitle = 'Open read-only Race Details: race setup, Pace Map, expanded runners, and (when settled) the result detail.';
         if (raceSettled && raceHasHistoryData(race)) {
             try {
                 const a = computeRaceAutopsy(r_id);
                 if (a) {
                     const bk = AUTOPSY_BUCKET[a.bucket];
-                    reviewLabel = `${bk.emoji} Race Review`;
+                    reviewLabel = `${bk.emoji} Race Details`;
                     reviewColor = bk.color;
                     reviewTitle = `Open Race Review (settled: ${bk.short}). Includes the existing winner autopsy and forecast context.`;
                 }
