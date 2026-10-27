@@ -4660,7 +4660,7 @@ function renderRaceReview(raceId) {
         <div class="rd-menu"><button onclick="jumpRaceDetails('snapshot')">Race</button><button onclick="jumpRaceDetails('shape')">Pace & field</button><button onclick="jumpRaceDetails('market')">Market</button><button onclick="jumpRaceDetails('results')">Result</button></div>
         <div class="rd-body">
             <section id="race-details-snapshot" class="rd-section"><div class="rd-section-label">Race card</div>${raceSnapshotHtml(raceId, info, settled, forecast)}</section>
-            <section id="race-details-shape" class="rd-section"><div class="rd-section-label">Pace & field shape</div>${raceFieldShapeHtml(raceId, forecast)}<div class="rd-pace-summary">${escapeHtml(forecastLine)}</div>${paceMapHtml(raceId)}</section>
+            <section id="race-details-shape" class="rd-section"><div class="rd-section-label">Pace & field shape</div>${raceFieldShapeHtml(raceId, forecast)}<div class="rd-pace-summary">${escapeHtml(forecastLine)}</div>${paceMapHtml(raceId, true)}</section>
             <section id="race-details-market" class="rd-section"><div class="rd-section-label">Market snapshot</div>${reviewMarketHtml(raceId)}</section>
             ${resultsHtml}
             <div class="ra-foot">Race Details is read-only. Marks, locks, tickets, and race-day controls stay on the main card.</div>
@@ -5487,17 +5487,26 @@ function paceSummaryBadge(r_id) {
     return `<span class="pace-summary ${cls}" title="${escapeHtml(title)}">Pace: ${forecast.label} · ${forecast.early.length} early · ${forecast.confidence}</span>`;
 }
 
-function paceMapHtml(r_id) {
+function paceMapHtml(r_id, expanded = false) {
     const forecast = paceForecastForRace(r_id);
-    if (!forecast.profiles.length) return `<div class="pace-map pace-map-unclear"><strong>Pace Map</strong><span>Unclear — no usable prior corner-position history in this field.</span></div>`;
+    if (!forecast.profiles.length) return `<div class="pace-map pace-map-unclear"><strong>Predicted positioning</strong><span>Unavailable: no usable prior corner-position history in this field.</span></div>`;
     const groups = { Lead: [], Press: [], Close: [], Deep: [] };
     forecast.profiles.forEach(({ row, profile }) => groups[profile.label].push({ row, profile }));
-    const groupHtml = Object.entries(groups).map(([label, rows]) => {
-        if (!rows.length) return '';
-        const names = rows.map(({ row, profile }) => `<span class="pace-runner"><b>${escapeHtml(String(row.PP || '?'))}</b> ${escapeHtml(row.Horse || '')}<small>${profile.samples} run${profile.samples === 1 ? '' : 's'}${profile.comparable ? '' : ' · mixed surface'}</small></span>`).join('');
-        return `<div class="pace-lane pace-lane-${label.toLowerCase()}"><strong>${label}</strong><div>${names}</div></div>`;
+    const lanes = [
+        ['Lead', 'Leader', 'Likely to set or contest the first call'],
+        ['Press', 'On-pace', 'Expected close to the early speed'],
+        ['Close', 'Midfield', 'Expected to settle behind the pace'],
+        ['Deep', 'Back-marker', 'Expected to be held up early']
+    ];
+    const laneHtml = lanes.map(([key, title, hint]) => {
+        const rows = groups[key];
+        const horses = rows.length ? rows.map(({ row, profile }) => `<div class="pace-board-runner"><b>${escapeHtml(String(row.PP || '?'))}</b><span>${escapeHtml(row.Horse || 'Unknown')}</span><small>${profile.samples} prior run${profile.samples === 1 ? '' : 's'}${profile.comparable ? '' : ' · mixed surface'}</small></div>`).join('') : '<div class="pace-board-empty">—</div>';
+        return `<div class="pace-board-lane pace-board-${key.toLowerCase()}"><div class="pace-board-lane-head"><b>${title}</b><small>${hint}</small></div>${horses}</div>`;
     }).join('');
-    return `<details class="pace-map" onclick="event.stopPropagation()"><summary><span>Pace Map</span><b>${forecast.label}</b><small>${forecast.early.length} early · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence} confidence</small></summary><p>Forecast from prior corner positions. It is a reading aid, not a pick or bet recommendation.</p>${groupHtml}</details>`;
+    const unprofiled = Math.max(0, forecast.fieldSize - forecast.profiles.length);
+    const board = `<div class="pace-board"><div class="pace-board-title"><span>Predicted positioning</span><b>${escapeHtml(forecast.label)} pace</b><small>${forecast.confidence} confidence · prior corner-position evidence only</small></div><div class="pace-board-lanes">${laneHtml}</div>${unprofiled ? `<div class="pace-board-note">${unprofiled} runner${unprofiled === 1 ? '' : 's'} omitted: no usable prior corner-position history.</div>` : ''}</div>`;
+    if (expanded) return board;
+    return `<details class="pace-map" onclick="event.stopPropagation()"><summary><span>Pace Map</span><b>${forecast.label}</b><small>${forecast.early.length} early · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence} confidence</small></summary><p>Forecast from prior corner positions. It is a reading aid, not a pick or bet recommendation.</p>${board}</details>`;
 }
 
 // Existing horse-name chip. Pace Map v1 upgrades it from last-start-only to the same multi-run profile
