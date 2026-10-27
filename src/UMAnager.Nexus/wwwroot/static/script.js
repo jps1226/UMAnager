@@ -4550,7 +4550,8 @@ function jumpRaceDetails(sectionId) {
     const panel = document.querySelector('#race-autopsy-modal .rd-panel');
     const target = document.getElementById(`race-details-${sectionId}`);
     if (!panel || !target) return;
-    panel.scrollTo({ top: Math.max(0, target.offsetTop - 96), behavior: 'smooth' });
+    const top = target.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop - 88;
+    panel.scrollTop = Math.max(0, top);
 }
 
 function reviewFieldHtml(raceId) {
