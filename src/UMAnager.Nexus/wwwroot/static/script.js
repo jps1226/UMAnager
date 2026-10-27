@@ -4547,7 +4547,10 @@ function setRaceReviewTab(tab) {
 }
 
 function jumpRaceDetails(sectionId) {
-    document.getElementById(`race-details-${sectionId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const panel = document.querySelector('#race-autopsy-modal .rd-panel');
+    const target = document.getElementById(`race-details-${sectionId}`);
+    if (!panel || !target) return;
+    panel.scrollTo({ top: Math.max(0, target.offsetTop - 96), behavior: 'smooth' });
 }
 
 function reviewFieldHtml(raceId) {
