@@ -7,6 +7,7 @@
 //          DataStatus-guarded upsert preserves those NULLs so the UI knows the race hasn't run.
 // LAST DOCUMENTED: 2026-06-02
 // ============================================================
+using System.Text.Json;
 using UMAnager.Nexus.Data.Entities;
 
 namespace UMAnager.Nexus.Services.Parsing;
@@ -116,6 +117,25 @@ public static class SeRecordParser
                 finishPos = fp;
             }
 
+            // Settled SE records (DataStatus 6/7) carry each horse's position at corners 1–4.
+            // Keep the JV units intact: a JSON integer is the ordinal position at that corner,
+            // null means the course/race did not provide that corner (e.g. a short race).
+            var corners = new[]
+            {
+                ParsePositivePosition(data, 351),
+                ParsePositivePosition(data, 353),
+                ParsePositivePosition(data, 355),
+                ParsePositivePosition(data, 357)
+            };
+
+            // SE 391-393 is the runner's final 3F in tenths of a second. Preserve the raw tenths
+            // used by the existing historical PerformanceJson contract (e.g. 355 = 35.5 seconds).
+            var l3fRaw = ExtractString(data, 390, 3).Trim();
+            int? l3f = int.TryParse(l3fRaw, out var parsedL3f) && parsedL3f is > 0 and < 999 ? parsedL3f : null;
+            string? performanceJson = corners.Any(c => c.HasValue) || l3f.HasValue
+                ? JsonSerializer.Serialize(new { corners, l3f })
+                : null;
+
             // 異常区分コード (IJyoCD / AbnormalDiv): 332 (1 byte). Oracle 2026-06-02.
             //   0=Normal · 1=出走取消 · 2=発走除外 · 3=競走除外 → REMOVED from betting (refunded /
             //   ticket shrunk) · 4=競走中止 (raced, did not finish — bet STANDS) · 5-7=DQ variants.
@@ -139,6 +159,7 @@ public static class SeRecordParser
                 Odds = odds,
                 FavRank = favRank,
                 FinishPos = finishPos,
+                PerformanceJson = performanceJson,
                 Scratched = scratched,
                 Sex = sex,
                 DataStatus = dataStatus,
@@ -150,6 +171,12 @@ public static class SeRecordParser
         {
             throw new InvalidOperationException($"Failed to parse SE record: {ex.Message}", ex);
         }
+    }
+
+    private static int? ParsePositivePosition(ReadOnlySpan<byte> data, int startIndex)
+    {
+        var raw = ExtractString(data, startIndex, 2).Trim();
+        return int.TryParse(raw, out var position) && position > 0 ? position : null;
     }
 
     private static string ExtractString(ReadOnlySpan<byte> data, int startIndex, int length)
