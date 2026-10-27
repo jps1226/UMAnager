@@ -3390,24 +3390,33 @@ tr.hh-modal-highlight:hover > td { background: #32486a !important; }
     .horse-history-table th:nth-child(n+5),
     .horse-history-table td:nth-child(n+5) { display: none; }
 }
-/* Preview is intentionally visually distinct and removes the controls that could
-   imply an available write path. Server middleware remains the actual safeguard. */
+/* Preview disclosure is a compact floating card; it must not become a flex child beside the sidebar. */
 .preview-readonly-banner {
-    position: sticky;
-    top: 0;
+    position: fixed;
+    top: 9px;
+    left: 50%;
     z-index: 10000;
     display: flex;
-    gap: 10px;
+    width: max-content;
+    max-width: calc(100vw - 28px);
+    gap: 8px;
     align-items: center;
-    padding: 8px 14px;
+    box-sizing: border-box;
+    padding: 5px 10px;
+    transform: translateX(-50%);
     background: #4d3211;
-    border-bottom: 1px solid #d7a03b;
+    border: 1px solid #d7a03b;
+    border-radius: 7px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.38);
     color: #ffe5b0;
-    font-size: 13px;
+    font-size: 11px;
+    line-height: 1.25;
 }
-
-.preview-readonly-banner strong { letter-spacing: .06em; }
+.preview-readonly-banner strong { letter-spacing: .05em; white-space: nowrap; }
 .preview-readonly-banner span { color: #f3d9a7; }
+@media (max-width: 700px) {
+    .preview-readonly-banner { top: 6px; font-size: 10px; gap: 6px; }
+}
 
 body.preview-mode .settings-icon-btn,
 body.preview-mode #main-view-voting,
