@@ -5956,7 +5956,7 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         // Race Review is available both before and after the result: it is the deep learning view,
         // while action controls remain on this card.
         let autopsyBtnHtml = '';
-        let reviewLabel = '🧭 Review';
+        let reviewLabel = '🧭 Race Review';
         let reviewColor = '#6cc6ff';
         let reviewTitle = 'Open the read-only Race Review: pace forecast, field context, and (when settled) the result autopsy.';
         if (raceSettled && raceHasHistoryData(race)) {
@@ -5964,7 +5964,7 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
                 const a = computeRaceAutopsy(r_id);
                 if (a) {
                     const bk = AUTOPSY_BUCKET[a.bucket];
-                    reviewLabel = `${bk.emoji} Review · ${bk.short}`;
+                    reviewLabel = `${bk.emoji} Race Review`;
                     reviewColor = bk.color;
                     reviewTitle = `Open Race Review (settled: ${bk.short}). Includes the existing winner autopsy and forecast context.`;
                 }

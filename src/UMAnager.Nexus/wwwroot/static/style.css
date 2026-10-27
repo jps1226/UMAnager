@@ -1921,7 +1921,18 @@ tr:hover .score-explain-trigger { opacity: 1; }
 .rr-field-table th { position: sticky; top: 0; background: #1c1f24; color: #778395; text-align: left; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; }
 .rr-field-table th, .rr-field-table td { padding: 7px 6px; border-bottom: 1px solid #29313b; white-space: nowrap; }
 .rr-field-table td:nth-child(2) { color: #e1e8f0; font-weight: 600; }
-.btn-race-review { margin-left: 8px; }
+.btn-race-review {
+    margin-left: 8px;
+    min-height: 30px;
+    padding: 5px 11px;
+    border-width: 1px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.28);
+}
+.btn-race-review:hover { background: rgba(108, 198, 255, 0.12); }
 @media (max-width: 600px) {
     .race-autopsy-modal .rr-panel { width: 96vw; max-height: 92vh; }
     .rr-content { padding: 11px 12px 13px; }
