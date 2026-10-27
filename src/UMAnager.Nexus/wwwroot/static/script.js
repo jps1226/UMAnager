@@ -4554,23 +4554,34 @@ function jumpRaceDetails(sectionId) {
     panel.scrollTop = Math.max(0, top);
 }
 
-function reviewFieldHtml(raceId) {
+function raceFact(label, value) {
+    return `<span><b>${escapeHtml(label)}</b>${escapeHtml(String(value || '—'))}</span>`;
+}
+
+function raceSnapshotHtml(raceId, info, settled, forecast) {
     const rows = globalRaceEntries[raceId] || [];
-    if (!rows.length) return '<div class="ra-empty">No runners are available for this race.</div>';
-    const cells = rows.map(row => {
-        const profile = paceProfileForRow(raceId, row);
-        const style = profile ? `${profile.label} · ${profile.samples}` : '—';
-        const odds = Number(row.Odds);
-        const oddsText = Number.isFinite(odds) && odds > 0 ? odds.toFixed(1) + '×' : '—';
-        const fav = row.Fav || '—';
-        const finish = Number(row.Finish || row.Finish_Pos || row.FinishPos);
-        const last3 = row.Last3 || '—';
-        const record = row.Record || '—';
-        const jockey = row.Jockey || '—';
-        const pedigree = [row.Sire, row.Dam].filter(Boolean).join(' / ') || '—';
-        return `<tr><td>${escapeHtml(String(row.PP || '—'))}</td><td class="rd-runner-name">${escapeHtml(String(row.Horse || '—'))}</td><td>${escapeHtml(String(jockey))}</td><td>${oddsText}</td><td>${escapeHtml(String(fav))}</td><td>${escapeHtml(style)}</td><td>${escapeHtml(String(last3))}</td><td>${escapeHtml(String(record))}</td><td>${escapeHtml(String(pedigree))}</td><td>${Number.isFinite(finish) && finish > 0 ? finish : '—'}</td></tr>`;
-    }).join('');
-    return `<div class="rd-table-wrap"><table class="rd-field-table"><thead><tr><th>#</th><th>Runner</th><th>Jockey</th><th>Odds</th><th>Fav</th><th>Style</th><th>Last 3</th><th>Record</th><th>Pedigree</th><th>Fin</th></tr></thead><tbody>${cells}</tbody></table></div>`;
+    const surface = info.surface ? `${String(info.surface).replace(/^./, c => c.toUpperCase())}${info.distance ? ` ${info.distance}m` : ''}` : (info.distance ? `${info.distance}m` : '—');
+    return `<div class="rd-race-grid">${[
+        raceFact('Track', info.place_name || trackName(info.place)),
+        raceFact('Race', `R${info.race_number || '—'} · ${localizeRaceClass(info.race_class) || 'Class unlisted'}`),
+        raceFact('Post', info.time ? `${info.time} JST` : 'TBA'),
+        raceFact('Surface', surface),
+        raceFact('Field', `${rows.length || forecast.fieldSize || 0} runners`),
+        raceFact('Status', settled ? 'Settled' : (info.cancelled ? 'Cancelled' : 'Race card active'))
+    ].join('')}</div>`;
+}
+
+function raceFieldShapeHtml(raceId, forecast) {
+    const rows = globalRaceEntries[raceId] || [];
+    const profiled = forecast.profiles?.length || 0;
+    const early = forecast.early?.length || 0;
+    const unprofiled = Math.max(0, rows.length - profiled);
+    const labels = (forecast.profiles || []).reduce((counts, profile) => {
+        counts[profile.label] = (counts[profile.label] || 0) + 1;
+        return counts;
+    }, {});
+    const mix = Object.entries(labels).map(([label, count]) => `${count} ${label}`).join(' · ') || 'No usable prior pace history';
+    return `<div class="rd-shape"><div class="rd-shape-lead">${escapeHtml(forecast.label || 'Pace unclear')}</div><div class="rd-shape-copy">${early} projected early runner${early === 1 ? '' : 's'} · ${profiled}/${rows.length || forecast.fieldSize || 0} with a usable prior pace profile${unprofiled ? ` · ${unprofiled} without one` : ''}</div><div class="rd-shape-mix">${escapeHtml(mix)}</div></div>`;
 }
 
 function reviewOutcomeHtml(raceId) {
@@ -4601,14 +4612,28 @@ function reviewOutcomeHtml(raceId) {
 
 function reviewMarketHtml(raceId) {
     const runners = (globalRaceEntries[raceId] || []).map(row => ({
-        name: String(row.Horse || '—'),
-        odds: Number(row.Odds),
-        fav: Number(row.Fav)
-    })).filter(row => Number.isFinite(row.odds) && row.odds > 0)
-        .sort((a, b) => (Number.isFinite(a.fav) ? a.fav : 999) - (Number.isFinite(b.fav) ? b.fav : 999) || a.odds - b.odds)
-        .slice(0, 6);
+        name: String(row.Horse || '—'), odds: Number(row.Odds), previous: Number(row.Prev_Odds), fav: Number(row.Fav)
+    })).filter(row => Number.isFinite(row.odds) && row.odds > 0);
     if (!runners.length) return '<div class="rd-empty">No market odds are available for this race yet.</div>';
-    return `<div class="rd-market">${runners.map(row => `<span><b>${Number.isFinite(row.fav) ? `${row.fav}F` : '—'}</b>${escapeHtml(row.name)} <em>${row.odds.toFixed(1)}×</em></span>`).join('')}</div>`;
+    const favourite = [...runners].sort((a, b) => (Number.isFinite(a.fav) ? a.fav : 999) - (Number.isFinite(b.fav) ? b.fav : 999) || a.odds - b.odds)[0];
+    const movers = runners.filter(row => Number.isFinite(row.previous) && row.previous > 0)
+        .map(row => ({ ...row, change: row.odds / row.previous }))
+        .filter(row => Math.abs(row.change - 1) >= 0.15);
+    const shorten = [...movers].filter(row => row.change < 1).sort((a, b) => a.change - b.change).slice(0, 2);
+    const drift = [...movers].filter(row => row.change > 1).sort((a, b) => b.change - a.change).slice(0, 2);
+    const movement = (label, rows, kind) => rows.length ? `<div class="rd-move ${kind}"><b>${label}</b>${rows.map(row => `<span>${escapeHtml(row.name)} <em>${row.previous.toFixed(1)} to ${row.odds.toFixed(1)}</em></span>`).join('')}</div>` : '';
+    return `<div class="rd-market-summary"><div class="rd-favourite"><b>Market favourite</b><span>${escapeHtml(favourite.name)}</span><em>${favourite.odds.toFixed(1)}x${Number.isFinite(favourite.fav) ? ` · ${favourite.fav}F` : ''}</em></div><div class="rd-market-caption">Change compares the current card odds with UMAnager’s prior stored odds snapshot.</div>${movement('Shortened', shorten, 'shorten')}${movement('Drifted', drift, 'drift')}</div>`;
+}
+
+function racePayoutsHtml(info) {
+    const raw = info.results_json || info.ResultsJson;
+    if (!raw) return '';
+    let payouts;
+    try { payouts = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return ''; }
+    const labels = { win: 'Win', place: 'Place', quinella: 'Quinella', exacta: 'Exacta', wide: 'Wide', trio: 'Trio', trifecta: 'Trifecta', bracketQ: 'Bracket quinella' };
+    const groups = Object.entries(payouts || {}).filter(([, lines]) => Array.isArray(lines) && lines.length)
+        .map(([type, lines]) => `<div class="rd-payout"><b>${labels[type] || type}</b>${lines.map(line => `<span>${(line.combo || []).join(' - ')} <em>¥${Number(line.payout || 0).toLocaleString()}</em></span>`).join('')}</div>`).join('');
+    return groups ? `<div class="rd-payouts"><div class="rd-section-label">Official payouts</div>${groups}</div>` : '';
 }
 
 function renderRaceReview(raceId) {
@@ -4628,15 +4653,15 @@ function renderRaceReview(raceId) {
         `Pace: ${forecast.label} · ${forecast.early.length} projected early · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence} confidence.`;
     const masthead = `<div class="rd-masthead"><b>${escapeHtml(raceName)}</b><span>${escapeHtml(conditions || 'Race details unavailable')}</span><small>${markCount ? `${markCount} mark${markCount === 1 ? '' : 's'}` : 'No marks'} · ${isRaceLocked(raceId) ? 'locked' : 'not locked'} · ${settled ? 'settled' : 'race card active'}</small></div>`;
     const resultsHtml = settled
-        ? `<section id="race-details-results" class="rd-section"><div class="rd-section-label">Result & learning</div>${reviewOutcomeHtml(raceId)}</section>`
-        : `<section id="race-details-results" class="rd-section rd-pending-result"><div class="rd-section-label">Result</div><div class="rd-empty">No result yet. Finish order and the existing “Why It Won” explanation appear here after settlement.</div></section>`;
+        ? `<section id="race-details-results" class="rd-section"><div class="rd-section-label">Result & learning</div>${reviewOutcomeHtml(raceId)}${racePayoutsHtml(info)}</section>`
+        : `<section id="race-details-results" class="rd-section rd-pending-result"><div class="rd-section-label">Result</div><div class="rd-empty">No result yet. Finish order, official payouts, and the existing “Why It Won” explanation appear here after settlement.</div></section>`;
     m.innerHTML = `<div class="ra-panel rd-panel"><div class="ra-head"><div class="ra-title">Race Details — ${escapeHtml(title)}</div>${settled ? '<span class="ra-bucket">Settled</span>' : '<span class="rr-pending">Read only</span>'}<button class="ra-close" onclick="closeRaceAutopsy()" title="Close">✕</button></div>
         ${masthead}
-        <div class="rd-menu"><button onclick="jumpRaceDetails('field')">Field</button><button onclick="jumpRaceDetails('form')">Form & pace</button><button onclick="jumpRaceDetails('market')">Odds</button><button onclick="jumpRaceDetails('results')">Result</button></div>
+        <div class="rd-menu"><button onclick="jumpRaceDetails('snapshot')">Race</button><button onclick="jumpRaceDetails('shape')">Pace & field</button><button onclick="jumpRaceDetails('market')">Market</button><button onclick="jumpRaceDetails('results')">Result</button></div>
         <div class="rd-body">
-            <section id="race-details-field" class="rd-section"><div class="rd-section-label">Field</div>${reviewFieldHtml(raceId)}</section>
-            <section id="race-details-form" class="rd-section"><div class="rd-section-label">Form & pace</div><div class="rd-pace-summary">${escapeHtml(forecastLine)}</div>${paceMapHtml(raceId)}</section>
-            <section id="race-details-market" class="rd-section"><div class="rd-section-label">Odds</div>${reviewMarketHtml(raceId)}</section>
+            <section id="race-details-snapshot" class="rd-section"><div class="rd-section-label">Race card</div>${raceSnapshotHtml(raceId, info, settled, forecast)}</section>
+            <section id="race-details-shape" class="rd-section"><div class="rd-section-label">Pace & field shape</div>${raceFieldShapeHtml(raceId, forecast)}<div class="rd-pace-summary">${escapeHtml(forecastLine)}</div>${paceMapHtml(raceId)}</section>
+            <section id="race-details-market" class="rd-section"><div class="rd-section-label">Market snapshot</div>${reviewMarketHtml(raceId)}</section>
             ${resultsHtml}
             <div class="ra-foot">Race Details is read-only. Marks, locks, tickets, and race-day controls stay on the main card.</div>
         </div></div>`;
