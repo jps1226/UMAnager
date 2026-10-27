@@ -4535,7 +4535,7 @@ function renderRaceAutopsy(raceId) {
 
 // Race Review grows the settled-result autopsy into one learning surface. It is read-only:
 // selection, marks, locks, and betting controls deliberately remain on the race card.
-function openRaceReview(raceId, tab = 'story') {
+function openRaceReview(raceId, tab = 'race') {
     raceAutopsyState = { raceId, tab };
     renderRaceReview(raceId);
 }
@@ -4655,16 +4655,18 @@ function renderRaceReview(raceId) {
     const resultsHtml = settled
         ? `<section id="race-details-results" class="rd-section"><div class="rd-section-label">Result & learning</div>${reviewOutcomeHtml(raceId)}${racePayoutsHtml(info)}</section>`
         : `<section id="race-details-results" class="rd-section rd-pending-result"><div class="rd-section-label">Result</div><div class="rd-empty">No result yet. Finish order, official payouts, and the existing “Why It Won” explanation appear here after settlement.</div></section>`;
+    const tab = ['race', 'pace', 'market', 'result'].includes(raceAutopsyState.tab) ? raceAutopsyState.tab : 'race';
+    const tabButton = (key, label) => `<button class="rd-tab${tab === key ? ' is-active' : ''}" onclick="setRaceReviewTab('${key}')">${label}</button>`;
+    const tabContent = {
+        race: `<section class="rd-section"><div class="rd-section-label">Race card</div>${raceSnapshotHtml(raceId, info, settled, forecast)}</section>`,
+        pace: `<section class="rd-section"><div class="rd-section-label">Pace & field shape</div>${raceFieldShapeHtml(raceId, forecast)}<div class="rd-pace-summary">${escapeHtml(forecastLine)}</div>${paceMapHtml(raceId, true)}</section>`,
+        market: `<section class="rd-section"><div class="rd-section-label">Market snapshot</div>${reviewMarketHtml(raceId)}</section>`,
+        result: resultsHtml
+    }[tab];
     m.innerHTML = `<div class="ra-panel rd-panel"><div class="ra-head"><div class="ra-title">Race Details — ${escapeHtml(title)}</div>${settled ? '<span class="ra-bucket">Settled</span>' : '<span class="rr-pending">Read only</span>'}<button class="ra-close" onclick="closeRaceAutopsy()" title="Close">✕</button></div>
         ${masthead}
-        <div class="rd-menu"><button onclick="jumpRaceDetails('snapshot')">Race</button><button onclick="jumpRaceDetails('shape')">Pace & field</button><button onclick="jumpRaceDetails('market')">Market</button><button onclick="jumpRaceDetails('results')">Result</button></div>
-        <div class="rd-body">
-            <section id="race-details-snapshot" class="rd-section"><div class="rd-section-label">Race card</div>${raceSnapshotHtml(raceId, info, settled, forecast)}</section>
-            <section id="race-details-shape" class="rd-section"><div class="rd-section-label">Pace & field shape</div>${raceFieldShapeHtml(raceId, forecast)}<div class="rd-pace-summary">${escapeHtml(forecastLine)}</div>${paceMapHtml(raceId, true)}</section>
-            <section id="race-details-market" class="rd-section"><div class="rd-section-label">Market snapshot</div>${reviewMarketHtml(raceId)}</section>
-            ${resultsHtml}
-            <div class="ra-foot">Race Details is read-only. Marks, locks, tickets, and race-day controls stay on the main card.</div>
-        </div></div>`;
+        <div class="rd-menu">${tabButton('race', 'Race')}${tabButton('pace', 'Pace & field')}${tabButton('market', 'Market')}${tabButton('result', 'Result')}</div>
+        <div class="rd-body">${tabContent}<div class="ra-foot">Race Details is read-only. Marks, locks, tickets, and race-day controls stay on the main card.</div></div></div>`;
     m.style.display = 'flex';
 }
 
