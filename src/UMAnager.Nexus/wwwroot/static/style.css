@@ -1903,6 +1903,14 @@ tr:hover .score-explain-trigger { opacity: 1; }
 /* Race Details is a dense, single-scroll extension of the race card — not a second dashboard. */
 .race-autopsy-modal .rd-panel { width: min(980px, 96vw); max-height: 90vh; padding: 14px 0 0; }
 .race-autopsy-modal .rd-panel .ra-head { padding: 0 16px 9px; margin-bottom: 0; }
+.rd-masthead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 9px; padding: 9px 16px; border-top: 1px solid #2a2e35; border-bottom: 1px solid #303944; background: #181b21; }
+.rd-masthead b { color: #e5edf5; font-size: 13px; }
+.rd-masthead span { color: #c4ced9; font-size: 11px; }
+.rd-masthead small { color: #8190a1; font-size: 10px; }
+.rd-menu { display: flex; gap: 0; padding: 0 16px; border-bottom: 1px solid #303944; background: #1a1c23; }
+.rd-menu button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: #98a5b4; cursor: pointer; padding: 8px 10px 7px; font-size: 11px; }
+.rd-menu button:hover { color: #d9e6f2; }
+.rd-menu button:first-child { color: #d9e6f2; border-bottom-color: #6cc6ff; font-weight: 700; }
 .rd-body { display: grid; gap: 10px; padding: 12px 16px 15px; }
 .rd-section { border: 1px solid #303944; border-radius: 5px; overflow: hidden; }
 .rd-section-label { padding: 7px 9px; border-bottom: 1px solid #303944; color: #8592a2; background: #191d24; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
@@ -1919,6 +1927,10 @@ tr:hover .score-explain-trigger { opacity: 1; }
 .rd-field-table tbody tr:hover td { background: rgba(108,198,255,0.06); }
 .rd-field-table .rd-runner-name { color: #e7edf5; font-weight: 700; }
 .rd-empty { padding: 12px 10px; color: #98a5b5; font-size: 11px; }
+.rd-market { display: flex; flex-wrap: wrap; gap: 5px; padding: 9px; }
+.rd-market span { display: inline-flex; align-items: baseline; gap: 5px; padding: 4px 6px; border: 1px solid #344150; border-radius: 3px; background: rgba(255,255,255,0.025); color: #cad5df; font-size: 11px; }
+.rd-market b { color: #8ca6be; font-size: 10px; }
+.rd-market em { color: #b9f0c9; font-style: normal; font-weight: 700; }
 .rd-pending-result { border-style: dashed; }
 @media (max-width: 700px) {
     .race-autopsy-modal .rd-panel { width: 97vw; max-height: 92vh; }

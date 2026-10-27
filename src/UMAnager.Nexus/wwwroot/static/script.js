@@ -4546,6 +4546,10 @@ function setRaceReviewTab(tab) {
     renderRaceReview(raceAutopsyState.raceId);
 }
 
+function jumpRaceDetails(sectionId) {
+    document.getElementById(`race-details-${sectionId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function reviewFieldHtml(raceId) {
     const rows = globalRaceEntries[raceId] || [];
     if (!rows.length) return '<div class="ra-empty">No runners are available for this race.</div>';
@@ -4591,6 +4595,18 @@ function reviewOutcomeHtml(raceId) {
         <div class="ra-foot">Read at Risk ${a.risk} · a learning aid on settled results, not a betting signal.</div>`;
 }
 
+function reviewMarketHtml(raceId) {
+    const runners = (globalRaceEntries[raceId] || []).map(row => ({
+        name: String(row.Horse || '—'),
+        odds: Number(row.Odds),
+        fav: Number(row.Fav)
+    })).filter(row => Number.isFinite(row.odds) && row.odds > 0)
+        .sort((a, b) => (Number.isFinite(a.fav) ? a.fav : 999) - (Number.isFinite(b.fav) ? b.fav : 999) || a.odds - b.odds)
+        .slice(0, 6);
+    if (!runners.length) return '<div class="rd-empty">No market odds are available for this race yet.</div>';
+    return `<div class="rd-market">${runners.map(row => `<span><b>${Number.isFinite(row.fav) ? `${row.fav}F` : '—'}</b>${escapeHtml(row.name)} <em>${row.odds.toFixed(1)}×</em></span>`).join('')}</div>`;
+}
+
 function renderRaceReview(raceId) {
     const m = ensureRaceAutopsyModal();
     const info = globalRaceInfo[raceId] || {};
@@ -4606,15 +4622,17 @@ function renderRaceReview(raceId) {
     const markCount = countRaceMarks(raceId);
     const forecastLine = !forecast.profiles.length ? 'Pace: unclear — no usable prior corner-position history in this field.' :
         `Pace: ${forecast.label} · ${forecast.early.length} projected early · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence} confidence.`;
-    const setupHtml = `<div class="rd-facts"><span><b>Race</b>${escapeHtml(raceName)}</span><span><b>Post</b>${escapeHtml(info.time ? `${info.time} JST` : 'TBA')}</span><span><b>Course</b>${escapeHtml(conditions || '—')}</span><span><b>Your card</b>${markCount ? `${markCount} mark${markCount === 1 ? '' : 's'}` : 'No marks'} · ${isRaceLocked(raceId) ? 'locked' : 'open'}</span></div>`;
+    const masthead = `<div class="rd-masthead"><b>${escapeHtml(raceName)}</b><span>${escapeHtml(conditions || 'Race details unavailable')}</span><small>${markCount ? `${markCount} mark${markCount === 1 ? '' : 's'}` : 'No marks'} · ${isRaceLocked(raceId) ? 'locked' : 'not locked'} · ${settled ? 'settled' : 'race card active'}</small></div>`;
     const resultsHtml = settled
-        ? `<section class="rd-section"><div class="rd-section-label">Result & learning</div>${reviewOutcomeHtml(raceId)}</section>`
-        : `<section class="rd-section rd-pending-result"><div class="rd-section-label">Result</div><div class="rd-empty">No result yet. This area becomes the finish order and existing “Why It Won” explanation after settlement.</div></section>`;
+        ? `<section id="race-details-results" class="rd-section"><div class="rd-section-label">Result & learning</div>${reviewOutcomeHtml(raceId)}</section>`
+        : `<section id="race-details-results" class="rd-section rd-pending-result"><div class="rd-section-label">Result</div><div class="rd-empty">No result yet. Finish order and the existing “Why It Won” explanation appear here after settlement.</div></section>`;
     m.innerHTML = `<div class="ra-panel rd-panel"><div class="ra-head"><div class="ra-title">Race Details — ${escapeHtml(title)}</div>${settled ? '<span class="ra-bucket">Settled</span>' : '<span class="rr-pending">Read only</span>'}<button class="ra-close" onclick="closeRaceAutopsy()" title="Close">✕</button></div>
+        ${masthead}
+        <div class="rd-menu"><button onclick="jumpRaceDetails('field')">Field</button><button onclick="jumpRaceDetails('form')">Form & pace</button><button onclick="jumpRaceDetails('market')">Odds</button><button onclick="jumpRaceDetails('results')">Result</button></div>
         <div class="rd-body">
-            <section class="rd-section"><div class="rd-section-label">Race setup</div>${setupHtml}</section>
-            <section class="rd-section"><div class="rd-section-label">Pace map</div><div class="rd-pace-summary">${escapeHtml(forecastLine)}</div>${paceMapHtml(raceId)}</section>
-            <section class="rd-section"><div class="rd-section-label">Runner details</div>${reviewFieldHtml(raceId)}</section>
+            <section id="race-details-field" class="rd-section"><div class="rd-section-label">Field</div>${reviewFieldHtml(raceId)}</section>
+            <section id="race-details-form" class="rd-section"><div class="rd-section-label">Form & pace</div><div class="rd-pace-summary">${escapeHtml(forecastLine)}</div>${paceMapHtml(raceId)}</section>
+            <section id="race-details-market" class="rd-section"><div class="rd-section-label">Odds</div>${reviewMarketHtml(raceId)}</section>
             ${resultsHtml}
             <div class="ra-foot">Race Details is read-only. Marks, locks, tickets, and race-day controls stay on the main card.</div>
         </div></div>`;
