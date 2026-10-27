@@ -7,7 +7,7 @@
 //          odds-history series, and the voting-tab bet-estimate.
 // KEY DEPENDENCIES: AppDbContext, SettingsService, SirePerformanceService,
 //          JockeyTrainerStatsService, IMemoryCache.
-// CAUTION: The /api/races ETag is data-keyed "races-v13-…" — BUMP vN on any response-shape
+// CAUTION: The /api/races ETag is data-keyed "races-v16-…" — BUMP vN on any response-shape
 //          change or browsers serve a stale 304 body. SortTime is JST-wall-clock-in-UTC.
 // LAST DOCUMENTED: 2026-06-02
 // ============================================================
@@ -224,7 +224,7 @@ public sealed class RacesController : ControllerBase
                         .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                         .FirstOrDefaultAsync();
                     var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                    etag = $"\"races-v15-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                    etag = $"\"races-v16-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                     _cache.Set(EtagCacheKey, etag,
                         new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
                 }
@@ -461,6 +461,27 @@ public sealed class RacesController : ControllerBase
                         finishesByHorse.TryGetValue(e.HorseId ?? "", out var hist);
                         var (last3Str, formScore, last3Fields) = ComputeLast3(hist, race.RaceDate);
 
+                        // Historical cards retain only the compact, point-in-time Pace Map input:
+                        // prior corner-position runs, never the settled race's own result data.
+                        var paceHistory = new List<object>();
+                        if (priorRunsByHorse.TryGetValue(e.HorseId ?? "", out var priorRuns))
+                        {
+                            foreach (var pr in priorRuns)
+                            {
+                                if (pr.RaceDate >= race.RaceDate) continue;
+                                if (paceHistory.Count < 6 && !string.IsNullOrWhiteSpace(pr.Perf))
+                                {
+                                    paceHistory.Add(new
+                                    {
+                                        surface = pr.Surface,
+                                        distance = pr.Distance,
+                                        field_size = pr.FieldSize,
+                                        performance = pr.Perf
+                                    });
+                                }
+                            }
+                        }
+
                         if (racePast)
                         {
                             return (object)new
@@ -472,6 +493,7 @@ public sealed class RacesController : ControllerBase
                                 Record = recordByHorse.TryGetValue(e.HorseId ?? "", out var recPast) ? recPast : "",
                                 Last3 = last3Str,
                                 Last3_Fields = last3Fields,
+                                Pace_History = paceHistory,
                                 Sire = ResolveAncestorName(horse?.SireId),
                                 Sire_ID = horse?.SireId ?? "",
                                 Dam = ResolveAncestorName(horse?.DamId),
@@ -494,22 +516,11 @@ public sealed class RacesController : ControllerBase
                         string lastSurface = "";
                         int? lastDistance = null;
                         string lastPerf = "";
-                        var paceHistory = new List<object>();
-                        if (priorRunsByHorse.TryGetValue(e.HorseId ?? "", out var priorRuns))
+                        if (priorRunsByHorse.TryGetValue(e.HorseId ?? "", out var priorRunsForLast))
                         {
-                            foreach (var pr in priorRuns) // already desc by date → first match = most recent
+                            foreach (var pr in priorRunsForLast) // already desc by date → first match = most recent
                             {
                                 if (pr.RaceDate >= race.RaceDate) continue;
-                                if (paceHistory.Count < 6 && !string.IsNullOrWhiteSpace(pr.Perf))
-                                {
-                                    paceHistory.Add(new
-                                    {
-                                        surface = pr.Surface,
-                                        distance = pr.Distance,
-                                        field_size = pr.FieldSize,
-                                        performance = pr.Perf
-                                    });
-                                }
                                 if (daysSinceLast == null)
                                 {
                                     daysSinceLast = (int)(race.RaceDate - pr.RaceDate).TotalDays;
