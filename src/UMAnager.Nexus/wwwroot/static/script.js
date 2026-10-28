@@ -10885,6 +10885,7 @@ function renderLiveViewPanel() {
 
 let statsPeriodDays = 365;
 let statsRecaps = null;
+let statsVotedHorses = null;
 
 function switchMainView(view) {
     if (view === 'voting') currentMainView = 'voting';
@@ -10951,12 +10952,15 @@ function setStatsPeriod(days) {
 async function loadStatsView() {
     const host = document.getElementById('stats-view-content');
     if (!host) return;
-    if (!statsRecaps) {
+    if (!statsRecaps || !statsVotedHorses) {
         host.innerHTML = '<div class="stats-loading">Loading settled results…</div>';
         try {
-            const response = await fetch('/api/sunk-cost/per-race', { cache: 'no-store' });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            statsRecaps = await response.json();
+            const [recapResponse, horseResponse] = await Promise.all([
+                fetch('/api/sunk-cost/per-race', { cache: 'no-store' }),
+                fetch('/api/sunk-cost/voted-horses', { cache: 'no-store' })
+            ]);
+            if (!recapResponse.ok || !horseResponse.ok) throw new Error(`HTTP ${!recapResponse.ok ? recapResponse.status : horseResponse.status}`);
+            [statsRecaps, statsVotedHorses] = await Promise.all([recapResponse.json(), horseResponse.json()]);
         } catch (error) {
             host.innerHTML = `<div class="stats-error">Could not load historical results: ${escapeHtml(String(error.message || error))}</div>`;
             return;
@@ -10983,6 +10987,24 @@ function statsChartHtml(days) {
     const last = points[points.length - 1];
     return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Cumulative net across selected settled race days"><defs><linearGradient id="stats-chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#1dd1a1" stop-opacity=".25"/><stop offset="1" stop-color="#1dd1a1" stop-opacity="0"/></linearGradient></defs>${grid}<line class="stats-chart-gridline" x1="${left}" y1="${y(0)}" x2="${width - right}" y2="${y(0)}" stroke="#526174"/> <path class="stats-chart-area" d="${area}"/><path class="stats-chart-line" d="${path}"/><circle class="stats-chart-dot" cx="${x(points.length - 1)}" cy="${y(last.cumulative)}" r="4"/>${labels}</svg>`;
 }
+function statsVotedHorseLeaderboardHtml() {
+    const horses = Array.isArray(statsVotedHorses) ? statsVotedHorses.filter(horse => Number(horse.SettledStarts || 0) > 0) : [];
+    if (!horses.length) return `<section class="stats-panel stats-voted-horses"><div class="stats-panel-head"><div><h4>My voted horses</h4><span>Settled marked runners only</span></div></div><div class="stats-empty">No settled marked-horse history is available yet.</div></section>`;
+    const performance = [...horses].sort((a, b) => {
+        const aPlace = Number(a.Places || 0) / Number(a.SettledStarts || 1);
+        const bPlace = Number(b.Places || 0) / Number(b.SettledStarts || 1);
+        return bPlace - aPlace || Number(b.Wins || 0) - Number(a.Wins || 0) || Number(b.SettledStarts || 0) - Number(a.SettledStarts || 0);
+    }).slice(0, 6);
+    const money = [...horses].filter(horse => Number(horse.MoneyRaces || 0) > 0)
+        .sort((a, b) => Number(b.AllocatedNet || 0) - Number(a.AllocatedNet || 0)).slice(0, 6);
+    const performanceRows = performance.map(horse => {
+        const starts = Number(horse.SettledStarts || 0), places = Number(horse.Places || 0);
+        return `<div class="stats-horse-row"><div><b>${escapeHtml(horse.HorseName || horse.HorseId || 'Unknown')}</b><small>${starts} settled vote${starts === 1 ? '' : 's'} · avg finish ${Number.isFinite(Number(horse.AverageFinish)) ? Number(horse.AverageFinish).toFixed(1) : '—'}</small></div><div><strong>${horse.Wins}W · ${places} top-3</strong><small>${starts ? (places / starts * 100).toFixed(0) : '0'}% place rate</small></div></div>`;
+    }).join('');
+    const moneyRows = money.length ? money.map(horse => `<div class="stats-horse-row"><div><b>${escapeHtml(horse.HorseName || horse.HorseId || 'Unknown')}</b><small>${horse.MoneyRaces} settled placed race${Number(horse.MoneyRaces) === 1 ? '' : 's'} with this vote</small></div><div><strong class="${Number(horse.AllocatedNet || 0) >= 0 ? 'stats-positive' : 'stats-negative'}">${statsMoney(horse.AllocatedNet)}</strong><small>${statsMoney(horse.AllocatedWon)} returned</small></div></div>`).join('') : '<div class="stats-empty">No settled placed-race attribution is available yet.</div>';
+    return `<section class="stats-panel stats-voted-horses"><div class="stats-panel-head"><div><h4>My voted horses</h4><span>All-time results from your saved marks</span></div></div><div class="stats-horse-grid"><div><div class="stats-horse-title">Best on track</div>${performanceRows}</div><div><div class="stats-horse-title">Best for my bankroll</div>${moneyRows}</div></div><div class="stats-footnote">Performance counts every settled race where you marked the horse. Money is the authoritative settled race result divided equally among that race’s marked horses, so a multi-horse ticket is not credited in full to every horse. Imported external-history races are excluded because their ticket-level horse detail is unavailable.</div></section>`;
+}
+
 function renderStatsView() {
     const host = document.getElementById('stats-view-content');
     if (!host || !Array.isArray(statsRecaps)) return;
@@ -11017,6 +11039,7 @@ function renderStatsView() {
     </div>
     <div class="stats-grid"><section class="stats-panel"><div class="stats-panel-head"><div><h4>Cumulative net</h4><span>Selected settled race days · yen</span></div></div><div class="stats-chart">${statsChartHtml(daysAsc)}</div></section>
     <section class="stats-panel"><div class="stats-panel-head"><div><h4>Period snapshot</h4><span>Actual recap totals</span></div></div><div class="stats-detail-list"><div class="stats-detail-row"><span>Staked</span><span>${statsMoney(totalStaked)}</span></div><div class="stats-detail-row"><span>Returned</span><span>${statsMoney(totalWon)}</span></div><div class="stats-detail-row"><span>Positive race days</span><span>${positiveDays} / ${daysAsc.length}</span></div><div class="stats-detail-row"><span>Best day</span><span class="${bestDay.net >= 0 ? 'stats-positive' : 'stats-negative'}">${statsMoney(bestDay.net)} · ${escapeHtml(statsDateLabel(bestDay.date))}</span></div></div></section></div>
+    ${statsVotedHorseLeaderboardHtml()}
     <section class="stats-panel stats-ledger"><div class="stats-panel-head"><div><h4>Race-day ledger</h4><span>Most recent settled days in this period</span></div></div><div class="stats-table-wrap"><table class="stats-table"><thead><tr><th>Race day (JST)</th><th>Races</th><th>Hits</th><th>Staked</th><th>Net</th></tr></thead><tbody>${rows}</tbody></table></div><div class="stats-footnote">A race counts as a hit when its authoritative recap returned more than ¥0. Pending races are excluded. Race dates are JST calendar dates parsed from the JRA race ID.</div></section>`;
 }
 

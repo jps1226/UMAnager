@@ -41,6 +41,10 @@ public sealed class SunkCostController : ControllerBase
         return Ok(recap);
     }
 
+    [HttpGet("voted-horses")]
+    public async Task<IActionResult> VotedHorses(CancellationToken ct)
+        => Ok(await _sunk.GetVotedHorseRecapsAsync(ct));
+
     public sealed record ResetRequest(string? Date);
 
     /// <summary>Reset the tally to count only races on/after the given JST date (default: today).</summary>
