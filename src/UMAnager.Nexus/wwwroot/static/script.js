@@ -4536,13 +4536,19 @@ function renderRaceAutopsy(raceId) {
 // Race Review grows the settled-result autopsy into one learning surface. It is read-only:
 // selection, marks, locks, and betting controls deliberately remain on the race card.
 function openRaceReview(raceId, tab = 'race') {
-    raceAutopsyState = { raceId, tab };
+    raceAutopsyState = { raceId, tab, positionStage: 0 };
     renderRaceReview(raceId);
 }
 
 function setRaceReviewTab(tab) {
     if (!raceAutopsyState.raceId) return;
     raceAutopsyState.tab = tab;
+    renderRaceReview(raceAutopsyState.raceId);
+}
+
+function setResultPositionStage(stage) {
+    if (!raceAutopsyState.raceId) return;
+    raceAutopsyState.positionStage = Number(stage) || 0;
     renderRaceReview(raceAutopsyState.raceId);
 }
 
@@ -4625,13 +4631,11 @@ function reviewMarketHtml(raceId) {
     return `<div class="rd-market-summary"><div class="rd-favourite"><b>Market favourite</b><span>${escapeHtml(favourite.name)}</span><em>${favourite.odds.toFixed(1)}x${Number.isFinite(favourite.fav) ? ` · ${favourite.fav}F` : ''}</em></div><div class="rd-market-caption">Change compares the current card odds with UMAnager’s prior stored odds snapshot.</div>${movement('Shortened', shorten, 'shorten')}${movement('Drifted', drift, 'drift')}</div>`;
 }
 
-function positionComparisonHtml(raceId) {
+function actualPositionBoardHtml(raceId) {
     const laneNames = { Lead: 'Leader', Press: 'On-pace', Close: 'Midfield', Deep: 'Back-marker' };
-    const ordinal = value => {
-        const n = Number(value);
-        if (!Number.isFinite(n) || n <= 0) return '—';
-        const mod10 = n % 10, mod100 = n % 100;
-        return `${n}${mod10 === 1 && mod100 !== 11 ? 'st' : mod10 === 2 && mod100 !== 12 ? 'nd' : mod10 === 3 && mod100 !== 13 ? 'rd' : 'th'}`;
+    const laneForPosition = (position, fieldSize) => {
+        const normalized = fieldSize > 1 ? (position - 1) / (fieldSize - 1) : 0;
+        return normalized <= 0.15 ? 'Lead' : normalized <= 0.35 ? 'Press' : normalized <= 0.70 ? 'Close' : 'Deep';
     };
     const rows = (globalRaceEntries[raceId] || []).map(row => {
         let actual = row.Actual_Performance ?? row.ActualPerformance ?? '';
@@ -4645,13 +4649,30 @@ function positionComparisonHtml(raceId) {
     if (!rows.length) {
         return `<div class="rd-position-empty">Corner positions are not stored for this settled race. New result records will appear here after the JV corner-capture change is deployed and receives a settled SE update.</div>`;
     }
-    rows.sort((a, b) => (Number(a.row.Finish) || 999) - (Number(b.row.Finish) || 999) || (Number(a.row.PP) || 999) - (Number(b.row.PP) || 999));
-    const body = rows.map(({ row, corners, profile }) => {
-        const prediction = profile ? `${laneNames[profile.label] || profile.label}<small>${profile.samples} prior ${profile.samples === 1 ? 'run' : 'runs'}${profile.comparable ? '' : ' · mixed surface'}</small>` : 'No profile';
-        const actual = corners.map(ordinal).join(' → ');
-        return `<div class="rd-position-row"><b class="rd-position-pp">${escapeHtml(String(row.PP || '?'))}</b><span class="rd-position-horse">${escapeHtml(row.Horse || 'Unknown')}</span><span class="rd-position-forecast">${prediction}</span><span class="rd-position-corners">${escapeHtml(actual)}</span><span class="rd-position-finish">${escapeHtml(ordinal(row.Finish))}</span></div>`;
+    const availableStages = [0, 1, 2, 3].filter(stage => rows.some(item => item.corners[stage]));
+    const stage = availableStages.includes(raceAutopsyState.positionStage) ? raceAutopsyState.positionStage : availableStages[0];
+    const stageRows = rows.filter(item => item.corners[stage]);
+    const fieldSize = stageRows.length;
+    const groups = { Lead: [], Press: [], Close: [], Deep: [] };
+    stageRows.forEach(item => groups[laneForPosition(item.corners[stage], fieldSize)].push(item));
+    Object.values(groups).forEach(group => group.sort((a, b) => a.corners[stage] - b.corners[stage]));
+    const lanes = [['Lead', 'Leader'], ['Press', 'On-pace'], ['Close', 'Midfield'], ['Deep', 'Back-marker']];
+    const laneHtml = lanes.map(([key, title]) => {
+        const chips = groups[key].length ? groups[key].map(({ row, profile, corners }) => {
+            const forecast = profile ? laneNames[profile.label] : 'No forecast';
+            return `<div class="rd-actual-runner"><b>${escapeHtml(String(row.PP || '?'))}</b><span>${escapeHtml(row.Horse || 'Unknown')}</span><small>${corners[stage]}${ordinalSuffix(corners[stage])} at C${stage + 1} · forecast: ${escapeHtml(forecast)}</small></div>`;
+        }).join('') : '<div class="rd-actual-empty">—</div>';
+        return `<div class="rd-actual-lane rd-actual-${key.toLowerCase()}"><div><b>${title}</b><small>Actual position band</small></div>${chips}</div>`;
     }).join('');
-    return `<div class="rd-position-compare"><div class="rd-position-head"><span></span><span>Runner</span><span>Predicted position</span><span>Actual corners</span><span>Finish</span></div>${body}</div><div class="rd-position-note">Prediction is recomputed from starts strictly before this race date. It is a historical replay, not a pre-off snapshot; actual corners are the settled JV record.</div>`;
+    const stageButtons = availableStages.map(index => `<button class="rd-corner-tab${index === stage ? ' is-active' : ''}" onclick="setResultPositionStage(${index})">Corner ${index + 1}</button>`).join('');
+    const track = `<svg class="rd-track" viewBox="0 0 220 130" role="img" aria-label="Racecourse schematic; Corner ${stage + 1} selected"><rect x="18" y="18" width="184" height="94" rx="47" fill="none" stroke="#246b49" stroke-width="10"/><rect x="32" y="31" width="156" height="68" rx="34" fill="none" stroke="#f2c38c" stroke-width="8"/><rect x="44" y="42" width="132" height="46" rx="23" fill="#161c23" stroke="#9fb2d2" stroke-width="6"/>${[0,1,2,3].map(index => `<circle cx="${[184,160,42,62][index]}" cy="${[42,98,88,30][index]}" r="${index === stage ? 10 : 7}" fill="${index === stage ? '#6cc6ff' : '#536579'}"/><text x="${[184,160,42,62][index]}" y="${[42,98,88,30][index] + 3}" text-anchor="middle" fill="#10151b" font-size="7" font-weight="700">${index + 1}</text>`).join('')}</svg>`;
+    return `<div class="rd-actual-board"><div class="rd-actual-head"><div><b>Actual race positions</b><small>Official settled JV corner order · select a corner to replay the field.</small></div><div class="rd-corner-tabs">${stageButtons}</div></div><div class="rd-actual-layout"><div class="rd-track-wrap">${track}<span>Corner ${stage + 1} replay</span></div><div class="rd-actual-lanes">${laneHtml}</div></div></div><div class="rd-position-note">Each runner is placed by its official position at the selected corner. Its forecast tag comes only from starts before this race date; this is a historical replay, not a frozen pre-off snapshot.</div>`;
+}
+
+function ordinalSuffix(value) {
+    const n = Number(value);
+    const mod10 = n % 10, mod100 = n % 100;
+    return mod10 === 1 && mod100 !== 11 ? 'st' : mod10 === 2 && mod100 !== 12 ? 'nd' : mod10 === 3 && mod100 !== 13 ? 'rd' : 'th';
 }
 
 function racePayoutsHtml(info) {
@@ -4682,7 +4703,7 @@ function renderRaceReview(raceId) {
         `Pace: ${forecast.label} · ${forecast.early.length} projected early · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence} confidence.`;
     const masthead = `<div class="rd-masthead"><b>${escapeHtml(raceName)}</b><span>${escapeHtml(conditions || 'Race details unavailable')}</span><small>${markCount ? `${markCount} mark${markCount === 1 ? '' : 's'}` : 'No marks'} · ${isRaceLocked(raceId) ? 'locked' : 'not locked'} · ${settled ? 'settled' : 'race card active'}</small></div>`;
     const resultsHtml = settled
-        ? `<section id="race-details-results" class="rd-section"><div class="rd-section-label">Result & learning</div>${reviewOutcomeHtml(raceId)}<div class="rd-section-label">Predicted position vs actual corners</div>${positionComparisonHtml(raceId)}${racePayoutsHtml(info)}</section>`
+        ? `<section id="race-details-results" class="rd-section"><div class="rd-section-label">Result & learning</div>${reviewOutcomeHtml(raceId)}<div class="rd-section-label">Actual race-position replay</div>${actualPositionBoardHtml(raceId)}${racePayoutsHtml(info)}</section>`
         : `<section id="race-details-results" class="rd-section rd-pending-result"><div class="rd-section-label">Result</div><div class="rd-empty">No result yet. Finish order, official payouts, and the existing “Why It Won” explanation appear here after settlement.</div></section>`;
     const tab = ['race', 'pace', 'market', 'result'].includes(raceAutopsyState.tab) ? raceAutopsyState.tab : 'race';
     const tabButton = (key, label) => `<button class="rd-tab${tab === key ? ' is-active' : ''}" onclick="setRaceReviewTab('${key}')">${label}</button>`;
