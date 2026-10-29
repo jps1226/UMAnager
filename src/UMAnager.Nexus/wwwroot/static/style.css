@@ -3534,6 +3534,7 @@ tr.hh-modal-highlight:hover > td { background: #32486a !important; }
     .horse-history-table td:nth-child(n+5) { display: none; }
 }
 /* Preview disclosure is a compact floating card; it must not become a flex child beside the sidebar. */
+.preview-readonly-banner[hidden] { display: none !important; }
 .preview-readonly-banner {
     position: fixed;
     top: 9px;
