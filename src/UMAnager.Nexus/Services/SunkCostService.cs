@@ -249,6 +249,89 @@ public sealed class SunkCostService
         return (outcome.Staked, outcome.Won, outcome.HasResults, outcome.HitLabels, false, outcome.SideStaked, outcome.SideWon);
     }
 
+    /// <summary>
+    /// Read-only horse ledger for the Stats workspace. Performance comes from every settled race
+    /// where the operator gave a non-X mark. Money is the authoritative settled race recap split
+    /// equally across that race's marked horses, so multi-horse tickets are not credited in full to
+    /// every runner and the allocated totals always add back to the recap total.
+    /// </summary>
+    public async Task<List<VotedHorseRecap>> GetVotedHorseRecapsAsync(CancellationToken ct = default)
+    {
+        var (marks, _, _) = await LoadMarksAndLocksAsync();
+        var votes = marks
+            .Where(x => !string.Equals(x.Value, "X", StringComparison.OrdinalIgnoreCase))
+            .Select(x =>
+            {
+                var splitAt = x.Key.IndexOf('_');
+                return splitAt > 0 && splitAt < x.Key.Length - 1
+                    ? new { RaceId = x.Key[..splitAt], HorseId = x.Key[(splitAt + 1)..] }
+                    : null;
+            })
+            .Where(x => x is not null)
+            .Select(x => x!)
+            .DistinctBy(x => (x.RaceId, x.HorseId))
+            .ToList();
+        if (votes.Count == 0) return new List<VotedHorseRecap>();
+
+        var votesByRace = votes.GroupBy(x => x.RaceId)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.HorseId).ToHashSet(StringComparer.Ordinal));
+        var recapsByRace = (await GetPerRaceRecapAsync(ct: ct))
+            .Where(x => x.HasResults && !x.Imported)
+            .ToDictionary(x => x.RaceId);
+
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var raceIds = votesByRace.Keys.ToList();
+        var entries = await (
+            from entry in db.RaceEntries.AsNoTracking()
+            join horse in db.Horses.AsNoTracking() on entry.HorseId equals horse.HorseId into horses
+            from horse in horses.DefaultIfEmpty()
+            where raceIds.Contains(entry.RaceId)
+            select new
+            {
+                entry.RaceId,
+                HorseId = entry.HorseId ?? "",
+                HorseName = horse != null ? (horse.NameEn ?? horse.NameJa ?? "") : "",
+                entry.FinishPos
+            }
+        ).ToListAsync(ct);
+
+        var rows = entries
+            .Where(x => votesByRace.TryGetValue(x.RaceId, out var horseIds) && horseIds.Contains(x.HorseId))
+            .GroupBy(x => new { x.HorseId, x.HorseName })
+            .Select(group =>
+            {
+                var votedRaces = group.Select(x => x.RaceId).Distinct().ToList();
+                var finished = group.Where(x => x.FinishPos is > 0).Select(x => x.FinishPos!.Value).ToList();
+                decimal staked = 0m, won = 0m;
+                var moneyRaces = 0;
+                foreach (var raceId in votedRaces)
+                {
+                    if (!recapsByRace.TryGetValue(raceId, out var recap) || !votesByRace.TryGetValue(raceId, out var horsesInVote) || horsesInVote.Count == 0)
+                        continue;
+                    staked += (decimal)recap.Staked / horsesInVote.Count;
+                    won += (decimal)recap.Won / horsesInVote.Count;
+                    moneyRaces++;
+                }
+                return new VotedHorseRecap(
+                    group.Key.HorseId,
+                    string.IsNullOrWhiteSpace(group.Key.HorseName) ? group.Key.HorseId : group.Key.HorseName,
+                    votedRaces.Count,
+                    finished.Count,
+                    finished.Count(finish => finish == 1),
+                    finished.Count(finish => finish <= 3),
+                    finished.Count > 0 ? Math.Round(finished.Average(), 2) : null,
+                    moneyRaces,
+                    Math.Round(staked, 2),
+                    Math.Round(won, 2),
+                    Math.Round(won - staked, 2));
+            })
+            .OrderByDescending(x => x.AllocatedNet)
+            .ThenByDescending(x => x.Wins)
+            .ThenBy(x => x.AverageFinish ?? double.MaxValue)
+            .ToList();
+        return rows;
+    }
+
     /// <summary>Reset the tally so only races on/after the given JST date (default: today) count.</summary>
     public async Task ResetAsync(DateTime? jstDate = null, CancellationToken ct = default)
     {
@@ -437,6 +520,11 @@ public sealed record RaceRecap(
     int Staked, int Won, int Net, IReadOnlyList<string> HitLabels, bool Imported,
     // Side (loyalty) bets, tracked apart from the spine so they never move the Discipline recovery.
     int SideStaked = 0, int SideWon = 0, int SideNet = 0);
+
+public sealed record VotedHorseRecap(
+    string HorseId, string HorseName,
+    int VotedRaces, int SettledStarts, int Wins, int Places, double? AverageFinish,
+    int MoneyRaces, decimal AllocatedStaked, decimal AllocatedWon, decimal AllocatedNet);
 
 public sealed record SunkCostSummary(
     int PlacedRaces,

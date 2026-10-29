@@ -4,6 +4,26 @@ function bootMark(label) {
 }
 bootMark('scriptStart'); // earliest point this script can run: end of HTML parse + script.js download
 
+let isPreviewMode = false;
+async function detectRuntimeMode() {
+    try {
+        const response = await fetch('/api/runtime-mode', { cache: 'no-store' });
+        const mode = await response.json();
+        if (!mode.preview) return;
+        isPreviewMode = true;
+        document.body.classList.add('preview-mode');
+        const banner = document.getElementById('preview-readonly-banner');
+        if (banner) banner.hidden = false;
+        const settings = document.querySelector('.settings-icon-btn');
+        if (settings) settings.disabled = true;
+        const voting = document.getElementById('main-view-voting');
+        if (voting) voting.disabled = true;
+    } catch (_) {
+        // Production remains usable if the optional runtime-mode endpoint is unavailable.
+    }
+}
+void detectRuntimeMode();
+
 // QOL: collapsible sidebar (desktop only — see style.css .sidebar-collapse-toggle / body.sidebar-collapsed).
 // Restored here, at the top of the file, so it applies as early as possible and avoids a flash of the
 // expanded sidebar on load.
@@ -4423,15 +4443,14 @@ function closeRaceAutopsy() {
 }
 
 function openRaceAutopsy(raceId) {
-    raceAutopsyState = { raceId };
-    renderRaceAutopsy(raceId);
+    openRaceReview(raceId, 'outcome');
 }
 
 // Re-render in place if the operator moves the Risk slider while it's open
 // (merit/ranks shift with risk, just like the pre-race popover).
 function refreshRaceAutopsyIfOpen() {
     const m = document.getElementById('race-autopsy-modal');
-    if (raceAutopsyState.raceId && m && m.style.display !== 'none') renderRaceAutopsy(raceAutopsyState.raceId);
+    if (raceAutopsyState.raceId && m && m.style.display !== 'none') renderRaceReview(raceAutopsyState.raceId);
 }
 
 function renderRaceAutopsy(raceId) {
@@ -4511,6 +4530,193 @@ function renderRaceAutopsy(raceId) {
 
         <div class="ra-foot">Read at Risk ${a.risk} · a learning aid on settled results, not a betting signal. Some winners are genuinely unreadable — it will say so.</div>
     </div>`;
+    m.style.display = 'flex';
+}
+
+// Race Review grows the settled-result autopsy into one learning surface. It is read-only:
+// selection, marks, locks, and betting controls deliberately remain on the race card.
+function openRaceReview(raceId, tab = 'race') {
+    raceAutopsyState = { raceId, tab, positionStage: 0 };
+    renderRaceReview(raceId);
+}
+
+function setRaceReviewTab(tab) {
+    if (!raceAutopsyState.raceId) return;
+    raceAutopsyState.tab = tab;
+    renderRaceReview(raceAutopsyState.raceId);
+}
+
+function setResultPositionStage(stage) {
+    if (!raceAutopsyState.raceId) return;
+    raceAutopsyState.positionStage = Number(stage) || 0;
+    renderRaceReview(raceAutopsyState.raceId);
+}
+
+function jumpRaceDetails(sectionId) {
+    const panel = document.querySelector('#race-autopsy-modal .rd-panel');
+    const target = document.getElementById(`race-details-${sectionId}`);
+    if (!panel || !target) return;
+    const top = target.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop - 88;
+    panel.scrollTop = Math.max(0, top);
+}
+
+function raceFact(label, value) {
+    return `<span><b>${escapeHtml(label)}</b>${escapeHtml(String(value || '—'))}</span>`;
+}
+
+function raceSnapshotHtml(raceId, info, settled, forecast) {
+    const rows = globalRaceEntries[raceId] || [];
+    const surface = info.surface ? `${String(info.surface).replace(/^./, c => c.toUpperCase())}${info.distance ? ` ${info.distance}m` : ''}` : (info.distance ? `${info.distance}m` : '—');
+    return `<div class="rd-race-grid">${[
+        raceFact('Track', info.place_name || trackName(info.place)),
+        raceFact('Race', `R${info.race_number || '—'} · ${localizeRaceClass(info.race_class) || 'Class unlisted'}`),
+        raceFact('Post', info.time ? `${info.time} JST` : 'TBA'),
+        raceFact('Surface', surface),
+        raceFact('Field', `${rows.length || forecast.fieldSize || 0} runners`),
+        raceFact('Status', settled ? 'Settled' : (info.cancelled ? 'Cancelled' : 'Race card active'))
+    ].join('')}</div>`;
+}
+
+function raceFieldShapeHtml(raceId, forecast) {
+    const rows = globalRaceEntries[raceId] || [];
+    const profiled = forecast.profiles?.length || 0;
+    const early = forecast.early?.length || 0;
+    const unprofiled = Math.max(0, rows.length - profiled);
+    const labels = (forecast.profiles || []).reduce((counts, profile) => {
+        counts[profile.label] = (counts[profile.label] || 0) + 1;
+        return counts;
+    }, {});
+    const mix = Object.entries(labels).map(([label, count]) => `${count} ${label}`).join(' · ') || 'No usable prior pace history';
+    return `<div class="rd-shape"><div class="rd-shape-lead">${escapeHtml(forecast.label || 'Pace unclear')}</div><div class="rd-shape-copy">${early} projected early runner${early === 1 ? '' : 's'} · ${profiled}/${rows.length || forecast.fieldSize || 0} with a usable prior pace profile${unprofiled ? ` · ${unprofiled} without one` : ''}</div><div class="rd-shape-mix">${escapeHtml(mix)}</div></div>`;
+}
+
+function reviewOutcomeHtml(raceId) {
+    const a = computeRaceAutopsy(raceId);
+    if (!a) return `<div class="rr-empty-state"><strong>No settled outcome yet</strong><span>When finish data is available, this tab will show the existing winner autopsy and market context. It does not alter picks or bets.</span></div>`;
+    const bk = AUTOPSY_BUCKET[a.bucket];
+    const w = a.winner;
+    const wOdds = Number.isFinite(w.odds) ? w.odds.toFixed(1) + '×' : '—';
+    const resultStrip = a.top3.map(s => {
+        const fav = Number.isFinite(s.fav) && s.fav < 999 ? `${s.fav}${['st', 'nd', 'rd'][s.fav - 1] || 'th'} fav` : '—';
+        const od = Number.isFinite(s.odds) ? s.odds.toFixed(1) + '×' : '';
+        return `<div class="ra-fin"><span class="ra-fin-pos">${autopsyOrdinal(s.finish)}</span><span class="ra-fin-name">${escapeHtml(s.name)}</span><span class="ra-fin-meta">${fav} · ${od}</span></div>`;
+    }).join('');
+    const factorsHtml = autopsyWinnerFactors(a).map(f => {
+        const rankStr = f.rank !== null ? `${f.rank}/${a.field}` : '';
+        return `<div class="ra-factor"><span class="ra-factor-emoji">${f.emoji}</span><div class="ra-factor-body"><span class="ra-factor-label">${f.label}</span><span class="ra-factor-desc ra-${f.sent}">${f.desc}</span></div><div class="ra-factor-rank"><span class="ra-factor-pos">${rankStr}</span></div></div>`;
+    }).join('');
+    const meritStr = a.statsRank !== null ? `${a.statsRank}/${a.field}` : '—';
+    return `<div class="ra-winner"><span class="ra-winner-tag">🏆 Winner</span><span class="ra-winner-name">${escapeHtml(w.name)}</span><span class="ra-winner-odds">${wOdds} · ${Number.isFinite(w.fav) && w.fav < 999 ? autopsyOrdinal(w.fav) + ' favorite' : 'unranked'}</span>${a.winnerMark ? `<span class="ra-winner-mark">engine: ${a.winnerMark}</span>` : ''}</div>
+        <div class="ra-meaning" style="border-left-color:${bk.color};">${bk.meaning}</div>
+        <div class="ra-section-label">Finish (with pre-race market rank)</div><div class="ra-result">${resultStrip}</div>
+        <div class="ra-section-label">What the winner had</div><div class="ra-factors">${factorsHtml || '<div class="ra-empty-sm">No scored factors available for this horse.</div>'}</div>
+        <div class="ra-merit">Odds-removed merit ranked it <b>${meritStr}</b> in the field before the race.</div>
+        <div class="ra-section-label">The engine’s call</div><div class="ra-engine">${autopsyEngineLine(a)}</div>
+        <div class="ra-takeaway">${autopsyTakeaway(a)}</div>
+        <div class="ra-foot">Read at Risk ${a.risk} · a learning aid on settled results, not a betting signal.</div>`;
+}
+
+function reviewMarketHtml(raceId) {
+    const runners = (globalRaceEntries[raceId] || []).map(row => ({
+        name: String(row.Horse || '—'), odds: Number(row.Odds), previous: Number(row.Prev_Odds), fav: Number(row.Fav)
+    })).filter(row => Number.isFinite(row.odds) && row.odds > 0);
+    if (!runners.length) return '<div class="rd-empty">No market odds are available for this race yet.</div>';
+    const favourite = [...runners].sort((a, b) => (Number.isFinite(a.fav) ? a.fav : 999) - (Number.isFinite(b.fav) ? b.fav : 999) || a.odds - b.odds)[0];
+    const movers = runners.filter(row => Number.isFinite(row.previous) && row.previous > 0)
+        .map(row => ({ ...row, change: row.odds / row.previous }))
+        .filter(row => Math.abs(row.change - 1) >= 0.15);
+    const shorten = [...movers].filter(row => row.change < 1).sort((a, b) => a.change - b.change).slice(0, 2);
+    const drift = [...movers].filter(row => row.change > 1).sort((a, b) => b.change - a.change).slice(0, 2);
+    const movement = (label, rows, kind) => rows.length ? `<div class="rd-move ${kind}"><b>${label}</b>${rows.map(row => `<span>${escapeHtml(row.name)} <em>${row.previous.toFixed(1)} to ${row.odds.toFixed(1)}</em></span>`).join('')}</div>` : '';
+    return `<div class="rd-market-summary"><div class="rd-favourite"><b>Market favourite</b><span>${escapeHtml(favourite.name)}</span><em>${favourite.odds.toFixed(1)}x${Number.isFinite(favourite.fav) ? ` · ${favourite.fav}F` : ''}</em></div><div class="rd-market-caption">Change compares the current card odds with UMAnager’s prior stored odds snapshot.</div>${movement('Shortened', shorten, 'shorten')}${movement('Drifted', drift, 'drift')}</div>`;
+}
+
+function actualPositionBoardHtml(raceId) {
+    const laneNames = { Lead: 'Leader', Press: 'On-pace', Close: 'Midfield', Deep: 'Back-marker' };
+    const laneForPosition = (position, fieldSize) => {
+        const normalized = fieldSize > 1 ? (position - 1) / (fieldSize - 1) : 0;
+        return normalized <= 0.15 ? 'Lead' : normalized <= 0.35 ? 'Press' : normalized <= 0.70 ? 'Close' : 'Deep';
+    };
+    const rows = (globalRaceEntries[raceId] || []).map(row => {
+        let actual = row.Actual_Performance ?? row.ActualPerformance ?? '';
+        if (typeof actual === 'string') { try { actual = JSON.parse(actual); } catch { actual = null; } }
+        const corners = Array.isArray(actual?.corners) ? actual.corners.map(value => {
+            const n = Number(value);
+            return Number.isFinite(n) && n > 0 ? n : null;
+        }) : [];
+        return { row, corners, profile: paceProfileForRow(raceId, row) };
+    }).filter(item => item.corners.some(Boolean));
+    if (!rows.length) {
+        return `<div class="rd-position-empty">Corner positions are not stored for this settled race. New result records will appear here after the JV corner-capture change is deployed and receives a settled SE update.</div>`;
+    }
+    const availableStages = [0, 1, 2, 3].filter(stage => rows.some(item => item.corners[stage]));
+    const stage = availableStages.includes(raceAutopsyState.positionStage) ? raceAutopsyState.positionStage : availableStages[0];
+    const stageRows = rows.filter(item => item.corners[stage]);
+    const fieldSize = stageRows.length;
+    const groups = { Lead: [], Press: [], Close: [], Deep: [] };
+    stageRows.forEach(item => groups[laneForPosition(item.corners[stage], fieldSize)].push(item));
+    Object.values(groups).forEach(group => group.sort((a, b) => a.corners[stage] - b.corners[stage]));
+    const lanes = [['Lead', 'Leader'], ['Press', 'On-pace'], ['Close', 'Midfield'], ['Deep', 'Back-marker']];
+    const laneHtml = lanes.map(([key, title]) => {
+        const chips = groups[key].length ? groups[key].map(({ row, profile, corners }) => {
+            const forecast = profile ? laneNames[profile.label] : 'No forecast';
+            return `<div class="rd-actual-runner"><b>${escapeHtml(String(row.PP || '?'))}</b><span>${escapeHtml(row.Horse || 'Unknown')}</span><small>${corners[stage]}${ordinalSuffix(corners[stage])} at C${stage + 1} · forecast: ${escapeHtml(forecast)}</small></div>`;
+        }).join('') : '<div class="rd-actual-empty">—</div>';
+        return `<div class="rd-actual-lane rd-actual-${key.toLowerCase()}"><div><b>${title}</b><small>Actual position band</small></div>${chips}</div>`;
+    }).join('');
+    const stageButtons = availableStages.map(index => `<button class="rd-corner-tab${index === stage ? ' is-active' : ''}" onclick="setResultPositionStage(${index})">Corner ${index + 1}</button>`).join('');
+    const track = `<svg class="rd-track" viewBox="0 0 220 130" role="img" aria-label="Racecourse schematic; Corner ${stage + 1} selected"><rect x="18" y="18" width="184" height="94" rx="47" fill="none" stroke="#246b49" stroke-width="10"/><rect x="32" y="31" width="156" height="68" rx="34" fill="none" stroke="#f2c38c" stroke-width="8"/><rect x="44" y="42" width="132" height="46" rx="23" fill="#161c23" stroke="#9fb2d2" stroke-width="6"/>${[0,1,2,3].map(index => `<circle cx="${[184,160,42,62][index]}" cy="${[42,98,88,30][index]}" r="${index === stage ? 10 : 7}" fill="${index === stage ? '#6cc6ff' : '#536579'}"/><text x="${[184,160,42,62][index]}" y="${[42,98,88,30][index] + 3}" text-anchor="middle" fill="#10151b" font-size="7" font-weight="700">${index + 1}</text>`).join('')}</svg>`;
+    return `<div class="rd-actual-board"><div class="rd-actual-head"><div><b>Actual race positions</b><small>Official settled JV corner order · select a corner to replay the field.</small></div><div class="rd-corner-tabs">${stageButtons}</div></div><div class="rd-actual-layout"><div class="rd-track-wrap">${track}<span>Corner ${stage + 1} replay</span></div><div class="rd-actual-lanes">${laneHtml}</div></div></div><div class="rd-position-note">Each runner is placed by its official position at the selected corner. Its forecast tag comes only from starts before this race date; this is a historical replay, not a frozen pre-off snapshot.</div>`;
+}
+
+function ordinalSuffix(value) {
+    const n = Number(value);
+    const mod10 = n % 10, mod100 = n % 100;
+    return mod10 === 1 && mod100 !== 11 ? 'st' : mod10 === 2 && mod100 !== 12 ? 'nd' : mod10 === 3 && mod100 !== 13 ? 'rd' : 'th';
+}
+
+function racePayoutsHtml(info) {
+    const raw = info.results_json || info.ResultsJson;
+    if (!raw) return '';
+    let payouts;
+    try { payouts = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return ''; }
+    const labels = { win: 'Win', place: 'Place', quinella: 'Quinella', exacta: 'Exacta', wide: 'Wide', trio: 'Trio', trifecta: 'Trifecta', bracketQ: 'Bracket quinella' };
+    const groups = Object.entries(payouts || {}).filter(([, lines]) => Array.isArray(lines) && lines.length)
+        .map(([type, lines]) => `<div class="rd-payout"><b>${labels[type] || type}</b>${lines.map(line => `<span>${(line.combo || []).join(' - ')} <em>¥${Number(line.payout || 0).toLocaleString()}</em></span>`).join('')}</div>`).join('');
+    return groups ? `<div class="rd-payouts"><div class="rd-section-label">Official payouts</div>${groups}</div>` : '';
+}
+
+function renderRaceReview(raceId) {
+    const m = ensureRaceAutopsyModal();
+    const info = globalRaceInfo[raceId] || {};
+    const title = `${trackName(info.place) || ''} R${info.race_number || ''}`.trim();
+    const forecast = paceForecastForRace(raceId);
+    const settled = raceIsSettledForAutopsy(raceId);
+    const raceName = localizeRaceName(info.race_name) || localizeRaceClass(info.race_class) || 'Race details';
+    const conditions = [
+        info.time ? `${info.time} JST` : null,
+        info.surface ? `${String(info.surface).replace(/^./, c => c.toUpperCase())}${info.distance ? ` ${info.distance}m` : ''}` : (info.distance ? `${info.distance}m` : null),
+        `${forecast.fieldSize} runners`
+    ].filter(Boolean).join(' · ');
+    const markCount = countRaceMarks(raceId);
+    const forecastLine = !forecast.profiles.length ? 'Pace: unclear — no usable prior corner-position history in this field.' :
+        `Pace: ${forecast.label} · ${forecast.early.length} projected early · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence} confidence.`;
+    const masthead = `<div class="rd-masthead"><b>${escapeHtml(raceName)}</b><span>${escapeHtml(conditions || 'Race details unavailable')}</span><small>${markCount ? `${markCount} mark${markCount === 1 ? '' : 's'}` : 'No marks'} · ${isRaceLocked(raceId) ? 'locked' : 'not locked'} · ${settled ? 'settled' : 'race card active'}</small></div>`;
+    const resultsHtml = settled
+        ? `<section id="race-details-results" class="rd-section"><div class="rd-section-label">Result & learning</div>${reviewOutcomeHtml(raceId)}<div class="rd-section-label">Actual race-position replay</div>${actualPositionBoardHtml(raceId)}${racePayoutsHtml(info)}</section>`
+        : `<section id="race-details-results" class="rd-section rd-pending-result"><div class="rd-section-label">Result</div><div class="rd-empty">No result yet. Finish order, official payouts, and the existing “Why It Won” explanation appear here after settlement.</div></section>`;
+    const tab = ['race', 'pace', 'market', 'result'].includes(raceAutopsyState.tab) ? raceAutopsyState.tab : 'race';
+    const tabButton = (key, label) => `<button class="rd-tab${tab === key ? ' is-active' : ''}" onclick="setRaceReviewTab('${key}')">${label}</button>`;
+    const tabContent = {
+        race: `<section class="rd-section"><div class="rd-section-label">Race card</div>${raceSnapshotHtml(raceId, info, settled, forecast)}</section>`,
+        pace: `<section class="rd-section"><div class="rd-section-label">Pace & field shape</div>${raceFieldShapeHtml(raceId, forecast)}<div class="rd-pace-summary">${escapeHtml(forecastLine)}</div>${paceMapHtml(raceId, true)}</section>`,
+        market: `<section class="rd-section"><div class="rd-section-label">Market snapshot</div>${reviewMarketHtml(raceId)}</section>`,
+        result: resultsHtml
+    }[tab];
+    m.innerHTML = `<div class="ra-panel rd-panel"><div class="ra-head"><div class="ra-title">Race Details — ${escapeHtml(title)}</div>${settled ? '<span class="ra-bucket">Settled</span>' : '<span class="rr-pending">Read only</span>'}<button class="ra-close" onclick="closeRaceAutopsy()" title="Close">✕</button></div>
+        ${masthead}
+        <div class="rd-menu">${tabButton('race', 'Race')}${tabButton('pace', 'Pace & field')}${tabButton('market', 'Market')}${tabButton('result', 'Result')}</div>
+        <div class="rd-body">${tabContent}<div class="ra-foot">Race Details is read-only. Marks, locks, tickets, and race-day controls stay on the main card.</div></div></div>`;
     m.style.display = 'flex';
 }
 
@@ -5295,35 +5501,77 @@ const COLD_FRESH_LO = 61, COLD_FRESH_HI = 120;
 // Built straight into the row (see buildTableBody's Horse cell) so it survives every re-render/reprice.
 //   💧 fresh — a longshot (rank ≥9) back from a 61–120 day break, NOT switching to dirt → place candidate (H7).
 //   🚫 dirt  — switching ONTO dirt at mid/long odds (rank ≥4) → a fade; the market underrates it (H8).
-// s54: predicted running style on the UPCOMING card — Lead/Press/Close/Deep inferred from the
-// horse's LAST start's corner positions (backend field Last_Perf = that run's PerformanceJson).
-// A handicapping read on paper ("this one usually leads"). Thresholds mirror horseRunStyle() in
-// the profile; kept separate so the card pill has its own "predicted, from last start" tooltip.
+// Pace Map v1: classify a horse from up to six prior starts, weighted toward comparable surface.
+// This is a race-reading aid only: it changes no marks, score, or bet behaviour.
+function paceProfileForRow(r_id, row) {
+    const history = Array.isArray(row.Pace_History) ? row.Pace_History : [];
+    const todaySurface = String(globalRaceInfo[r_id]?.surface || '').toLowerCase();
+    const samples = history.map(run => {
+        let perf = run?.performance;
+        if (typeof perf === 'string') { try { perf = JSON.parse(perf); } catch { return null; } }
+        const corners = Array.isArray(perf?.corners) ? perf.corners.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+        const fieldSize = Number(run?.field_size);
+        if (!corners.length || fieldSize < 2) return null;
+        return { early: (corners[0] - 1) / (fieldSize - 1), comparable: String(run?.surface || '').toLowerCase() === todaySurface };
+    }).filter(Boolean);
+    const comparable = samples.filter(s => s.comparable);
+    const chosen = comparable.length ? comparable : samples;
+    if (!chosen.length) return null;
+    const early = chosen.reduce((sum, s) => sum + s.early, 0) / chosen.length;
+    const label = early <= 0.15 ? 'Lead' : early <= 0.35 ? 'Press' : early <= 0.70 ? 'Close' : 'Deep';
+    const color = { Lead: '#ff6b9d', Press: '#ffc04a', Close: '#6cc6ff', Deep: '#b596ff' }[label];
+    return { label, color, samples: chosen.length, comparable: comparable.length > 0 };
+}
+
+function paceForecastForRace(r_id) {
+    const profiles = (globalRaceEntries[r_id] || []).map(row => ({ row, profile: paceProfileForRow(r_id, row) })).filter(x => x.profile);
+    const early = profiles.filter(x => x.profile.label === 'Lead' || x.profile.label === 'Press');
+    const label = early.length >= 3 ? 'Contested' : early.length <= 1 ? 'Soft' : 'Normal';
+    const confidence = profiles.length >= 8 ? 'High' : profiles.length >= 5 ? 'Medium' : 'Low';
+    return { profiles, early, label, confidence, fieldSize: (globalRaceEntries[r_id] || []).length };
+}
+
+function paceSummaryBadge(r_id) {
+    const forecast = paceForecastForRace(r_id);
+    if (!forecast.profiles.length) return '<span class="pace-summary pace-unclear" title="No usable corner-position history for this field.">Pace: unclear</span>';
+    const cls = `pace-${forecast.label.toLowerCase()}`;
+    const title = `Pace Map preview — ${forecast.label.toLowerCase()} pace: ${forecast.early.length} projected early runners; ${forecast.profiles.length}/${forecast.fieldSize} horses have usable prior corner-position data. Informational only; it changes no picks or bets.`;
+    return `<span class="pace-summary ${cls}" title="${escapeHtml(title)}">Pace: ${forecast.label} · ${forecast.early.length} early · ${forecast.confidence}</span>`;
+}
+
+function paceMapHtml(r_id, expanded = false) {
+    const forecast = paceForecastForRace(r_id);
+    if (!forecast.profiles.length) return `<div class="pace-map pace-map-unclear"><strong>Predicted positioning</strong><span>Unavailable: no usable prior corner-position history in this field.</span></div>`;
+    const groups = { Lead: [], Press: [], Close: [], Deep: [] };
+    forecast.profiles.forEach(({ row, profile }) => groups[profile.label].push({ row, profile }));
+    const lanes = [
+        ['Lead', 'Leader', 'Likely to set or contest the first call'],
+        ['Press', 'On-pace', 'Expected close to the early speed'],
+        ['Close', 'Midfield', 'Expected to settle behind the pace'],
+        ['Deep', 'Back-marker', 'Expected to be held up early']
+    ];
+    const laneHtml = lanes.map(([key, title, hint]) => {
+        const rows = groups[key];
+        const horses = rows.length ? rows.map(({ row, profile }) => `<div class="pace-board-runner"><b>${escapeHtml(String(row.PP || '?'))}</b><span>${escapeHtml(row.Horse || 'Unknown')}</span><small>${profile.samples} prior run${profile.samples === 1 ? '' : 's'}${profile.comparable ? '' : ' · mixed surface'}</small></div>`).join('') : '<div class="pace-board-empty">—</div>';
+        return `<div class="pace-board-lane pace-board-${key.toLowerCase()}"><div class="pace-board-lane-head"><b>${title}</b><small>${hint}</small></div>${horses}</div>`;
+    }).join('');
+    const unprofiled = Math.max(0, forecast.fieldSize - forecast.profiles.length);
+    const board = `<div class="pace-board"><div class="pace-board-title"><span>Predicted positioning</span><b>${escapeHtml(forecast.label)} pace</b><small>${forecast.confidence} confidence · prior corner-position evidence only</small></div><div class="pace-board-lanes">${laneHtml}</div>${unprofiled ? `<div class="pace-board-note">${unprofiled} runner${unprofiled === 1 ? '' : 's'} omitted: no usable prior corner-position history.</div>` : ''}</div>`;
+    if (expanded) return board;
+    return `<details class="pace-map" onclick="event.stopPropagation()"><summary><span>Pace Map</span><b>${forecast.label}</b><small>${forecast.early.length} early · ${forecast.profiles.length}/${forecast.fieldSize} profiled · ${forecast.confidence} confidence</small></summary><p>Forecast from prior corner positions. It is a reading aid, not a pick or bet recommendation.</p>${board}</details>`;
+}
+
+// Existing horse-name chip. Pace Map v1 upgrades it from last-start-only to the same multi-run profile
+// used in the race-level summary, while preserving an honest low-sample label.
 function predictedStylePill(r_id, row) {
-    const perf = row.Last_Perf;
-    if (!perf) return '';
-    let p = perf;
-    if (typeof perf === 'string') { try { p = JSON.parse(perf); } catch { return ''; } }
-    if (!p || !Array.isArray(p.corners)) return '';
-    const pos = p.corners.map(c => parseInt(c, 10)).filter(n => Number.isFinite(n) && n > 0);
-    if (!pos.length) return '';
-    const early = pos[0];
-    // Normalize early position by field size. The last run's own field size isn't on the card, so use
-    // THIS race's field size as a proxy (JRA fields are similar enough for a reading-aid read); without
-    // it, blank early corners in sprints make everyone look like a deep closer.
-    const fieldN = (globalRaceEntries[r_id] || []).length;
-    const n = fieldN > 1 ? fieldN : Math.max(...pos);
-    const ratio = early / n;
-    let label, color;
-    if (early <= 1)        { label = 'Lead';  color = '#ff6b9d'; }
-    else if (ratio <= 0.30){ label = 'Press'; color = '#ffc04a'; }
-    else if (ratio <= 0.66){ label = 'Close'; color = '#6cc6ff'; }
-    else                   { label = 'Deep';  color = '#ff7b6b'; }
-    const tip = `Predicted running style from its last start — ${label}. Lead = front-runner · Press = stalker · ` +
-        'Close = off-pace · Deep = deep closer (from the horse’s corner positions last time).';
+    const profile = paceProfileForRow(r_id, row);
+    if (!profile) return '';
+    const { label, color, samples, comparable } = profile;
+    const tip = `Pace Map profile from ${samples} prior ${comparable ? 'same-surface ' : ''}run${samples === 1 ? '' : 's'}: ${label}. ` +
+        'Lead = front-runner · Press = stalker · Close = off-pace · Deep = held up. Informational only.';
     const base = 'display:inline-block;font-size:0.7em;font-weight:700;padding:0 6px;border-radius:8px;' +
                  'vertical-align:middle;white-space:nowrap;';
-    return `<span class="run-style-pill" title="${escapeHtml(tip)}" style="${base}color:${color};border:1px solid ${color}66;background:${color}1a;">${label}</span>`;
+    return `<span class="run-style-pill" title="${escapeHtml(tip)}" style="${base}color:${color};border:1px solid ${color}66;background:${color}1a;">${label} · ${samples}</span>`;
 }
 
 function coldValuePillForRow(r_id, row) {
@@ -5786,6 +6034,8 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         });
 
         const rowsHtml = buildTableBody(r_id, globalRaceEntries[r_id]);
+        // Keep only the compact forecast cue on the working card. The detailed map lives in Race Review.
+        const paceSummaryHtml = paceSummaryBadge(r_id);
 
         let headerClass = "race-header";
         if (hasWatch) headerClass += " has-watch";
@@ -5821,18 +6071,24 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
         const historyBtnHtml = dateTimeline === 'past' && !raceHasHistoryData(race)
             ? `<button class="btn-history-refresh" onclick="refreshRaceHistory(event, '${r_id}')" title="Fetch finish positions and result data for this race">📜 Update History</button>`
             : "";
-        // Post-race teaching: the winner's grade (Chalk/Catchable/Semi/Freak) — click for why.
-        // Gate on the race being SETTLED (a real winner exists), not on the date being 'past' —
-        // so the "why it won" pill appears the moment a race finishes, even on today's card.
-        let autopsyBtnHtml = "";
+        // Race Review is available both before and after the result: it is the deep learning view,
+        // while action controls remain on this card.
+        let autopsyBtnHtml = '';
+        let reviewLabel = '🧭 Race Details';
+        let reviewColor = '#6cc6ff';
+        let reviewTitle = 'Open read-only Race Details: race setup, Pace Map, expanded runners, and (when settled) the result detail.';
         if (raceSettled && raceHasHistoryData(race)) {
-            let label = 'Result', color = '#ffb454', emoji = '🔍', grade = '';
             try {
                 const a = computeRaceAutopsy(r_id);
-                if (a) { const bk = AUTOPSY_BUCKET[a.bucket]; label = bk.short; color = bk.color; emoji = bk.emoji; grade = ` (graded ${bk.short})`; }
+                if (a) {
+                    const bk = AUTOPSY_BUCKET[a.bucket];
+                    reviewLabel = `${bk.emoji} Race Details`;
+                    reviewColor = bk.color;
+                    reviewTitle = `Open Race Review (settled: ${bk.short}). Includes the existing winner autopsy and forecast context.`;
+                }
             } catch (_) {}
-            autopsyBtnHtml = `<button class="btn-why-won" style="border-color:${color};color:${color};" onclick="event.stopPropagation(); openRaceAutopsy('${r_id}')" title="Post-race teaching${grade} — why the winner beat the field, read on the engine's own factors. Click for the breakdown.">${emoji} ${label}</button>`;
         }
+        autopsyBtnHtml = `<button class="btn-why-won btn-race-review" style="border-color:${reviewColor};color:${reviewColor};" onclick="event.stopPropagation(); openRaceReview('${r_id}', 'story')" title="${reviewTitle}">${reviewLabel}</button>`;
         // Odds-trend graph (Phase 37): only for upcoming/live cards, where odds history accrues.
         const trendsBtnHtml = dateTimeline !== 'past'
             ? `<button class="btn-odds-trends" onclick="event.stopPropagation(); showOddsHistory('${r_id}')" title="Odds over time for every runner">📈 Trends</button>`
@@ -5854,7 +6110,7 @@ function renderDateTab(date, collapseBeforeTime = null, keepOpenRaceId = null) {
 
         html += `<div id="race-${r_id}" style="margin-bottom: 25px;">
             <h3 id="header-${r_id}" class="${headerClass} ${collapsedClass}" onclick="toggleRace('${r_id}')">
-                <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> <span id="header-meta-${r_id}">${raceStatusEmoji(race)} ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName}${raceSurfaceDistChip(race.info)} ${winBadgesHtml}</span>
+                <span id="arrow-${r_id}" class="collapse-arrow">${arrow}</span> <span id="header-meta-${r_id}">${raceStatusEmoji(race)} ${race.info.time} | ${trackName(race.info.place)} R${race.info.race_number}: ${localName}${raceSurfaceDistChip(race.info)} ${winBadgesHtml} ${paceSummaryHtml}</span>
 
                 ${historyBtnHtml}
                 ${autopsyBtnHtml}
@@ -10627,32 +10883,42 @@ function renderLiveViewPanel() {
     loadOreProSessionStatus();
 }
 
+let statsPeriodDays = 365;
+let statsRecaps = null;
+let statsVotedHorses = null;
+
 function switchMainView(view) {
     if (view === 'voting') currentMainView = 'voting';
     else if (view === 'horse') currentMainView = 'horse';
+    else if (view === 'stats') currentMainView = 'stats';
     else currentMainView = 'races';
 
-    const schedules  = document.getElementById('schedules-container');
-    const liveView   = document.getElementById('live-view-container');
-    const horseView  = document.getElementById('horse-view-container');
-    const racesBtn   = document.getElementById('main-view-races');
-    const votingBtn  = document.getElementById('main-view-voting');
-    const horseBtn   = document.getElementById('main-view-horse');
+    const schedules = document.getElementById('schedules-container');
+    const liveView = document.getElementById('live-view-container');
+    const horseView = document.getElementById('horse-view-container');
+    const statsView = document.getElementById('stats-view-container');
+    const racesBtn = document.getElementById('main-view-races');
+    const votingBtn = document.getElementById('main-view-voting');
+    const horseBtn = document.getElementById('main-view-horse');
+    const statsBtn = document.getElementById('main-view-stats');
     if (!schedules || !liveView || !racesBtn || !votingBtn) return;
 
     const isVoting = currentMainView === 'voting';
-    const isHorse  = currentMainView === 'horse';
+    const isHorse = currentMainView === 'horse';
+    const isStats = currentMainView === 'stats';
 
-    schedules.style.display = (isVoting || isHorse) ? 'none' : 'block';
-    liveView.style.display  = isVoting ? 'flex' : 'none';
+    schedules.style.display = (isVoting || isHorse || isStats) ? 'none' : 'block';
+    liveView.style.display = isVoting ? 'flex' : 'none';
     if (horseView) horseView.style.display = isHorse ? 'block' : 'none';
+    if (statsView) statsView.style.display = isStats ? 'block' : 'none';
 
     const watchlistPanel = document.getElementById('weekend-watchlist-panel');
     if (watchlistPanel) watchlistPanel.style.display = (isVoting || isHorse) ? 'none' : '';
 
-    racesBtn.classList.toggle('is-active', !isVoting && !isHorse);
+    racesBtn.classList.toggle('is-active', !isVoting && !isHorse && !isStats);
     votingBtn.classList.toggle('is-active', isVoting);
     if (horseBtn) horseBtn.classList.toggle('is-active', isHorse);
+    if (statsBtn) statsBtn.classList.toggle('is-active', isStats);
     document.body.classList.toggle('voting-mode', isVoting);
 
     syncVotingViewAvailability();
@@ -10660,6 +10926,121 @@ function switchMainView(view) {
     updateWinningVotesFocusButton();
 
     if (isVoting) { renderLiveViewPanel(); refreshSunkCostStat(); }
+    if (isStats) loadStatsView();
+}
+
+function statsRaceDate(raceId) {
+    const raw = String(raceId || '').slice(0, 8);
+    if (!/^\d{8}$/.test(raw)) return null;
+    const y = Number(raw.slice(0, 4)), m = Number(raw.slice(4, 6)), d = Number(raw.slice(6, 8));
+    const date = new Date(Date.UTC(y, m - 1, d));
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+function statsDayKey(date) { return date.toISOString().slice(0, 10); }
+function statsMoney(value) { return `${Number(value || 0) < 0 ? '−' : ''}¥${Math.abs(Number(value || 0)).toLocaleString()}`; }
+function statsDateLabel(date) { return date.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); }
+function statsCompactMoney(value) {
+    const n = Math.abs(Number(value || 0));
+    const prefix = Number(value || 0) < 0 ? '−' : '';
+    return n >= 1000000 ? `${prefix}¥${(n / 1000000).toFixed(1)}m` : n >= 1000 ? `${prefix}¥${Math.round(n / 1000)}k` : `${prefix}¥${n}`;
+}
+function setStatsPeriod(days) {
+    statsPeriodDays = Number(days) || 0;
+    document.querySelectorAll('[data-stats-days]').forEach(button => button.classList.toggle('is-active', Number(button.dataset.statsDays) === statsPeriodDays));
+    renderStatsView();
+}
+async function loadStatsView() {
+    const host = document.getElementById('stats-view-content');
+    if (!host) return;
+    if (!statsRecaps || !statsVotedHorses) {
+        host.innerHTML = '<div class="stats-loading">Loading settled results…</div>';
+        try {
+            const [recapResponse, horseResponse] = await Promise.all([
+                fetch('/api/sunk-cost/per-race', { cache: 'no-store' }),
+                fetch('/api/sunk-cost/voted-horses', { cache: 'no-store' })
+            ]);
+            if (!recapResponse.ok || !horseResponse.ok) throw new Error(`HTTP ${!recapResponse.ok ? recapResponse.status : horseResponse.status}`);
+            [statsRecaps, statsVotedHorses] = await Promise.all([recapResponse.json(), horseResponse.json()]);
+        } catch (error) {
+            host.innerHTML = `<div class="stats-error">Could not load historical results: ${escapeHtml(String(error.message || error))}</div>`;
+            return;
+        }
+    }
+    renderStatsView();
+}
+function statsChartHtml(days) {
+    if (!days.length) return '';
+    const width = 700, height = 205, left = 52, right = 8, top = 12, bottom = 24;
+    let running = 0;
+    const points = days.map((day, index) => ({ ...day, index, cumulative: running += day.net }));
+    const values = points.map(p => p.cumulative).concat([0]);
+    let low = Math.min(...values), high = Math.max(...values);
+    if (low === high) { low -= 1; high += 1; }
+    const padding = Math.max((high - low) * 0.12, 1000);
+    low -= padding; high += padding;
+    const x = i => left + (points.length === 1 ? (width - left - right) / 2 : i * (width - left - right) / (points.length - 1));
+    const y = value => top + (high - value) * (height - top - bottom) / (high - low);
+    const path = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.cumulative).toFixed(1)}`).join(' ');
+    const area = `${path} L${x(points.length - 1).toFixed(1)},${y(0).toFixed(1)} L${x(0).toFixed(1)},${y(0).toFixed(1)} Z`;
+    const grid = [0, 1, 2, 3].map(i => { const value = high - i * (high - low) / 3; return `<line class="stats-chart-gridline" x1="${left}" y1="${y(value)}" x2="${width - right}" y2="${y(value)}"/><text class="stats-chart-axis" x="0" y="${y(value) + 3}">${escapeHtml(statsCompactMoney(value))}</text>`; }).join('');
+    const labels = [0, Math.floor((points.length - 1) / 2), points.length - 1].filter((value, index, all) => all.indexOf(value) === index).map(i => `<text class="stats-chart-axis" x="${x(i)}" y="${height - 4}" text-anchor="middle">${escapeHtml(statsDateLabel(points[i].date).replace(/ \d{4}$/, ''))}</text>`).join('');
+    const last = points[points.length - 1];
+    return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Cumulative net across selected settled race days"><defs><linearGradient id="stats-chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#1dd1a1" stop-opacity=".25"/><stop offset="1" stop-color="#1dd1a1" stop-opacity="0"/></linearGradient></defs>${grid}<line class="stats-chart-gridline" x1="${left}" y1="${y(0)}" x2="${width - right}" y2="${y(0)}" stroke="#526174"/> <path class="stats-chart-area" d="${area}"/><path class="stats-chart-line" d="${path}"/><circle class="stats-chart-dot" cx="${x(points.length - 1)}" cy="${y(last.cumulative)}" r="4"/>${labels}</svg>`;
+}
+function statsVotedHorseLeaderboardHtml() {
+    const horses = Array.isArray(statsVotedHorses) ? statsVotedHorses.filter(horse => Number(horse.SettledStarts || 0) > 0) : [];
+    if (!horses.length) return `<section class="stats-panel stats-voted-horses"><div class="stats-panel-head"><div><h4>My voted horses</h4><span>Settled marked runners only</span></div></div><div class="stats-empty">No settled marked-horse history is available yet.</div></section>`;
+    const performance = [...horses].sort((a, b) => {
+        const aPlace = Number(a.Places || 0) / Number(a.SettledStarts || 1);
+        const bPlace = Number(b.Places || 0) / Number(b.SettledStarts || 1);
+        return bPlace - aPlace || Number(b.Wins || 0) - Number(a.Wins || 0) || Number(b.SettledStarts || 0) - Number(a.SettledStarts || 0);
+    }).slice(0, 6);
+    const money = [...horses].filter(horse => Number(horse.MoneyRaces || 0) > 0)
+        .sort((a, b) => Number(b.AllocatedNet || 0) - Number(a.AllocatedNet || 0)).slice(0, 6);
+    const performanceRows = performance.map(horse => {
+        const starts = Number(horse.SettledStarts || 0), places = Number(horse.Places || 0);
+        return `<div class="stats-horse-row"><div><b>${escapeHtml(horse.HorseName || horse.HorseId || 'Unknown')}</b><small>${starts} settled vote${starts === 1 ? '' : 's'} · avg finish ${Number.isFinite(Number(horse.AverageFinish)) ? Number(horse.AverageFinish).toFixed(1) : '—'}</small></div><div><strong>${horse.Wins}W · ${places} top-3</strong><small>${starts ? (places / starts * 100).toFixed(0) : '0'}% place rate</small></div></div>`;
+    }).join('');
+    const moneyRows = money.length ? money.map(horse => `<div class="stats-horse-row"><div><b>${escapeHtml(horse.HorseName || horse.HorseId || 'Unknown')}</b><small>${horse.MoneyRaces} settled placed race${Number(horse.MoneyRaces) === 1 ? '' : 's'} with this vote</small></div><div><strong class="${Number(horse.AllocatedNet || 0) >= 0 ? 'stats-positive' : 'stats-negative'}">${statsMoney(horse.AllocatedNet)}</strong><small>${statsMoney(horse.AllocatedWon)} returned</small></div></div>`).join('') : '<div class="stats-empty">No settled placed-race attribution is available yet.</div>';
+    return `<section class="stats-panel stats-voted-horses"><div class="stats-panel-head"><div><h4>My voted horses</h4><span>All-time results from your saved marks</span></div></div><div class="stats-horse-grid"><div><div class="stats-horse-title">Best on track</div>${performanceRows}</div><div><div class="stats-horse-title">Best for my bankroll</div>${moneyRows}</div></div><div class="stats-footnote">Performance counts every settled race where you marked the horse. Money is the authoritative settled race result divided equally among that race’s marked horses, so a multi-horse ticket is not credited in full to every horse. Imported external-history races are excluded because their ticket-level horse detail is unavailable.</div></section>`;
+}
+
+function renderStatsView() {
+    const host = document.getElementById('stats-view-content');
+    if (!host || !Array.isArray(statsRecaps)) return;
+    const settled = statsRecaps.map(recap => ({ ...recap, date: statsRaceDate(recap.RaceId) })).filter(recap => recap.HasResults === true && recap.date);
+    if (!settled.length) { host.innerHTML = '<div class="stats-empty">No settled placed-bet results are available yet.</div>'; return; }
+    const newest = new Date(Math.max(...settled.map(recap => recap.date.getTime())));
+    const cutoff = new Date(newest);
+    if (statsPeriodDays > 0) cutoff.setUTCDate(cutoff.getUTCDate() - statsPeriodDays + 1);
+    const scoped = settled.filter(recap => !statsPeriodDays || recap.date >= cutoff);
+    const dayMap = new Map();
+    scoped.forEach(recap => {
+        const key = statsDayKey(recap.date);
+        const day = dayMap.get(key) || { key, date: recap.date, races: 0, hits: 0, staked: 0, won: 0, net: 0 };
+        day.races++; day.hits += Number(recap.Won || 0) > 0 ? 1 : 0; day.staked += Number(recap.Staked || 0); day.won += Number(recap.Won || 0); day.net += Number(recap.Net || 0);
+        dayMap.set(key, day);
+    });
+    const daysAsc = [...dayMap.values()].sort((a, b) => a.date - b.date);
+    const daysDesc = [...daysAsc].reverse();
+    const totalStaked = scoped.reduce((sum, recap) => sum + Number(recap.Staked || 0), 0);
+    const totalWon = scoped.reduce((sum, recap) => sum + Number(recap.Won || 0), 0);
+    const totalNet = totalWon - totalStaked;
+    const hits = scoped.filter(recap => Number(recap.Won || 0) > 0).length;
+    const bestDay = daysAsc.reduce((best, day) => day.net > best.net ? day : best, daysAsc[0]);
+    const positiveDays = daysAsc.filter(day => day.net > 0).length;
+    const netClass = totalNet >= 0 ? 'is-positive' : 'is-negative';
+    const rows = daysDesc.slice(0, 12).map(day => `<tr><td>${escapeHtml(statsDateLabel(day.date))}</td><td>${day.races}</td><td>${day.hits} / ${day.races}</td><td>${statsMoney(day.staked)}</td><td class="${day.net >= 0 ? 'stats-positive' : 'stats-negative'}">${statsMoney(day.net)}</td></tr>`).join('');
+    host.innerHTML = `<div class="stats-summary-grid">
+        <div class="stats-summary-card"><div class="stats-summary-label">Net result</div><div class="stats-summary-value ${netClass}">${statsMoney(totalNet)}</div><div class="stats-summary-sub">${scoped.length.toLocaleString()} settled placed races</div></div>
+        <div class="stats-summary-card"><div class="stats-summary-label">Returned / staked</div><div class="stats-summary-value ${totalWon >= totalStaked ? 'is-positive' : 'is-negative'}">${totalStaked ? (totalWon / totalStaked * 100).toFixed(1) : '0.0'}%</div><div class="stats-summary-sub">${statsMoney(totalWon)} returned</div></div>
+        <div class="stats-summary-card"><div class="stats-summary-label">Hit rate</div><div class="stats-summary-value">${scoped.length ? (hits / scoped.length * 100).toFixed(1) : '0.0'}%</div><div class="stats-summary-sub">${hits.toLocaleString()} hit races</div></div>
+        <div class="stats-summary-card"><div class="stats-summary-label">Race days</div><div class="stats-summary-value">${daysAsc.length}</div><div class="stats-summary-sub">Latest: ${escapeHtml(statsDateLabel(newest))}</div></div>
+    </div>
+    <div class="stats-grid"><section class="stats-panel"><div class="stats-panel-head"><div><h4>Cumulative net</h4><span>Selected settled race days · yen</span></div></div><div class="stats-chart">${statsChartHtml(daysAsc)}</div></section>
+    <section class="stats-panel"><div class="stats-panel-head"><div><h4>Period snapshot</h4><span>Actual recap totals</span></div></div><div class="stats-detail-list"><div class="stats-detail-row"><span>Staked</span><span>${statsMoney(totalStaked)}</span></div><div class="stats-detail-row"><span>Returned</span><span>${statsMoney(totalWon)}</span></div><div class="stats-detail-row"><span>Positive race days</span><span>${positiveDays} / ${daysAsc.length}</span></div><div class="stats-detail-row"><span>Best day</span><span class="${bestDay.net >= 0 ? 'stats-positive' : 'stats-negative'}">${statsMoney(bestDay.net)} · ${escapeHtml(statsDateLabel(bestDay.date))}</span></div></div></section></div>
+    ${statsVotedHorseLeaderboardHtml()}
+    <section class="stats-panel stats-ledger"><div class="stats-panel-head"><div><h4>Race-day ledger</h4><span>Most recent settled days in this period</span></div></div><div class="stats-table-wrap"><table class="stats-table"><thead><tr><th>Race day (JST)</th><th>Races</th><th>Hits</th><th>Staked</th><th>Net</th></tr></thead><tbody>${rows}</tbody></table></div><div class="stats-footnote">A race counts as a hit when its authoritative recap returned more than ¥0. Pending races are excluded. Race dates are JST calendar dates parsed from the JRA race ID.</div></section>`;
 }
 
 // ── Phase 31: Horse Deep-Dive Tab ──────────────────────────────────────────

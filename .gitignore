@@ -11,6 +11,7 @@ secrets.*
 
 # Runtime state
 .service-pids.json
+.preview-nexus-pid.json
 logs/
 *.log
 build_output.txt

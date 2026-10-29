@@ -7,7 +7,7 @@
 //          odds-history series, and the voting-tab bet-estimate.
 // KEY DEPENDENCIES: AppDbContext, SettingsService, SirePerformanceService,
 //          JockeyTrainerStatsService, IMemoryCache.
-// CAUTION: The /api/races ETag is data-keyed "races-v13-…" — BUMP vN on any response-shape
+// CAUTION: The /api/races ETag is data-keyed "races-v17-…" — BUMP vN on any response-shape
 //          change or browsers serve a stale 304 body. SortTime is JST-wall-clock-in-UTC.
 // LAST DOCUMENTED: 2026-06-02
 // ============================================================
@@ -224,7 +224,7 @@ public sealed class RacesController : ControllerBase
                         .SqlQueryRaw<DateTime?>("SELECT MAX(stats_refreshed_at) AS \"Value\" FROM trainers")
                         .FirstOrDefaultAsync();
                     var jtTicks = Math.Max(maxJockeyRefresh?.Ticks ?? 0, maxTrainerRefresh?.Ticks ?? 0);
-                    etag = $"\"races-v14-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
+                    etag = $"\"races-v17-{races.Count}-{maxLastUpdated?.Ticks ?? 0}-{maxBreedingUpdated?.Ticks ?? 0}-{maxEntryUpdated?.Ticks ?? 0}-{jtTicks}\"";
                     _cache.Set(EtagCacheKey, etag,
                         new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30) });
                 }
@@ -350,9 +350,12 @@ public sealed class RacesController : ControllerBase
                 .ToDictionary(
                     g => g.Key,
                     g => g.OrderByDescending(x => x.RaceDate)
-                          // s54: also carry the run's PerformanceJson (corner positions) so the card can
-                          // show the horse's PREDICTED running style (front-runner/closer) from its last start.
-                          .Select(x => (x.RaceDate, Surface: x.Surface ?? "", x.Distance, Perf: x.PerformanceJson ?? ""))
+                          // Pace Map v1: retain each prior run's field size with its corner positions.
+                          // The frontend uses only starts strictly before the viewed race and normalizes
+                          // early position by the field that the horse actually faced.
+                          .Select(x => (x.RaceDate, Surface: x.Surface ?? "", x.Distance,
+                                        FieldSize: fieldSizeByRace.TryGetValue(x.RaceId, out var n) ? n : 0,
+                                        Perf: x.PerformanceJson ?? ""))
                           .ToList()
                 );
 
@@ -458,6 +461,27 @@ public sealed class RacesController : ControllerBase
                         finishesByHorse.TryGetValue(e.HorseId ?? "", out var hist);
                         var (last3Str, formScore, last3Fields) = ComputeLast3(hist, race.RaceDate);
 
+                        // Historical cards retain only the compact, point-in-time Pace Map input:
+                        // prior corner-position runs, never the settled race's own result data.
+                        var paceHistory = new List<object>();
+                        if (priorRunsByHorse.TryGetValue(e.HorseId ?? "", out var priorRuns))
+                        {
+                            foreach (var pr in priorRuns)
+                            {
+                                if (pr.RaceDate >= race.RaceDate) continue;
+                                if (paceHistory.Count < 6 && !string.IsNullOrWhiteSpace(pr.Perf))
+                                {
+                                    paceHistory.Add(new
+                                    {
+                                        surface = pr.Surface,
+                                        distance = pr.Distance,
+                                        field_size = pr.FieldSize,
+                                        performance = pr.Perf
+                                    });
+                                }
+                            }
+                        }
+
                         if (racePast)
                         {
                             return (object)new
@@ -469,6 +493,7 @@ public sealed class RacesController : ControllerBase
                                 Record = recordByHorse.TryGetValue(e.HorseId ?? "", out var recPast) ? recPast : "",
                                 Last3 = last3Str,
                                 Last3_Fields = last3Fields,
+                                Pace_History = paceHistory,
                                 Sire = ResolveAncestorName(horse?.SireId),
                                 Sire_ID = horse?.SireId ?? "",
                                 Dam = ResolveAncestorName(horse?.DamId),
@@ -478,6 +503,9 @@ public sealed class RacesController : ControllerBase
                                 Odds = e.Odds?.ToString("F1") ?? "",
                                 Prev_Odds = e.PrevOdds?.ToString("F1") ?? "",
                                 Fav = e.FavRank?.ToString() ?? "",
+                                // Result-only evidence for the position comparison. Pace_History above remains
+                                // strictly prior starts, so target-race corners cannot contaminate the forecast.
+                                Actual_Performance = e.PerformanceJson ?? "",
                                 Finish = e.FinishPos?.ToString() ?? "",
                                 Scratched = e.Scratched,
                                 Sex = e.Sex,
@@ -491,16 +519,18 @@ public sealed class RacesController : ControllerBase
                         string lastSurface = "";
                         int? lastDistance = null;
                         string lastPerf = "";
-                        if (priorRunsByHorse.TryGetValue(e.HorseId ?? "", out var priorRuns))
+                        if (priorRunsByHorse.TryGetValue(e.HorseId ?? "", out var priorRunsForLast))
                         {
-                            foreach (var pr in priorRuns) // already desc by date → first match = most recent
+                            foreach (var pr in priorRunsForLast) // already desc by date → first match = most recent
                             {
                                 if (pr.RaceDate >= race.RaceDate) continue;
-                                daysSinceLast = (int)(race.RaceDate - pr.RaceDate).TotalDays;
-                                lastSurface = pr.Surface;
-                                lastDistance = pr.Distance;
-                                lastPerf = pr.Perf; // corner positions of the last start → predicted run style
-                                break;
+                                if (daysSinceLast == null)
+                                {
+                                    daysSinceLast = (int)(race.RaceDate - pr.RaceDate).TotalDays;
+                                    lastSurface = pr.Surface;
+                                    lastDistance = pr.Distance;
+                                    lastPerf = pr.Perf; // corner positions of the last start → predicted run style
+                                }
                             }
                         }
 
@@ -610,6 +640,12 @@ public sealed class RacesController : ControllerBase
                             Last_Distance = lastDistance,
                             // s54: last start's PerformanceJson (corners/l3f) → frontend infers predicted run style.
                             Last_Perf = lastPerf,
+                            // Pace Map v1: up to six pre-race runs. This is informational only; it
+                            // does not change marks, engine scores, or betting behaviour.
+                            Pace_History = paceHistory,
+                            // Current-day settled races follow this projection too; expose actual corners
+                            // separately from the strictly-prior Pace_History input.
+                            Actual_Performance = e.PerformanceJson ?? "",
                             Finish = e.FinishPos?.ToString() ?? "",
                             // SE 異常区分 1/2/3 (取消/除外) → horse removed from betting; the frontend
                             // bet-line synthesizer (buildRaceBetLines) shrinks the ticket. Only set
